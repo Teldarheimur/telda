@@ -50,8 +50,8 @@ impl StandardCpu {
     fn sub<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool) {
         let v = self.read_arg(m, indirection);
 
-        let (work, o) = self.work.overflowing_sub(v);
-        self.work = work;
+        let (work, o) = self.accumulator.overflowing_sub(v);
+        self.accumulator = work;
         self.flags &= 0b1111_0000;
         self.flags |= if o {
             0b1100
@@ -65,8 +65,8 @@ impl StandardCpu {
     fn binop_overflowing<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool, op: fn(u8, u8) -> (u8, bool)) {
         let v = self.read_arg(m, indirection);
 
-        let (work, o) = op(self.work, v);
-        self.work = work;
+        let (work, o) = op(self.accumulator, v);
+        self.accumulator = work;
         self.flags &= 0b1111_0000;
         if o {
             self.flags |= 0b1000;
@@ -76,7 +76,7 @@ impl StandardCpu {
     fn binop<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool, op: fn(u8, u8) -> u8) {
         let v = self.read_arg(m, indirection);
 
-        self.work = op(self.work, v);
+        self.accumulator = op(self.accumulator, v);
         self.flags &= 0b1111_0000;
     }
     #[inline]
@@ -86,7 +86,7 @@ impl StandardCpu {
         use std::cmp::Ordering::*;
 
         self.flags &= 0b1111_0000;
-        self.flags |= match self.work.cmp(&v) {
+        self.flags |= match self.accumulator.cmp(&v) {
             Greater => 0b0100,
             Less => 0b0010,
             Equal => 0b0001,
@@ -116,11 +116,29 @@ macro_rules! instructions {
                 $name = $name
             ),*
         }
+
+        // This is here to make sure all opcodes are defined
+        fn _dummy(n: u8) {
+            match n {
+                0b0100_0000..=0xff => (),
+                $($opcode => ()),*
+            }
+        }
+
         impl $enum_name {
             pub fn from_str(s: &str) -> Option<Self> {
                 match s {
                     $( stringify!($name) => Some(Self::$name),)*
                     _ => None,
+                }
+            }
+            pub fn from_u8(i: u8) -> Option<Self> {
+                if i & 0xc0 == 0 {
+                    unsafe {
+                        Some(std::mem::transmute(i))
+                    }
+                } else {
+                    None
                 }
             }
         }
@@ -134,14 +152,10 @@ macro_rules! instructions {
 // Add enter and leave instructions for stack frames
 
 // OPCODE
-// argg oooo
-// a: address mode 
-//   0 - immediate/address
-//   1 - register
-// r: 
-//   
-// R: source register for two-operand instructions
-//   left 0 for single or no operand instructions 
+// llgg oooo
+// l: length of args 
+// g: instruction group
+// i: instruction
 
 instructions!{Opcode,
     INVALID = 0x00;
@@ -194,23 +208,32 @@ instructions!{Opcode,
     DEC = 0x25;
     LSV = 0x26;
 
+    RES7 = 0x27;
+    RES8 = 0x28;
+    RES9 = 0x29;
+    RESA = 0x2a;
+    RESB = 0x2b;
+    RESC = 0x2c;
+    RESD = 0x2d;
+    RESE = 0x2e;
+    RESF = 0x2f;
 
-    HALT = 0x70;
-    INT1 = 0x71;
-    INT2 = 0x72;
-    INT3 = 0x73;
-    INT4 = 0x74;
-    INT5 = 0x75;
-    INT6 = 0x76;
-    INT7 = 0x77;
-    INT8 = 0x78;
-    INT9 = 0x79;
-    INT10 = 0x7a;
-    INT11 = 0x7b;
-    INT12 = 0x7c;
-    INT13 = 0x7d;
-    INT14 = 0x7e;
-    INT15 = 0x7f;
+    HALT = 0x30;
+    INT1 = 0x31;
+    INT2 = 0x32;
+    INT3 = 0x33;
+    INT4 = 0x34;
+    INT5 = 0x35;
+    INT6 = 0x36;
+    INT7 = 0x37;
+    INT8 = 0x38;
+    INT9 = 0x39;
+    INT10 = 0x3a;
+    INT11 = 0x3b;
+    INT12 = 0x3c;
+    INT13 = 0x3d;
+    INT14 = 0x3e;
+    INT15 = 0x3f;
 }
 
 use std::ops::{BitAnd, BitOr, BitXor};
@@ -221,21 +244,28 @@ impl Cpu for StandardCpu {
 
     fn run<M: Memory<Self::Index, Cell = Self::Cell>>(&mut self, memory: &mut M) -> Option<Signal> {
         let cur_ins = memory.read(self.pc);
-        self.pc += 1;
 
-        let indirection = cur_ins & 0b1000_0000 == 0b1000_0000;
+        // TODO use this
+        // load the args into an array and read them from there instead of directly from memory
+        let args_length = cur_ins >> 6;
+        
+        self.pc += 1 + args_length as u16;
 
-        match cur_ins & 0b0111_1111 {
+        let indirection = args_length > 1;
+
+        match cur_ins & 0b0011_1111 {
+            0b0100_0000..=0xff => unreachable!(),
             NOP => (),
-            INVALID | 0x26..=0x6f | 0x80..= 0xff => panic!("Invalid instruction call {:2x}!\n{:?}", cur_ins, self),
-            MOVE => {
+            RES7..=RESF => panic!("RESERVED"),
+            INVALID => panic!("Invalid instruction call {:2x}!\n{:?}", cur_ins, self),
+            MOVR => {
                 let to_write = self.read_arg(memory, indirection);
                 memory.write(memory.read_index(self.pc), to_write);
                 self.pc += 2;
             }
-            LEA => self.work = memory.read(self.read_arg_index(memory, indirection)),
-            LOAD => self.work = self.read_arg(memory, indirection),
-            STORE => memory.write(self.read_arg_index(memory, indirection), self.work),
+            MOVT => self.accumulator = memory.read(self.read_arg_index(memory, indirection)),
+            RESERVED5 => self.accumulator = self.read_arg(memory, indirection),
+            STORE => memory.write(self.read_arg_index(memory, indirection), self.accumulator),
             COMPARE => self.cmp(memory, indirection),
             SUB => self.sub(memory, indirection),
             ADD => self.binop_overflowing(memory, indirection, u8::overflowing_add),
@@ -245,7 +275,7 @@ impl Cpu for StandardCpu {
             AND => self.binop(memory, indirection, u8::bitand),
             OR => self.binop(memory, indirection, u8::bitor),
             XOR => self.binop(memory, indirection, u8::bitxor),
-            NOT => self.work = !self.read_arg(memory, indirection),
+            NOT => self.accumulator = !self.read_arg(memory, indirection),
             JUMP | JMPR => self.jmp(memory, indirection, cur_ins & 0b1000 == 0b1000),
             JIO | JIOR => if self.flags & 0b1000 == 0b1000 {
                 self.jmp(memory, indirection, cur_ins & 0b1000 == 0b1000)
@@ -262,12 +292,12 @@ impl Cpu for StandardCpu {
                 }
             }
             PUSH => {
-                memory.write(self.stack_pointer, self.work);
+                memory.write(self.stack_pointer, self.accumulator);
                 self.stack_pointer -= 1;
             }
             POP => {
                 self.stack_pointer += 1;
-                self.work = memory.read(self.stack_pointer);
+                self.accumulator = memory.read(self.stack_pointer);
             }
             RET => {
                 self.stack_pointer += 2;
@@ -280,16 +310,22 @@ impl Cpu for StandardCpu {
 
                 self.pc = call_location;
             }
-            INC => self.work += 1,
-            DEC => self.work -= 1,
+            INC => self.accumulator += 1,
+            DEC => self.accumulator -= 1,
+            LSV => {
+                let base = self.stack_pointer + 1;
+
+                let location_of_data_to_load = base.wrapping_add(self.read_arg_index(memory, indirection));
+                self.accumulator = memory.read(location_of_data_to_load);
+            }
 
             INT1 => {
                 let mut bytes = [0];
                 std::io::stdin().read_exact(&mut bytes).unwrap();
-                self.work = bytes[0];
+                self.accumulator = bytes[0];
             }
             INT2 => {
-                std::io::stdout().write_all(&[self.work]).unwrap();
+                std::io::stdout().write_all(&[self.accumulator]).unwrap();
             }
             INT3 => {
                 eprintln!("{:?}", self);
