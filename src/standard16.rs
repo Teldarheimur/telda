@@ -7,19 +7,21 @@ pub type StandardMachine = Machine<u8, u16, Memory16Bit, StandardCpu>;
 pub struct StandardCpu {
     pc: u16,
     stack_pointer: u16,
-    work: u8,
+    base_pointer: u16,
+    counter: u16,
+    accumulator: u8,
     flags: u8,
 }
 
 impl StandardCpu {
-    pub fn new() -> Self {
+    pub fn new<M: Memory<u16, Cell = u8>>(m: &M) -> Self {
         StandardCpu {
-            pc: 0,
-            // TODO Have a base pointer too for stack frames
-            stack_pointer: 0xffff,
-            // TODO Rename to accumulator
-            work: 0,
-            flags: 0,
+            pc: m.read_index(0),
+            stack_pointer: m.read_index(2),
+            base_pointer: m.read_index(4),
+            counter: m.read_index(6),
+            accumulator: m.read(7),
+            flags: m.read(8),
         }
     }
     fn read_arg<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool) -> u8 {
@@ -131,12 +133,29 @@ macro_rules! instructions {
 // Fix handling of u16s vs u8 since currently the register can only hold a u8
 // Add enter and leave instructions for stack frames
 
+// OPCODE
+// argg oooo
+// a: address mode 
+//   0 - immediate/address
+//   1 - register
+// r: 
+//   
+// R: source register for two-operand instructions
+//   left 0 for single or no operand instructions 
+
 instructions!{Opcode,
     INVALID = 0x00;
-    MOVE = 0x01;
-    LOAD = 0x03;
-    LEA = 0x04;
-    STORE = 0x05;
+    // MOVE reg, immediate
+    // MOVE reg, reg
+    // MOVE reg, [addr]
+    MOVR = 0x01;
+    // MOVE [reg], immediate
+    // MOVE [reg], reg
+    MOVT = 0x03;
+    // MOVE [addr], immediate
+    // MOVE [addr], reg
+    STORE = 0x04;
+    RESERVED5 = 0x05;
     ADD = 0x0a;
     SUB = 0x0b;
     MUL = 0x0c;
@@ -201,12 +220,6 @@ impl Cpu for StandardCpu {
     type Index = u16;
 
     fn run<M: Memory<Self::Index, Cell = Self::Cell>>(&mut self, memory: &mut M) -> Option<Signal> {
-        if self.pc == 0 {
-            self.pc = memory.read_index(0);
-
-            return None;
-        }
-
         let cur_ins = memory.read(self.pc);
         self.pc += 1;
 
