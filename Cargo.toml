@@ -1,5 +1,5 @@
 [package]
-name = "fvm"
+name = "telda"
 version = "0.1.0"
 authors = ["LFalch <lucas@wasd.dk>"]
 edition = "2018"
