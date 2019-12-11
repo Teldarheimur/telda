@@ -32,10 +32,23 @@ impl StandardCpu {
     }
     #[inline]
     fn sub(&mut self, a: Args) {
-        let v = a.as_u16().unwrap_or_default();
-
-        let (work, o) = self.accumulator.overflowing_sub(v);
-        self.accumulator = work;
+        let (work, o) = match a {
+            Null => {
+                let (acc, o) = self.accumulator.overflowing_sub(self.accumulator);
+                self.accumulator = acc;
+                (acc, o)
+            }
+            Byte(b) => {
+                let (acc, o) = (*self.acc_u8()).overflowing_sub(b);
+                *self.acc_u8() = acc;
+                (acc as u16, o)
+            }
+            Wide(c) => {
+                let (acc, o) = self.accumulator.overflowing_sub(c);
+                self.accumulator = acc;
+                (acc, o)
+            }
+        };
         self.flags &= 0b1111_0000;
         self.flags |= if o {
             0b1100
@@ -49,7 +62,7 @@ impl StandardCpu {
     fn binop_overflowing(&mut self, a: Args, op: fn(u8, u8) -> (u8, bool), opw: fn(u16, u16) -> (u16, bool)) {
         let o = match a {
             Null => {
-                let (acc, o) = opw(self.accumulator, 0);
+                let (acc, o) = opw(self.accumulator, self.accumulator);
                 self.accumulator = acc;
                 o
             }
@@ -71,10 +84,13 @@ impl StandardCpu {
         }
     }
     #[inline]
-    fn binop(&mut self, a: Args, op: fn(u16, u16) -> u16) {
-        let v = a.as_u16().unwrap_or_default();
+    fn binop(&mut self, a: Args, op: fn(u8, u8) -> u8, opw: fn(u16, u16) -> u16) {
+        match a {
+            Null => self.accumulator = opw(self.accumulator, self.accumulator),
+            Byte(b) => *self.acc_u8() = op(*self.acc_u8(), b),
+            Wide(c) => self.accumulator = opw(self.accumulator, c),
+        }
 
-        self.accumulator = op(self.accumulator, v);
         self.flags &= 0b1111_0000;
     }
     #[inline]
@@ -310,9 +326,9 @@ impl Cpu for StandardCpu {
             MUL => self.binop_overflowing(args, u8::overflowing_mul, u16::overflowing_mul),
             DIV => self.binop_overflowing(args, u8::overflowing_div, u16::overflowing_div),
             REM => self.binop_overflowing(args, u8::overflowing_rem, u16::overflowing_rem),
-            AND => self.binop(args, u16::bitand),
-            OR => self.binop(args, u16::bitor),
-            XOR => self.binop(args, u16::bitxor),
+            AND => self.binop(args, u8::bitand, u16::bitand),
+            OR => self.binop(args, u8::bitor, u16::bitor),
+            XOR => self.binop(args, u8::bitxor, u16::bitxor),
             NOT => match args {
                 Null => self.accumulator = 0xffff,
                 Byte(b) => *self.acc_u8() = !b,

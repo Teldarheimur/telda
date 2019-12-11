@@ -47,9 +47,6 @@ fn main() -> IOResult<()> {
                                 memory.write(i, *b);
                                 i += 1;
                             }
-                            Operand::PointerLabel(_) | Operand::Pointer(_) => {
-                                panic!("Can't make data using a pointer");
-                            }
                             Operand::Label(l) => {
                                 if let Some(&p) = labels.get(l) {
                                     memory.write(i, p);
@@ -72,26 +69,13 @@ fn main() -> IOResult<()> {
                     }
                 }
             } else if let Some(ins) = Opcode::from_str(ins) {
-                let mut ins = ins as u8;
+                let ins = ins as u8;
                 let ins_p = i;
                 i += 1;
                 for arg in args {
                     if let Some(operand) = Operand::from_str(arg) {
                         match &operand {
                             Operand::Byte(b) => memory.write(i, *b),
-                            Operand::Pointer(p) => {
-                                ins |= 0b1000_0000;
-                                memory.write_index(i, *p)
-                            }
-                            Operand::PointerLabel(l) => {
-                                ins |= 0b1000_0000;
-                                if let Some(&p) = labels.get(l) {
-                                    memory.write_index(i, p);
-                                } else {
-                                    eprintln!("Unknown label {} at line {}", l, line_num);
-                                    std::process::exit(3);
-                                }
-                            }
                             Operand::Label(l) => {
                                 if let Some(&p) = labels.get(l) {
                                     memory.write_index(i, p);
@@ -111,7 +95,7 @@ fn main() -> IOResult<()> {
                         std::process::exit(2);
                     }
                 }
-                memory.write(ins_p, ins);
+                memory.write(ins_p, ins | ((i - ins_p - 1) << 6));
             } else if ins.ends_with(":") {
                 labels.insert(ins[..ins.len()-1].to_owned(), i);
             } else {
@@ -135,10 +119,8 @@ fn main() -> IOResult<()> {
 
 pub enum Operand {
     Byte(u8),
-    Pointer(u8),
     Label(String),
     String(Vec<u8>),
-    PointerLabel(String),
 }
 
 fn escape_char(b: u8) -> Option<u8> {
@@ -195,11 +177,6 @@ impl Operand {
                 None
             } else {
                 Some(Operand::String(buf))
-            }
-        } else if s.starts_with("[") && s.ends_with("]") {
-            match decode_number_or_string(&s[1 .. s.len() - 1]) {
-                Ok(p) => Some(Operand::Pointer(p)),
-                Err(s) => Some(Operand::PointerLabel(s.to_owned())),
             }
         } else {
             match decode_number_or_string(s) {

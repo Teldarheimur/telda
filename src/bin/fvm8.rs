@@ -20,7 +20,7 @@ fn main() {
         std::process::exit(1);
     }
 
-    let mut machine = Machine::new(memory, StandardCpu::new());
+    let mut machine = Machine::new(memory, StandardCpu::new(&memory));
 
     machine.run();
 }

@@ -109,7 +109,6 @@ fn main() -> IOResult<()> {
                         std::process::exit(2);
                     }
                 }
-                println!(" {:08b}", ((i - ins_p - 1) << 6) as u8);
                 memory.write(ins_p, ins | ((i - ins_p - 1) << 6) as u8);
             } else if ins.ends_with(":") {
                 labels.insert(ins[..ins.len()-1].to_owned(), i);
