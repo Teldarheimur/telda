@@ -1,4 +1,4 @@
-use fvm::{
+use telda::{
     Machine,
     standard8::StandardCpu
 };

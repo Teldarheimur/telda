@@ -1,17 +1,16 @@
 use std::marker::PhantomData;
 
 pub trait Memory<I> {
-    type Cell;
-
-    fn read(&self, r: I) -> Self::Cell;
+    fn read(&self, r: I) -> u8;
     fn read_index(&self, r: I) -> I;
-    fn write(&mut self, r: I, c: Self::Cell);
+    fn read_to_slice(&self, r: I, length: I) -> &[u8];
+    fn write(&mut self, r: I, c: u8);
     fn write_index(&mut self, r: I, c: I);
     fn size(&self) -> usize;
 }
 
 pub trait ArrayMemory<I>: Memory<I> {
-    fn slice(&self) -> &[<Self as Memory<I>>::Cell];
+    fn slice(&self) -> &[u8];
 }
 
 pub struct SmartMemory<I, M: Memory<I>> {
@@ -32,18 +31,20 @@ impl<I, M: Memory<I>> SmartMemory<I, M> {
 
 impl<I: Copy, M: Memory<I>> Memory<I> for SmartMemory<I, M>
 where usize: From<I> {
-    type Cell = M::Cell;
-
     #[inline]
-    fn read(&self, r: I) -> Self::Cell {
+    fn read(&self, r: I) -> u8 {
         self.buffer.read(r)
     }
     #[inline]
     fn read_index(&self, r: I) -> I {
         self.buffer.read_index(r)
     }
+    fn read_to_slice(&self, _r: I, _length: I) -> &[u8] {
+        unimplemented!("Please no")
+        // &self.buffer[r..r+length]
+    }
     #[inline]
-    fn write(&mut self, r: I, c: Self::Cell) {
+    fn write(&mut self, r: I, c: u8) {
         let new_length = usize::from(r) + 1;
         if new_length > self.length {
             self.length = new_length;
@@ -67,7 +68,7 @@ where usize: From<I> {
 impl<I: Copy, M: Memory<I> + ArrayMemory<I>> ArrayMemory<I> for SmartMemory<I, M>
 where usize: From<I> {
     #[inline]
-    fn slice(&self) -> &[Self::Cell] {
+    fn slice(&self) -> &[u8] {
         &self.buffer.slice()[..self.length]
     }
 }
@@ -76,28 +77,30 @@ macro_rules! impl_prim {
     ($($collective_type:ident, $t:ty, $n:expr,)*) => {
         $(
         pub type $collective_type = [u8; $n];
-        impl<T: Copy> Memory<$t> for [T; $n] {
-            type Cell = T;
-
+        impl Memory<$t> for [u8; $n] {
             #[inline]
-            fn read(&self, i: $t) -> Self::Cell {
+            fn read(&self, i: $t) -> u8 {
                 * unsafe { self.get_unchecked(i as usize) }
             }
             #[inline]
             fn read_index(&self, i: $t) -> $t {
-                let reference: &Self::Cell = unsafe { self.get_unchecked(i as usize) };
+                let reference: &u8 = unsafe { self.get_unchecked(i as usize) };
                 * unsafe {
                     let index_reference: &$t = std::mem::transmute(reference);
                     index_reference
                 }
             }
             #[inline]
-            fn write(&mut self, i: $t, c: Self::Cell) {
+            fn read_to_slice(&self, r: $t, length: $t) -> &[u8] {
+                &self[r as usize..(r+length) as usize]
+            }
+            #[inline]
+            fn write(&mut self, i: $t, c: u8) {
                 * unsafe { self.get_unchecked_mut(i as usize) } = c;
             }
             #[inline]
             fn write_index(&mut self, i: $t, c: $t) {
-                let reference: &mut Self::Cell = unsafe { self.get_unchecked_mut(i as usize) };
+                let reference: &mut u8 = unsafe { self.get_unchecked_mut(i as usize) };
                 unsafe {
                     let index_reference: &mut $t = std::mem::transmute(reference);
                     *index_reference = c;
@@ -108,9 +111,9 @@ macro_rules! impl_prim {
                 self.len()
             }
         }
-        impl<T: Copy> ArrayMemory<$t> for [T; $n] {
+        impl ArrayMemory<$t> for [u8; $n] {
             #[inline(always)]
-            fn slice(&self) -> &[Self::Cell] {
+            fn slice(&self) -> &[u8] {
                 self
             }
         }
@@ -125,10 +128,9 @@ impl_prim!{
 }
 
 pub trait Cpu {
-    type Cell;
     type Index;
 
-    fn run<M: Memory<Self::Index, Cell = Self::Cell>>(&mut self, mem: &mut M) -> Option<Signal>;
+    fn run<M: Memory<Self::Index>>(&mut self, mem: &mut M) -> Option<Signal>;
 }
 
 pub enum Signal {
@@ -136,12 +138,12 @@ pub enum Signal {
     Restart,
 }
 
-pub struct Machine<C, I, M: Memory<I, Cell = C>, Cp: Cpu<Cell = C, Index = I>> {
+pub struct Machine<I, M: Memory<I>, Cp: Cpu<Index = I>> {
     pub memory: M,
     pub cpu: Cp,
 }
 
-impl<C, I, M: Memory<I, Cell = C>, Cp: Cpu<Cell = C, Index = I>> Machine<C, I, M, Cp> {
+impl<I, M: Memory<I>, Cp: Cpu<Index = I>> Machine<I, M, Cp> {
     pub fn new(memory: M, cpu: Cp) -> Self {
         Machine {
             memory,

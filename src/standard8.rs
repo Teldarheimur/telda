@@ -1,7 +1,7 @@
 use super::{Machine, Memory, Memory8Bit, Cpu, Signal};
 use std::io::{Write, Read};
 
-pub type StandardMachine = Machine<u8, u8, Memory8Bit, StandardCpu>;
+pub type StandardMachine = Machine<u8, Memory8Bit, StandardCpu>;
 
 #[derive(Debug)]
 pub struct StandardCpu {
@@ -20,7 +20,7 @@ impl StandardCpu {
             flags: 0,
         }
     }
-    fn read_arg<M: Memory<u8, Cell = u8>>(&mut self, m: &M, indirection: bool) -> u8 {
+    fn read_arg<M: Memory<u8>>(&mut self, m: &M, indirection: bool) -> u8 {
         let ret;
         if indirection {
             ret = m.read(m.read(self.pc));
@@ -32,7 +32,7 @@ impl StandardCpu {
         ret
     }
     #[inline]
-    fn sub<M: Memory<u8, Cell = u8>>(&mut self, m: &M, indirection: bool) {
+    fn sub<M: Memory<u8>>(&mut self, m: &M, indirection: bool) {
         let v = self.read_arg(m, indirection);
 
         let (work, o) = self.work.overflowing_sub(v);
@@ -47,7 +47,7 @@ impl StandardCpu {
         };
     }
     #[inline]
-    fn binop_overflowing<M: Memory<u8, Cell = u8>>(&mut self, m: &M, indirection: bool, op: fn(u8, u8) -> (u8, bool)) {
+    fn binop_overflowing<M: Memory<u8>>(&mut self, m: &M, indirection: bool, op: fn(u8, u8) -> (u8, bool)) {
         let v = self.read_arg(m, indirection);
 
         let (work, o) = op(self.work, v);
@@ -58,14 +58,14 @@ impl StandardCpu {
         }
     }
     #[inline]
-    fn binop<M: Memory<u8, Cell = u8>>(&mut self, m: &M, indirection: bool, op: fn(u8, u8) -> u8) {
+    fn binop<M: Memory<u8>>(&mut self, m: &M, indirection: bool, op: fn(u8, u8) -> u8) {
         let v = self.read_arg(m, indirection);
 
         self.work = op(self.work, v);
         self.flags &= 0b1111_0000;
     }
     #[inline]
-    fn cmp<M: Memory<u8, Cell = u8>>(&mut self, m: &M, indirection: bool) {
+    fn cmp<M: Memory<u8>>(&mut self, m: &M, indirection: bool) {
         let v = self.read_arg(m, indirection);
 
         use std::cmp::Ordering::*;
@@ -78,7 +78,7 @@ impl StandardCpu {
         };
     }
     #[inline]
-    fn jmp<M: Memory<u8, Cell = u8>>(&mut self, m: &M, indirection: bool, relative: bool) {
+    fn jmp<M: Memory<u8>>(&mut self, m: &M, indirection: bool, relative: bool) {
         let location = self.read_arg(m, indirection);
 
         self.pc = if relative {
@@ -179,10 +179,9 @@ instructions!{Opcode,
 use std::ops::{BitAnd, BitOr, BitXor};
 
 impl Cpu for StandardCpu {
-    type Cell = u8;
     type Index = u8;
 
-    fn run<M: Memory<Self::Index, Cell = Self::Cell>>(&mut self, memory: &mut M) -> Option<Signal> {
+    fn run<M: Memory<Self::Index>>(&mut self, memory: &mut M) -> Option<Signal> {
         if self.pc == 0 {
             self.pc = memory.read(0);
 

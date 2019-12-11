@@ -1,4 +1,4 @@
-use fvm::{
+use telda::{
     SmartMemory,
     ArrayMemory,
     Memory,

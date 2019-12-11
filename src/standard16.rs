@@ -1,54 +1,38 @@
+
 use super::{Machine, Memory, Memory16Bit, Cpu, Signal};
 use std::io::{Write, Read};
 
-pub type StandardMachine = Machine<u8, u16, Memory16Bit, StandardCpu>;
+use byteorder::{NativeEndian, ByteOrder};
+
+pub type StandardMachine = Machine<u16, Memory16Bit, StandardCpu>;
 
 #[derive(Debug)]
 pub struct StandardCpu {
     pc: u16,
     stack_pointer: u16,
-    base_pointer: u16,
-    counter: u16,
-    accumulator: u8,
+    // base_pointer: u16,
+    accumulator: u16,
     flags: u8,
 }
 
 impl StandardCpu {
-    pub fn new<M: Memory<u16, Cell = u8>>(m: &M) -> Self {
+    pub fn new<M: Memory<u16>>(m: &M) -> Self {
         StandardCpu {
             pc: m.read_index(0),
-            stack_pointer: m.read_index(2),
-            base_pointer: m.read_index(4),
-            counter: m.read_index(6),
-            accumulator: m.read(7),
-            flags: m.read(8),
+            stack_pointer: 0xffff,
+            accumulator: 0,
+            flags: 0,
         }
-    }
-    fn read_arg<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool) -> u8 {
-        let ret;
-        if indirection {
-            ret = m.read(m.read_index(self.pc));
-            self.pc += 2;
-        } else {
-            ret = m.read(self.pc);
-            self.pc += 1;
-        }
-
-        ret
-    }
-    fn read_arg_index<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool) -> u16 {
-        let ret = if indirection {
-            m.read_index(m.read_index(self.pc))
-        } else {
-            m.read_index(self.pc)
-        };
-        self.pc += 2;
-
-        ret
     }
     #[inline]
-    fn sub<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool) {
-        let v = self.read_arg(m, indirection);
+    fn acc_u8(&mut self) -> &mut u8 {
+        unsafe {
+            std::mem::transmute(&mut self.accumulator)
+        }
+    }
+    #[inline]
+    fn sub(&mut self, a: Args) {
+        let v = a.as_u16().unwrap_or_default();
 
         let (work, o) = self.accumulator.overflowing_sub(v);
         self.accumulator = work;
@@ -62,39 +46,57 @@ impl StandardCpu {
         };
     }
     #[inline]
-    fn binop_overflowing<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool, op: fn(u8, u8) -> (u8, bool)) {
-        let v = self.read_arg(m, indirection);
+    fn binop_overflowing(&mut self, a: Args, op: fn(u8, u8) -> (u8, bool), opw: fn(u16, u16) -> (u16, bool)) {
+        let o = match a {
+            Null => {
+                let (acc, o) = opw(self.accumulator, 0);
+                self.accumulator = acc;
+                o
+            }
+            Byte(b) => {
+                let (acc, o) = op(*self.acc_u8(), b);
+                *self.acc_u8() = acc;
+                o
+            }
+            Wide(c) => {
+                let (acc, o) = opw(self.accumulator, c);
+                self.accumulator = acc;
+                o
+            }
+        };
 
-        let (work, o) = op(self.accumulator, v);
-        self.accumulator = work;
         self.flags &= 0b1111_0000;
         if o {
             self.flags |= 0b1000;
         }
     }
     #[inline]
-    fn binop<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool, op: fn(u8, u8) -> u8) {
-        let v = self.read_arg(m, indirection);
+    fn binop(&mut self, a: Args, op: fn(u16, u16) -> u16) {
+        let v = a.as_u16().unwrap_or_default();
 
         self.accumulator = op(self.accumulator, v);
         self.flags &= 0b1111_0000;
     }
     #[inline]
-    fn cmp<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool) {
-        let v = self.read_arg(m, indirection);
+    fn cmp(&mut self, a: Args) {
+        let res = match a {
+            Null => (*self.acc_u8()).cmp(&0),
+            Byte(b) => (*self.acc_u8()).cmp(&b),
+            Wide(c) => self.accumulator.cmp(&c)
+        };
 
         use std::cmp::Ordering::*;
 
         self.flags &= 0b1111_0000;
-        self.flags |= match self.accumulator.cmp(&v) {
+        self.flags |= match res {
             Greater => 0b0100,
             Less => 0b0010,
             Equal => 0b0001,
         };
     }
     #[inline]
-    fn jmp<M: Memory<u16, Cell = u8>>(&mut self, m: &M, indirection: bool, relative: bool) {
-        let location = self.read_arg_index(m, indirection);
+    fn jmp(&mut self, a: Args, relative: bool) {
+        let location = a.as_u16().unwrap_or(self.accumulator);
 
         self.pc = if relative {
             (self.pc as i16).wrapping_add(location as i16) as u16
@@ -145,12 +147,6 @@ macro_rules! instructions {
     };
 }
 
-// TODO stack pointer points one beside the top value, having lead to some off-by-one errors
-// LEA and LOAD and MOVE should be merged, LEA doesn't do what LEA does in x86 and is therefore a confusing name
-// MOVE is the other way around rn
-// Fix handling of u16s vs u8 since currently the register can only hold a u8
-// Add enter and leave instructions for stack frames
-
 // OPCODE
 // llgg oooo
 // l: length of args 
@@ -159,17 +155,11 @@ macro_rules! instructions {
 
 instructions!{Opcode,
     INVALID = 0x00;
-    // MOVE reg, immediate
-    // MOVE reg, reg
-    // MOVE reg, [addr]
-    MOVR = 0x01;
-    // MOVE [reg], immediate
-    // MOVE [reg], reg
-    MOVT = 0x03;
-    // MOVE [addr], immediate
-    // MOVE [addr], reg
-    STORE = 0x04;
-    RESERVED5 = 0x05;
+    LOAD = 0x01;
+    LDL = 0x02;
+    STR = 0x03;
+    STL = 0x04;
+    COMPARE = 0x05;
     ADD = 0x0a;
     SUB = 0x0b;
     MUL = 0x0c;
@@ -180,7 +170,6 @@ instructions!{Opcode,
     OR = 0x07;
     XOR = 0x08;
     NOT = 0x09;
-    COMPARE = 0x02;
     JUMP = 0x10;
     JMPR = 0x18;
     // RGLZ (all = overflow)
@@ -201,14 +190,14 @@ instructions!{Opcode,
     JIOR = 0x1f;
 
     PUSH = 0x20;
-    POP = 0x21;
-    CALL = 0x22;
-    RET = 0x23;
-    INC = 0x24;
-    DEC = 0x25;
-    LSV = 0x26;
+    PUSHW = 0x21;
+    POP = 0x22;
+    POPW = 0x23;
+    CALL = 0x24;
+    RET = 0x25;
+    INC = 0x26;
+    DEC = 0x27;
 
-    RES7 = 0x27;
     RES8 = 0x28;
     RES9 = 0x29;
     RESA = 0x2a;
@@ -238,73 +227,133 @@ instructions!{Opcode,
 
 use std::ops::{BitAnd, BitOr, BitXor};
 
+#[derive(Debug)]
+pub enum Args {
+    Null,
+    Byte(u8),
+    Wide(u16),
+}
+
+use self::Args::*;
+
+impl Args {
+    fn new(args: &[u8]) -> Args {
+        match args.len() {
+            0 => Null,
+            1 => Byte(args[0]),
+            2 => Wide(NativeEndian::read_u16(args)),
+            3 => unimplemented!(),
+            _ => unreachable!(),
+        }
+    }
+    #[inline]
+    fn as_u16(&self) -> Option<u16> {
+        match *self {
+            Null => None,
+            Byte(b) => Some(b as u16),
+            Wide(c) => Some(c),
+        }
+    }
+    #[inline]
+    fn as_u8(&self) -> Option<u8> {
+        match *self {
+            Null => None,
+            Byte(b) => Some(b),
+            Wide(c) => Some(c as u8),
+        }
+    }
+}
+
 impl Cpu for StandardCpu {
-    type Cell = u8;
     type Index = u16;
 
-    fn run<M: Memory<Self::Index, Cell = Self::Cell>>(&mut self, memory: &mut M) -> Option<Signal> {
+    fn run<M: Memory<Self::Index>>(&mut self, memory: &mut M) -> Option<Signal> {
         let cur_ins = memory.read(self.pc);
 
-        // TODO use this
-        // load the args into an array and read them from there instead of directly from memory
-        let args_length = cur_ins >> 6;
-        
-        self.pc += 1 + args_length as u16;
+        let args_length = (cur_ins >> 6) as u16;
+        let args = Args::new(memory.read_to_slice(self.pc+1, args_length));
 
-        let indirection = args_length > 1;
+        self.pc += 1 + args_length;
 
         match cur_ins & 0b0011_1111 {
             0b0100_0000..=0xff => unreachable!(),
             NOP => (),
-            RES7..=RESF => panic!("RESERVED"),
+            RES8..=RESF => panic!("RESERVED"),
             INVALID => panic!("Invalid instruction call {:2x}!\n{:?}", cur_ins, self),
-            MOVR => {
-                let to_write = self.read_arg(memory, indirection);
-                memory.write(memory.read_index(self.pc), to_write);
-                self.pc += 2;
+            LOAD => {
+                match args {
+                    Null => self.accumulator = 0,
+                    Byte(b) => *self.acc_u8() = b,
+                    Wide(c) => self.accumulator = c,
+                }
             }
-            MOVT => self.accumulator = memory.read(self.read_arg_index(memory, indirection)),
-            RESERVED5 => self.accumulator = self.read_arg(memory, indirection),
-            STORE => memory.write(self.read_arg_index(memory, indirection), self.accumulator),
-            COMPARE => self.cmp(memory, indirection),
-            SUB => self.sub(memory, indirection),
-            ADD => self.binop_overflowing(memory, indirection, u8::overflowing_add),
-            MUL => self.binop_overflowing(memory, indirection, u8::overflowing_mul),
-            DIV => self.binop_overflowing(memory, indirection, u8::overflowing_div),
-            REM => self.binop_overflowing(memory, indirection, u8::overflowing_rem),
-            AND => self.binop(memory, indirection, u8::bitand),
-            OR => self.binop(memory, indirection, u8::bitor),
-            XOR => self.binop(memory, indirection, u8::bitxor),
-            NOT => self.accumulator = !self.read_arg(memory, indirection),
-            JUMP | JMPR => self.jmp(memory, indirection, cur_ins & 0b1000 == 0b1000),
+            LDL => {
+                self.accumulator = memory.read_index(args.as_u16().unwrap_or_else(|| self.accumulator));
+            }
+            STR => {
+                let location = args.as_u16().unwrap_or(0);
+                match args {
+                    Null | Byte(_) => memory.write(location, *self.acc_u8()),
+                    Wide(_) => memory.write_index(location, self.accumulator), 
+                }
+            }
+            STL => {
+                let location = memory.read_index(args.as_u16().unwrap_or(0));
+                match args {
+                    Null | Byte(_) => memory.write(location, *self.acc_u8()),
+                    Wide(_) => memory.write_index(location, self.accumulator), 
+                }
+            }
+            COMPARE => self.cmp(args),
+            SUB => self.sub(args),
+            ADD => self.binop_overflowing(args, u8::overflowing_add, u16::overflowing_add),
+            MUL => self.binop_overflowing(args, u8::overflowing_mul, u16::overflowing_mul),
+            DIV => self.binop_overflowing(args, u8::overflowing_div, u16::overflowing_div),
+            REM => self.binop_overflowing(args, u8::overflowing_rem, u16::overflowing_rem),
+            AND => self.binop(args, u16::bitand),
+            OR => self.binop(args, u16::bitor),
+            XOR => self.binop(args, u16::bitxor),
+            NOT => match args {
+                Null => self.accumulator = 0xffff,
+                Byte(b) => *self.acc_u8() = !b,
+                Wide(c) => self.accumulator = !c,
+            },
+            JUMP | JMPR => self.jmp(args, cur_ins & 0b1000 == 0b1000),
             JIO | JIOR => if self.flags & 0b1000 == 0b1000 {
-                self.jmp(memory, indirection, cur_ins & 0b1000 == 0b1000)
-            } else {
-                self.pc += 2;
+                self.jmp(args, cur_ins & 0b1000 == 0b1000)
             }
             JEZ..=JNE | JEZR..= JNER => {
                 let mask = cur_ins & 0b0111;
 
                 if self.flags & mask != 0 {
-                    self.jmp(memory, indirection, cur_ins & 0b1000 == 0b1000);
-                } else {
-                    self.pc += 2;
+                    self.jmp(args, cur_ins & 0b1000 == 0b1000);
                 }
             }
             PUSH => {
-                memory.write(self.stack_pointer, self.accumulator);
+                memory.write(self.stack_pointer, *self.acc_u8());
+                self.stack_pointer -= 1;
+            }
+            PUSHW => {
+                self.stack_pointer -= 1;
+                memory.write_index(self.stack_pointer, self.accumulator);
                 self.stack_pointer -= 1;
             }
             POP => {
                 self.stack_pointer += 1;
-                self.accumulator = memory.read(self.stack_pointer);
+                *self.acc_u8() = memory.read(self.stack_pointer);
+            }
+            POPW => {
+                self.stack_pointer += 1;
+                self.accumulator = memory.read_index(self.stack_pointer);
+                self.stack_pointer += 1;
             }
             RET => {
                 self.stack_pointer += 2;
                 self.pc = memory.read_index(self.stack_pointer+1);
             }
             CALL => {
-                let call_location = self.read_arg_index(memory, indirection);
+                let call_location = args.as_u16().unwrap_or_default();
+                
                 memory.write_index(self.stack_pointer-1, self.pc);
                 self.stack_pointer -= 2;
 
@@ -312,20 +361,14 @@ impl Cpu for StandardCpu {
             }
             INC => self.accumulator += 1,
             DEC => self.accumulator -= 1,
-            LSV => {
-                let base = self.stack_pointer + 1;
-
-                let location_of_data_to_load = base.wrapping_add(self.read_arg_index(memory, indirection));
-                self.accumulator = memory.read(location_of_data_to_load);
-            }
 
             INT1 => {
                 let mut bytes = [0];
                 std::io::stdin().read_exact(&mut bytes).unwrap();
-                self.accumulator = bytes[0];
+                *self.acc_u8() = bytes[0];
             }
             INT2 => {
-                std::io::stdout().write_all(&[self.accumulator]).unwrap();
+                std::io::stdout().write_all(&[args.as_u8().unwrap_or(*self.acc_u8())]).unwrap();
             }
             INT3 => {
                 eprintln!("{:?}", self);

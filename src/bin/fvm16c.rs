@@ -1,4 +1,6 @@
-use fvm::{
+use telda::{
+    SmartMemory,
+    ArrayMemory,
     Memory,
     standard16::Opcode,
 };
@@ -9,61 +11,9 @@ use std::{
     env::args,
 };
 
-struct SmartMemory {
-    length: usize,
-    buffer: [u8; 0x10000],
-}
-
-impl SmartMemory {
-    #[inline]
-    fn new() -> Self {
-        SmartMemory {
-            length: 0,
-            buffer: [0; 0x10000],
-        }
-    }
-    #[inline]
-    fn slice(&self) -> &[u8] {
-        &self.buffer[..self.length]
-    }
-}
-
-impl Memory<u16> for SmartMemory {
-    type Cell = u8;
-
-    #[inline]
-    fn read(&self, r: u16) -> Self::Cell {
-        self.buffer.read(r)
-    }
-    #[inline]
-    fn read_index(&self, r: u16) -> u16 {
-        self.buffer.read_index(r)
-    }
-    #[inline]
-    fn write(&mut self, r: u16, c: Self::Cell) {
-        let new_length = r as usize;
-        if new_length > self.length {
-            self.length = new_length;
-        }
-        self.buffer.write(r, c)
-    }
-    #[inline]
-    fn write_index(&mut self, r: u16, c: u16) {
-        let new_length = r as usize + 1;
-        if new_length > self.length {
-            self.length = new_length;
-        }
-        self.buffer.write_index(r, c)
-    }
-    #[inline]
-    fn size(&self) -> usize {
-        self.buffer.size()
-    }
-}
-
 fn main() -> IOResult<()> {
     let mut args = args();
-    let mut memory = SmartMemory::new();
+    let mut memory = SmartMemory::new([0; 0x10000]);
     let file;
 
     if let Some(file_name) = (&mut args).skip(1).next() {
@@ -98,9 +48,6 @@ fn main() -> IOResult<()> {
                                 memory.write(i, *b);
                                 i += 1;
                             }
-                            Operand::PointerLabel(_) | Operand::Pointer(_) => {
-                                panic!("Can't make data using a pointer");
-                            }
                             Operand::Index(p) => {
                                 memory.write_index(i, *p);
                                 i += 2;
@@ -127,7 +74,10 @@ fn main() -> IOResult<()> {
                     }
                 }
             } else if let Some(ins) = Opcode::from_str(ins) {
-                let mut ins = ins as u8;
+                print!("{:?} ", ins);
+                let ins = ins as u8;
+                print!("{:02X}", ins);
+                
                 let ins_p = i;
                 i += 1;
                 for arg in args {
@@ -138,21 +88,6 @@ fn main() -> IOResult<()> {
                             Operand::Index(p) => {
                                 width = 2;
                                 memory.write_index(i, *p)
-                            }
-                            Operand::Pointer(p) => {
-                                width = 2;
-                                ins |= 0b1000_0000;
-                                memory.write_index(i, *p)
-                            }
-                            Operand::PointerLabel(l) => {
-                                width = 2;
-                                ins |= 0b1000_0000;
-                                if let Some(&p) = labels.get(l) {
-                                    memory.write_index(i, p);
-                                } else {
-                                    eprintln!("Unknown label {} at line {}", l, line_num);
-                                    std::process::exit(3);
-                                }
                             }
                             Operand::Label(l) => {
                                 width = 2;
@@ -174,7 +109,8 @@ fn main() -> IOResult<()> {
                         std::process::exit(2);
                     }
                 }
-                memory.write(ins_p, ins);
+                println!(" {:08b}", ((i - ins_p - 1) << 6) as u8);
+                memory.write(ins_p, ins | ((i - ins_p - 1) << 6) as u8);
             } else if ins.ends_with(":") {
                 labels.insert(ins[..ins.len()-1].to_owned(), i);
             } else {
@@ -201,9 +137,6 @@ pub enum Operand {
     Index(u16),
     Label(String),
     String(Vec<u8>),
-
-    Pointer(u16),
-    PointerLabel(String),
 }
 
 fn escape_char(b: u8) -> Option<u8> {
@@ -261,12 +194,6 @@ impl Operand {
                 None
             } else {
                 Some(Operand::String(buf))
-            }
-        } else if s.starts_with("[") && s.ends_with("]") {
-            match decode_number_or_string(&s[1 .. s.len() - 1]) {
-                Ok(Ok(p)) => Some(Operand::Pointer(p)),
-                Ok(Err(p)) => Some(Operand::Pointer(p as u16)), 
-                Err(s) => Some(Operand::PointerLabel(s.to_owned())),
             }
         } else {
             match decode_number_or_string(s) {
