@@ -166,3 +166,4 @@ impl<I, M: Memory<I>, Cp: Cpu<Index = I>> Machine<I, M, Cp> {
 
 pub mod standard8;
 pub mod standard16;
+pub mod is;

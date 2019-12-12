@@ -2,7 +2,7 @@ use telda::{
     SmartMemory,
     ArrayMemory,
     Memory,
-    standard16::Opcode,
+    is::Opcode,
 };
 use std::{
     io::{Write, BufReader, BufRead, Result as IOResult},
@@ -26,6 +26,7 @@ fn main() -> IOResult<()> {
     let file = BufReader::new(file);
 
     let mut labels = HashMap::new();
+    let mut label_references: Vec<(u16, u32, String)> = Vec::new();
 
     let mut i = 2;
     let mut line_num = 0;
@@ -40,7 +41,7 @@ fn main() -> IOResult<()> {
             let ins = &line[..first_space_index];
             let args = line[(first_space_index + 1).min(line.len())..].split(',').skip_while(|s| s.chars().all(char::is_whitespace));
 
-            if ins == "DATA" {
+            if ins == "data" || ins == "dat" {
                 for arg in args {
                     if let Some(data) = Operand::from_str(arg) {
                         match &data {
@@ -53,12 +54,7 @@ fn main() -> IOResult<()> {
                                 i += 2;
                             }
                             Operand::Label(l) => {
-                                if let Some(&p) = labels.get(l) {
-                                    memory.write_index(i, p);
-                                } else {
-                                    eprintln!("Unknown label {} at line {}", l, line_num);
-                                    std::process::exit(3);
-                                }
+                                label_references.push((i, line_num, l.to_owned()));
                                 i += 2;
                             }
                             Operand::String(s) => {
@@ -74,9 +70,7 @@ fn main() -> IOResult<()> {
                     }
                 }
             } else if let Some(ins) = Opcode::from_str(ins) {
-                print!("{:?} ", ins);
                 let ins = ins as u8;
-                print!("{:02X}", ins);
                 
                 let ins_p = i;
                 i += 1;
@@ -91,12 +85,7 @@ fn main() -> IOResult<()> {
                             }
                             Operand::Label(l) => {
                                 width = 2;
-                                if let Some(&p) = labels.get(l) {
-                                    memory.write_index(i, p);
-                                } else {
-                                    eprintln!("Unknown label {} at line {}", l, line_num);
-                                    std::process::exit(3);
-                                }
+                                label_references.push((i, line_num, l.to_owned()));
                             }
                             Operand::String(_) => {
                                 eprintln!("Didn't expect string for this instruction at line {}", line_num);
@@ -111,13 +100,27 @@ fn main() -> IOResult<()> {
                 }
                 memory.write(ins_p, ins | ((i - ins_p - 1) << 6) as u8);
             } else if ins.ends_with(":") {
-                labels.insert(ins[..ins.len()-1].to_owned(), i);
+                let o = labels.insert(ins[..ins.len()-1].to_owned(), i);
+                if o.is_some() {
+                    eprintln!("Label {} is already defined once before, cannot be defined again at line {}", &ins[..ins.len()-1], line_num);
+                    std::process::exit(3);
+                }
             } else {
                 eprintln!("Invalid instruction {} at line {}", ins, line_num);
                 std::process::exit(2);
             }
         }
     }
+
+    for (i, line_num, label_name) in label_references {
+        if let Some(&p) = labels.get(&label_name) {
+            memory.write_index(i, p);
+        } else {
+            eprintln!("Unknown label {} at line {}", label_name, line_num);
+            std::process::exit(3);
+        }
+    }
+
     if let Some(start) = labels.get("start") {
         memory.write_index(0, *start);
     } else {

@@ -1,4 +1,5 @@
 use super::{Machine, Memory, Memory8Bit, Cpu, Signal};
+use crate::is::*;
 use std::io::{Write, Read};
 
 pub type StandardMachine = Machine<u8, Memory8Bit, StandardCpu>;
@@ -22,7 +23,7 @@ impl StandardCpu {
     }
     #[inline]
     fn sub(&mut self, arg: Args) {
-        let (work, o) = self.work.overflowing_sub(arg.as_u8().unwrap_or(self.work));
+        let (work, o) = self.work.overflowing_sub(arg.as_u8().unwrap_or(1));
         self.work = work;
         self.flags &= 0b1111_0000;
         self.flags |= if o {
@@ -70,125 +71,6 @@ impl StandardCpu {
     }
 }
 
-macro_rules! instructions {
-    ($enum_name:ident, $($name:ident = $opcode:expr;)*) => {
-        $(
-            pub const $name: u8 = $opcode;
-        )*
-        #[derive(Debug, Copy, Clone, Eq, PartialEq, Ord, PartialOrd)]
-        #[repr(u8)]
-        pub enum $enum_name {
-            $(
-                $name = $name
-            ),*
-        }
-
-        // This is here to make sure all opcodes are defined
-        fn _dummy(n: u8) {
-            match n {
-                0b0100_0000..=0xff => (),
-                $($opcode => ()),*
-            }
-        }
-
-        impl $enum_name {
-            pub fn from_str(s: &str) -> Option<Self> {
-                match s {
-                    $( stringify!($name) => Some(Self::$name),)*
-                    _ => None,
-                }
-            }
-            pub fn from_u8(i: u8) -> Option<Self> {
-                if i & 0xc0 == 0 {
-                    unsafe {
-                        Some(std::mem::transmute(i))
-                    }
-                } else {
-                    None
-                }
-            }
-        }
-    };
-}
-
-// OPCODE
-// llgg oooo
-// l: length of args 
-// g: instruction group
-// i: instruction
-
-instructions!{Opcode,
-    INVALID = 0x00;
-    LOAD = 0x01;
-    LDL = 0x02;
-    STR = 0x03;
-    STL = 0x04;
-    COMPARE = 0x05;
-    ADD = 0x0a;
-    SUB = 0x0b;
-    MUL = 0x0c;
-    DIV = 0x0d;
-    REM = 0x0e;
-    NOP = 0x0f;
-    AND = 0x06;
-    OR = 0x07;
-    XOR = 0x08;
-    NOT = 0x09;
-    JUMP = 0x10;
-    JMPR = 0x18;
-    // RGLZ (all = overflow)
-    // relative greater less zero
-    JEZ = 0x11;
-    JEZR = 0x19;
-    JLT = 0x12;
-    JLTR = 0x1a;
-    JLE = 0x13;
-    JLER = 0x1b;
-    JGT = 0x14;
-    JGTR = 0x1c;
-    JGE = 0x15;
-    JGER = 0x1d;
-    JNE = 0x16;
-    JNER = 0x1e;
-    JIO = 0x17;
-    JIOR = 0x1f;
-
-    PUSH = 0x20;
-    RESPUSH = 0x21;
-    POP = 0x22;
-    RESPOP = 0x23;
-    CALL = 0x24;
-    RET = 0x25;
-    INC = 0x26;
-    DEC = 0x27;
-
-    RES8 = 0x28;
-    RES9 = 0x29;
-    RESA = 0x2a;
-    RESB = 0x2b;
-    RESC = 0x2c;
-    RESD = 0x2d;
-    RESE = 0x2e;
-    RESF = 0x2f;
-
-    HALT = 0x30;
-    INT1 = 0x31;
-    INT2 = 0x32;
-    INT3 = 0x33;
-    INT4 = 0x34;
-    INT5 = 0x35;
-    INT6 = 0x36;
-    INT7 = 0x37;
-    INT8 = 0x38;
-    INT9 = 0x39;
-    INT10 = 0x3a;
-    INT11 = 0x3b;
-    INT12 = 0x3c;
-    INT13 = 0x3d;
-    INT14 = 0x3e;
-    INT15 = 0x3f;
-}
-
 #[derive(Debug)]
 pub enum Args {
     Null,
@@ -231,8 +113,8 @@ impl Cpu for StandardCpu {
         match cur_ins & 0b0011_1111 {
             0b0100_0000..=0xff => unreachable!(),
             NOP => (),
-            RES8..=RESF => panic!("RESERVED"),
-            INVALID | RESPUSH | RESPOP => panic!("Invalid instruction call {:02x}!\t{:x?}", cur_ins, self),
+            RES6..=RESF => panic!("RESERVED"),
+            INVALID | PUSHW | POPW => panic!("Invalid instruction call {:02x}!\t{:x?}", cur_ins, self),
             LOAD => {
                 match args {
                     Null => self.work = 0,
@@ -252,7 +134,11 @@ impl Cpu for StandardCpu {
             }
             COMPARE => self.cmp(args),
             SUB => self.sub(args),
-            ADD => self.binop_overflowing(args, u8::overflowing_add),
+            ADD => if let Null = args {
+                self.work += 1;
+            } else {
+                self.binop_overflowing(args, u8::overflowing_add)
+            },
             MUL => self.binop_overflowing(args, u8::overflowing_mul),
             DIV => self.binop_overflowing(args, u8::overflowing_div),
             REM => self.binop_overflowing(args, u8::overflowing_rem),
@@ -290,8 +176,6 @@ impl Cpu for StandardCpu {
 
                 self.pc = call_location;
             }
-            INC => self.work += 1,
-            DEC => self.work -= 1,
 
             INT1 => {
                 let mut bytes = [0];

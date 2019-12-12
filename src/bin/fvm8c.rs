@@ -2,7 +2,7 @@ use telda::{
     SmartMemory,
     ArrayMemory,
     Memory,
-    standard8::Opcode,
+    is::Opcode,
 };
 use std::{
     io::{Write, BufReader, Read, BufRead, Result as IOResult},
@@ -39,7 +39,7 @@ fn main() -> IOResult<()> {
             let ins = &line[..first_space_index];
             let args = line[(first_space_index + 1).min(line.len())..].split(',').skip_while(|s| s.chars().all(char::is_whitespace));
 
-            if ins == "DATA" {
+            if ins == "dat" || ins == "data" {
                 for arg in args {
                     if let Some(data) = Operand::from_str(arg) {
                         match &data {
