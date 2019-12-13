@@ -13,9 +13,9 @@ pub struct StandardCpu {
 }
 
 impl StandardCpu {
-    pub fn new<M: Memory<u8>>(m: &M) -> Self {
+    pub fn new(start: u8) -> Self {
         StandardCpu {
-            pc: m.read_index(0),
+            pc: start,
             stack_pointer: 0xff,
             work: 0,
             flags: 0,
@@ -53,7 +53,7 @@ impl StandardCpu {
         use std::cmp::Ordering::*;
 
         self.flags &= 0b1111_0000;
-        self.flags |= match self.work.cmp(&arg.as_u8().unwrap_or(self.work)) {
+        self.flags |= match self.work.cmp(&arg.as_u8().unwrap_or(0)) {
             Greater => 0b0100,
             Less => 0b0010,
             Equal => 0b0001,
@@ -158,7 +158,7 @@ impl Cpu for StandardCpu {
                 }
             }
             PUSH => {
-                memory.write(self.stack_pointer, self.work);
+                memory.write(self.stack_pointer, args.as_u8().unwrap_or(self.work));
                 self.stack_pointer -= 1;
             }
             POP => {
@@ -176,7 +176,8 @@ impl Cpu for StandardCpu {
 
                 self.pc = call_location;
             }
-
+            
+            
             INT1 => {
                 let mut bytes = [0];
                 std::io::stdin().read_exact(&mut bytes).unwrap();
@@ -186,6 +187,9 @@ impl Cpu for StandardCpu {
                 std::io::stdout().write_all(&[args.as_u8().unwrap_or(self.work)]).unwrap();
             }
             INT3 => {
+                std::io::stderr().write_all(&[args.as_u8().unwrap_or(self.work)]).unwrap();
+            }
+            INT15 => {
                 eprintln!("{:x?}", self);
                 let mut stack = Vec::new();
                 let mut i = self.stack_pointer;
@@ -195,7 +199,8 @@ impl Cpu for StandardCpu {
                 }
                 eprintln!("Stack: {:x?}", stack);
             }
-            HALT | INT4 ..= INT15 => return Some(Signal::PowerOff),
+            i @ INT4 ..= INT14 => eprintln!("Interrupt{:X} called", i&0xf),
+            HALT => return Some(Signal::PowerOff),
         }
 
         None

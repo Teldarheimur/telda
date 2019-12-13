@@ -53,7 +53,7 @@ where usize: From<I> {
     }
     #[inline]
     fn write_index(&mut self, r: I, c: I) {
-        let new_length = usize::from(r) + 3;
+        let new_length = usize::from(r) + std::mem::size_of::<I>();
         if new_length > self.length {
             self.length = new_length;
         }

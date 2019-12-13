@@ -1,34 +1,111 @@
 use telda::{
-    SmartMemory,
-    ArrayMemory,
     Memory,
     is::Opcode,
 };
 use std::{
     io::{Write, BufReader, BufRead, Result as IOResult},
     collections::HashMap,
+    path::PathBuf,
     fs::File,
     env::args,
 };
+use byteorder::{NativeEndian, ByteOrder};
+
+struct DynMemory {
+    mem: Vec<u8>,
+    mode: Mode,
+}
+
+impl DynMemory {
+    #[inline]
+    fn new(mode: Mode) -> Self {
+        DynMemory {
+            mode,
+            mem: Vec::new(),
+        }
+    }
+}
+
+impl Memory<u16> for DynMemory {
+    #[inline]
+    fn read(&self, r: u16) -> u8 {
+        self.mem.get(r as usize).copied().unwrap_or(0)
+    }
+    #[inline]
+    fn read_index(&self, r: u16) -> u16 {
+        match self.mode {
+            Mode::Bit8 => self.read(r) as u16,
+            Mode::Bit16 => if (r as usize) < self.mem.len() {
+                NativeEndian::read_u16(&self.mem[r as usize..])
+            } else { 0 },
+        }
+    }
+    fn read_to_slice(&self, r: u16, length: u16) -> &[u8] {
+        &self.mem[r as usize..(r+length) as usize]
+    }
+    #[inline]
+    fn write(&mut self, r: u16, c: u8) {
+        let new_length = r as usize + 1;
+        if new_length > self.mem.len() {
+            self.mem.resize(new_length, 0);
+        }
+        self.mem[r as usize] = c;
+    }
+    #[inline]
+    fn write_index(&mut self, r: u16, c: u16) {
+        let new_length = usize::from(r) + self.mode.size();
+        if new_length > self.mem.len() {
+            self.mem.resize(new_length, 0);
+        }
+        match self.mode {
+            Mode::Bit8 => self.mem[r as usize] = c as u8,
+            Mode::Bit16 => NativeEndian::write_u16(&mut self.mem[r as usize..], c),
+        }
+    }
+    #[inline]
+    fn size(&self) -> usize {
+        self.mem.len()
+    }
+}
+
+#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+enum Mode {
+    Bit8,
+    Bit16,
+}
+
+impl Mode {
+    fn size(self) -> usize {
+        match self {
+            Mode::Bit8 => 1,
+            Mode::Bit16 => 2,
+        }
+    }
+}
 
 fn main() -> IOResult<()> {
     let mut args = args();
-    let mut memory = SmartMemory::new([0; 0x10000]);
-    let file;
-
+    let path: PathBuf;
+    
     if let Some(file_name) = (&mut args).skip(1).next() {
-        file = File::open(&file_name)?;
+        path = file_name.into();
     } else {
         eprintln!("Oh dear, you didn't give me a file to compile");
         std::process::exit(1);
     }
+    let mode = match path.extension().and_then(|a| a.to_str()).unwrap_or("") {
+        "t8" | "fvm8" | "fvm8c" => Mode::Bit8,
+        "t16" | "fvm16" | "fvm16c" => Mode::Bit16,
+        _ => Mode::Bit16,
+    };
+    let mut memory = DynMemory::new(mode);
 
-    let file = BufReader::new(file);
+    let file = BufReader::new(File::open(&path)?);
 
     let mut labels = HashMap::new();
     let mut label_references: Vec<(u16, u32, String)> = Vec::new();
 
-    let mut i = 2;
+    let mut i = 0;
     let mut line_num = 0;
 
     for line in file.lines() {
@@ -51,11 +128,11 @@ fn main() -> IOResult<()> {
                             }
                             Operand::Index(p) => {
                                 memory.write_index(i, *p);
-                                i += 2;
+                                i += mode.size() as u16;
                             }
                             Operand::Label(l) => {
                                 label_references.push((i, line_num, l.to_owned()));
-                                i += 2;
+                                i += mode.size() as u16;
                             }
                             Operand::String(s) => {
                                 for &b in s {
@@ -80,11 +157,11 @@ fn main() -> IOResult<()> {
                         match &operand {
                             Operand::Byte(b) => memory.write(i, *b),
                             Operand::Index(p) => {
-                                width = 2;
+                                width = mode.size() as u16;
                                 memory.write_index(i, *p)
                             }
                             Operand::Label(l) => {
-                                width = 2;
+                                width = mode.size() as u16;
                                 label_references.push((i, line_num, l.to_owned()));
                             }
                             Operand::String(_) => {
@@ -121,15 +198,28 @@ fn main() -> IOResult<()> {
         }
     }
 
-    if let Some(start) = labels.get("start") {
-        memory.write_index(0, *start);
+    let start = if let Some(start) = labels.get("start") {
+        *start
     } else {
         eprintln!("No start label found");
         std::process::exit(3);
-    }
+    };
 
-    let mut output_file = File::create(args.next().unwrap_or_else(|| "out.fvm16".to_owned()))?;
-    output_file.write_all(memory.slice())?;
+    let mut output_file = File::create(&args.next().map(Into::into).unwrap_or_else(|| path.with_extension("t")))?;
+    output_file.write_all(b"telda")?;
+    output_file.write_all(&[match mode {
+        Mode::Bit8 => 8,
+        Mode::Bit16 => 16,
+    }])?;
+    match mode {
+        Mode::Bit8 => output_file.write_all(&[start as u8])?,
+        Mode::Bit16 => {
+            let mut start_buf = [0; 2];
+            NativeEndian::write_u16(&mut start_buf, start);
+            output_file.write_all(&start_buf)?;
+        }
+    }
+    output_file.write_all(&memory.mem)?;
 
     Ok(())
 }

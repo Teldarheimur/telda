@@ -17,9 +17,9 @@ pub struct StandardCpu {
 }
 
 impl StandardCpu {
-    pub fn new<M: Memory<u16>>(m: &M) -> Self {
+    pub fn new(start: u16) -> Self {
         StandardCpu {
-            pc: m.read_index(0),
+            pc: start,
             stack_pointer: 0xffff,
             accumulator: 0,
             flags: 0,
@@ -234,12 +234,12 @@ impl Cpu for StandardCpu {
                 }
             }
             PUSH => {
-                memory.write(self.stack_pointer, *self.acc_u8());
+                memory.write(self.stack_pointer, args.as_u8().unwrap_or(*self.acc_u8()));
                 self.stack_pointer -= 1;
             }
             PUSHW => {
                 self.stack_pointer -= 1;
-                memory.write_index(self.stack_pointer, self.accumulator);
+                memory.write_index(self.stack_pointer, args.as_u16().unwrap_or(self.accumulator));
                 self.stack_pointer -= 1;
             }
             POP => {
@@ -256,7 +256,7 @@ impl Cpu for StandardCpu {
                 self.pc = memory.read_index(self.stack_pointer+1);
             }
             CALL => {
-                let call_location = args.as_u16().unwrap_or_default();
+                let call_location = args.as_u16().unwrap_or(self.accumulator);
                 
                 memory.write_index(self.stack_pointer-1, self.pc);
                 self.stack_pointer -= 2;
@@ -273,9 +273,20 @@ impl Cpu for StandardCpu {
                 std::io::stdout().write_all(&[args.as_u8().unwrap_or(*self.acc_u8())]).unwrap();
             }
             INT3 => {
-                eprintln!("{:?}", self);
+                std::io::stderr().write_all(&[args.as_u8().unwrap_or(*self.acc_u8())]).unwrap();
             }
-            HALT | INT4 ..= INT15 => return Some(Signal::PowerOff),
+            INT15 => {
+                eprintln!("{:x?}", self);
+                let mut stack = Vec::new();
+                let mut i = self.stack_pointer;
+                while i < 255 {
+                    i += 1;
+                    stack.push(memory.read(i));
+                }
+                eprintln!("Stack: {:x?}", stack);
+            }
+            i @ INT4 ..= INT14 => eprintln!("Interrupt{:X} called", i&0xf),
+            HALT => return Some(Signal::PowerOff),
         }
 
         None
