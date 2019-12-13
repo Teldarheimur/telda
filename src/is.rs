@@ -87,9 +87,9 @@ instructions!{Opcode;
     POPW, "popw"; 0x23;
     CALL, "call"; 0x24;
     RET, "ret"; 0x25;
+    LSV, "ldsv", "lsv"; 0x26;
+    SSV, "stsv", "ssv"; 0x27;
 
-    RES6; 0x26;
-    RES7; 0x27;
     RES8; 0x28;
     RES9; 0x29;
     RESA; 0x2a;

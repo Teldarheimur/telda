@@ -176,7 +176,7 @@ impl Cpu for StandardCpu {
         match cur_ins & 0b0011_1111 {
             0b0100_0000..=0xff => unreachable!(),
             NOP => (),
-            RES6..=RESF => panic!("RESERVED"),
+            RES8..=RESF => panic!("RESERVED"),
             INVALID => panic!("Invalid instruction call {:2x}!\n{:?}", cur_ins, self),
             LOAD => {
                 match args {
@@ -234,34 +234,46 @@ impl Cpu for StandardCpu {
                 }
             }
             PUSH => {
-                memory.write(self.stack_pointer, args.as_u8().unwrap_or(*self.acc_u8()));
                 self.stack_pointer -= 1;
+                memory.write(self.stack_pointer, args.as_u8().unwrap_or(*self.acc_u8()));
             }
             PUSHW => {
-                self.stack_pointer -= 1;
+                self.stack_pointer -= 2;
                 memory.write_index(self.stack_pointer, args.as_u16().unwrap_or(self.accumulator));
-                self.stack_pointer -= 1;
             }
             POP => {
-                self.stack_pointer += 1;
                 *self.acc_u8() = memory.read(self.stack_pointer);
+                self.stack_pointer += 1;
             }
             POPW => {
-                self.stack_pointer += 1;
                 self.accumulator = memory.read_index(self.stack_pointer);
-                self.stack_pointer += 1;
+                self.stack_pointer += 2;
             }
             RET => {
+                self.pc = memory.read_index(self.stack_pointer);
                 self.stack_pointer += 2;
-                self.pc = memory.read_index(self.stack_pointer+1);
             }
             CALL => {
                 let call_location = args.as_u16().unwrap_or(self.accumulator);
                 
-                memory.write_index(self.stack_pointer-1, self.pc);
                 self.stack_pointer -= 2;
+                memory.write_index(self.stack_pointer, self.pc);
 
                 self.pc = call_location;
+            }
+            LSV => {
+                let location = self.stack_pointer+args.as_u16().unwrap_or(self.accumulator);
+                match args {
+                    Null | Byte(_) => *self.acc_u8() = memory.read(location),
+                    Wide(_) => self.accumulator = memory.read_index(location),
+                }
+            }
+            SSV => {
+                let location = self.stack_pointer+args.as_u16().unwrap_or(0);
+                match args {
+                    Null | Byte(_) => memory.write(location, *self.acc_u8()),
+                    Wide(_) => memory.write_index(location, self.accumulator), 
+                }
             }
 
             INT1 => {
@@ -280,8 +292,8 @@ impl Cpu for StandardCpu {
                 let mut stack = Vec::new();
                 let mut i = self.stack_pointer;
                 while i < 255 {
-                    i += 1;
                     stack.push(memory.read(i));
+                    i += 1;
                 }
                 eprintln!("Stack: {:x?}", stack);
             }

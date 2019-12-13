@@ -86,7 +86,7 @@ impl Mode {
 fn main() -> IOResult<()> {
     let mut args = args();
     let path: PathBuf;
-    
+
     if let Some(file_name) = (&mut args).skip(1).next() {
         path = file_name.into();
     } else {
@@ -114,78 +114,7 @@ fn main() -> IOResult<()> {
         line_num += 1;
 
         if !line.is_empty() && !line.starts_with("#") {
-            let first_space_index = line.find(' ').unwrap_or(line.len());
-            let ins = &line[..first_space_index];
-            let args = line[(first_space_index + 1).min(line.len())..].split(',').skip_while(|s| s.chars().all(char::is_whitespace));
-
-            if ins == "data" || ins == "dat" {
-                for arg in args {
-                    if let Some(data) = Operand::from_str(arg) {
-                        match &data {
-                            Operand::Byte(b) => {
-                                memory.write(i, *b);
-                                i += 1;
-                            }
-                            Operand::Index(p) => {
-                                memory.write_index(i, *p);
-                                i += mode.size() as u16;
-                            }
-                            Operand::Label(l) => {
-                                label_references.push((i, line_num, l.to_owned()));
-                                i += mode.size() as u16;
-                            }
-                            Operand::String(s) => {
-                                for &b in s {
-                                    memory.write(i, b);
-                                    i += 1;
-                                }
-                            }
-                        }
-                    } else {
-                        eprintln!("Invalid data at line {}", line_num);
-                        std::process::exit(2);
-                    }
-                }
-            } else if let Some(ins) = Opcode::from_str(ins) {
-                let ins = ins as u8;
-                
-                let ins_p = i;
-                i += 1;
-                for arg in args {
-                    if let Some(operand) = Operand::from_str(arg) {
-                        let mut width = 1;
-                        match &operand {
-                            Operand::Byte(b) => memory.write(i, *b),
-                            Operand::Index(p) => {
-                                width = mode.size() as u16;
-                                memory.write_index(i, *p)
-                            }
-                            Operand::Label(l) => {
-                                width = mode.size() as u16;
-                                label_references.push((i, line_num, l.to_owned()));
-                            }
-                            Operand::String(_) => {
-                                eprintln!("Didn't expect string for this instruction at line {}", line_num);
-                                std::process::exit(2);
-                            }
-                        }
-                        i += width;
-                    } else {
-                        eprintln!("Invalid operand `{}' at line {}", arg, line_num);
-                        std::process::exit(2);
-                    }
-                }
-                memory.write(ins_p, ins | ((i - ins_p - 1) << 6) as u8);
-            } else if ins.ends_with(":") {
-                let o = labels.insert(ins[..ins.len()-1].to_owned(), i);
-                if o.is_some() {
-                    eprintln!("Label {} is already defined once before, cannot be defined again at line {}", &ins[..ins.len()-1], line_num);
-                    std::process::exit(3);
-                }
-            } else {
-                eprintln!("Invalid instruction {} at line {}", ins, line_num);
-                std::process::exit(2);
-            }
+            parse_line(line, &mut memory, &mut i, mode, line_num, &mut labels, &mut label_references)?;
         }
     }
 
@@ -221,6 +150,111 @@ fn main() -> IOResult<()> {
     }
     output_file.write_all(&memory.mem)?;
 
+    Ok(())
+}
+
+fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_num: u32, labels: &mut HashMap<String, u16>, label_references: &mut Vec<(u16, u32, String)>) -> IOResult<()> {
+    // eprintln!("{:3}: {:02X}: {}", line_num, i, line);
+
+    let first_space_index = line.find(' ').unwrap_or(line.len());
+    let ins = &line[..first_space_index];
+    let args = line[(first_space_index + 1).min(line.len())..].split(',').skip_while(|s| s.chars().all(char::is_whitespace));
+
+    if ins == "data" || ins == "dat" {
+        for arg in args {
+            if let Some(data) = Operand::from_str(arg) {
+                match &data {
+                    Operand::Byte(b) => {
+                        memory.write(*i, *b);
+                        *i += 1;
+                    }
+                    Operand::Index(p) => {
+                        memory.write_index(*i, *p);
+                        *i += mode.size() as u16;
+                    }
+                    Operand::Label(l) => {
+                        label_references.push((*i, line_num, l.to_owned()));
+                        *i += mode.size() as u16;
+                    }
+                    Operand::String(s) => {
+                        for &b in s {
+                            memory.write(*i, b);
+                            *i += 1;
+                        }
+                    }
+                }
+            } else {
+                eprintln!("Invalid data at line {}", line_num);
+                std::process::exit(2);
+            }
+        }
+    } else if ins == "include" {
+        for arg in args {
+            let file = BufReader::new(File::open(arg)?);
+            let mut inc_labels: HashMap<String, u16> = labels.clone();
+            let mut label_references = Vec::new();
+
+            for line in file.lines() {
+                let line = line?;
+                let line = line.trim();
+
+                if !line.is_empty() && !line.starts_with("#") {
+                    parse_line(line, memory, i, mode, line_num, &mut inc_labels, &mut label_references)?;
+                }
+            }
+
+            for (i, line_num, label_name) in label_references {
+                if let Some(&p) = inc_labels.get(&label_name) {
+                    memory.write_index(i, p);
+                } else {
+                    eprintln!("Unknown label {} at line {}", label_name, line_num);
+                    std::process::exit(3);
+                }
+            }
+            // Remove all labels that don't begin in capital letters
+            inc_labels.retain(|k, _| k.chars().next().map(|c| c.is_uppercase()).unwrap_or(false));
+            labels.extend(inc_labels.into_iter());
+        }
+    } else if let Some(ins) = Opcode::from_str(ins) {
+        let ins = ins as u8;
+        
+        let ins_p = *i;
+        *i += 1;
+        for arg in args {
+            if let Some(operand) = Operand::from_str(arg) {
+                let mut width = 1;
+                match &operand {
+                    Operand::Byte(b) => memory.write(*i, *b),
+                    Operand::Index(p) => {
+                        width = mode.size() as u16;
+                        memory.write_index(*i, *p)
+                    }
+                    Operand::Label(l) => {
+                        width = mode.size() as u16;
+                        label_references.push((*i, line_num, l.to_owned()));
+                    }
+                    Operand::String(_) => {
+                        eprintln!("Didn't expect string for this instruction at line {}", line_num);
+                        std::process::exit(2);
+                    }
+                }
+                *i += width;
+            } else {
+                eprintln!("Invalid operand `{}' at line {}", arg, line_num);
+                std::process::exit(2);
+            }
+        }
+        memory.write(ins_p, ins | ((*i - ins_p - 1) << 6) as u8);
+    } else if ins.ends_with(":") {
+        let o = labels.insert(ins[..ins.len()-1].to_owned(), *i);
+        if o.is_some() {
+            eprintln!("Label {} is already defined once before, cannot be defined again at line {}", &ins[..ins.len()-1], line_num);
+            std::process::exit(3);
+        }
+    } else {
+        eprintln!("Invalid instruction {} at line {}", ins, line_num);
+        std::process::exit(2);
+    }
     Ok(())
 }
 

@@ -1,5 +1,5 @@
-use super::{Machine, Memory, Memory8Bit, Cpu, Signal};
 use crate::is::*;
+use super::{Machine, Memory, Memory8Bit, Cpu, Signal};
 use std::io::{Write, Read};
 
 pub type StandardMachine = Machine<u8, Memory8Bit, StandardCpu>;
@@ -113,8 +113,8 @@ impl Cpu for StandardCpu {
         match cur_ins & 0b0011_1111 {
             0b0100_0000..=0xff => unreachable!(),
             NOP => (),
-            RES6..=RESF => panic!("RESERVED"),
-            INVALID | PUSHW | POPW => panic!("Invalid instruction call {:02x}!\t{:x?}", cur_ins, self),
+            RES8..=RESF => panic!("RESERVED {:02x} @ {:02X}", cur_ins, self.pc-1-args_length),
+            INVALID => panic!("Invalid instruction call {:02x}!\t{:x?}", cur_ins, self),
             LOAD => {
                 match args {
                     Null => self.work = 0,
@@ -157,27 +157,35 @@ impl Cpu for StandardCpu {
                     self.jmp(args, cur_ins & 0b1000 == 0b1000);
                 }
             }
-            PUSH => {
-                memory.write(self.stack_pointer, args.as_u8().unwrap_or(self.work));
+            PUSH | PUSHW => {
                 self.stack_pointer -= 1;
+                memory.write(self.stack_pointer, args.as_u8().unwrap_or(self.work));
             }
-            POP => {
-                self.stack_pointer += 1;
+            POP | POPW => {
                 self.work = memory.read(self.stack_pointer);
+                self.stack_pointer += 1;
             }
             RET => {
-                self.stack_pointer += 1;
                 self.pc = memory.read(self.stack_pointer);
+                self.stack_pointer += 1;
             }
             CALL => {
                 let call_location = args.as_u8().unwrap_or(self.work);
-                memory.write(self.stack_pointer, self.pc);
                 self.stack_pointer -= 1;
+                memory.write(self.stack_pointer, self.pc);
 
                 self.pc = call_location;
             }
-            
-            
+            LSV => {
+                let location = self.stack_pointer+args.as_u8().unwrap_or(self.work);
+                self.work = memory.read(location);
+            }
+            SSV => {
+                let location = self.stack_pointer+args.as_u8().unwrap_or(0);
+                memory.write(location, self.work);
+            }
+
+
             INT1 => {
                 let mut bytes = [0];
                 std::io::stdin().read_exact(&mut bytes).unwrap();
@@ -194,8 +202,8 @@ impl Cpu for StandardCpu {
                 let mut stack = Vec::new();
                 let mut i = self.stack_pointer;
                 while i < 255 {
-                    i += 1;
                     stack.push(memory.read(i));
+                    i += 1;
                 }
                 eprintln!("Stack: {:x?}", stack);
             }
