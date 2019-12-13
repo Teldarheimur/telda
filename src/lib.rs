@@ -1,5 +1,3 @@
-use std::marker::PhantomData;
-
 pub trait Memory<I> {
     fn read(&self, r: I) -> u8;
     fn read_index(&self, r: I) -> I;
@@ -7,70 +5,6 @@ pub trait Memory<I> {
     fn write(&mut self, r: I, c: u8);
     fn write_index(&mut self, r: I, c: I);
     fn size(&self) -> usize;
-}
-
-pub trait ArrayMemory<I>: Memory<I> {
-    fn slice(&self) -> &[u8];
-}
-
-pub struct SmartMemory<I, M: Memory<I>> {
-    buffer: M,
-    length: usize,
-    _phantom: PhantomData<I>,
-}
-
-impl<I, M: Memory<I>> SmartMemory<I, M> {
-    pub fn new(buffer: M) -> Self {
-        SmartMemory {
-            buffer,
-            length: 0,
-            _phantom: PhantomData,
-        }
-    }
-}
-
-impl<I: Copy, M: Memory<I>> Memory<I> for SmartMemory<I, M>
-where usize: From<I> {
-    #[inline]
-    fn read(&self, r: I) -> u8 {
-        self.buffer.read(r)
-    }
-    #[inline]
-    fn read_index(&self, r: I) -> I {
-        self.buffer.read_index(r)
-    }
-    fn read_to_slice(&self, _r: I, _length: I) -> &[u8] {
-        unimplemented!("Please no")
-        // &self.buffer[r..r+length]
-    }
-    #[inline]
-    fn write(&mut self, r: I, c: u8) {
-        let new_length = usize::from(r) + 1;
-        if new_length > self.length {
-            self.length = new_length;
-        }
-        self.buffer.write(r, c)
-    }
-    #[inline]
-    fn write_index(&mut self, r: I, c: I) {
-        let new_length = usize::from(r) + std::mem::size_of::<I>();
-        if new_length > self.length {
-            self.length = new_length;
-        }
-        self.buffer.write_index(r, c)
-    }
-    #[inline]
-    fn size(&self) -> usize {
-        self.buffer.size()
-    }
-}
-
-impl<I: Copy, M: Memory<I> + ArrayMemory<I>> ArrayMemory<I> for SmartMemory<I, M>
-where usize: From<I> {
-    #[inline]
-    fn slice(&self) -> &[u8] {
-        &self.buffer.slice()[..self.length]
-    }
 }
 
 macro_rules! impl_prim {
@@ -109,12 +43,6 @@ macro_rules! impl_prim {
             #[inline]
             fn size(&self) -> usize {
                 self.len()
-            }
-        }
-        impl ArrayMemory<$t> for [u8; $n] {
-            #[inline(always)]
-            fn slice(&self) -> &[u8] {
-                self
             }
         }
         )*
