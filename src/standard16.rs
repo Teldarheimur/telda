@@ -370,7 +370,7 @@ impl Cpu for StandardCpu {
                 eprintln!("{:x?}", self);
                 let mut stack = Vec::new();
                 let mut i = self.stack_pointer;
-                while i < 255 {
+                while i < 0xffff {
                     stack.push(memory.read(i));
                     i += 1;
                 }

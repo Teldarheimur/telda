@@ -323,7 +323,7 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_
                     arg
                 },
                 Operand::Reference(label, offset) => {
-                    let arg = FullArg::Ref(Reference::Val(0xffff));
+                    let arg = FullArg::Ref(Reference::Val(0xff));
                     let args = Args { fst : None, snd: Some(arg) };
 
                     label_references.push(LabelReference::with_args(i, line_num, label, offset, args));
