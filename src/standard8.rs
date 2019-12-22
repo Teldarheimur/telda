@@ -9,8 +9,11 @@ pub struct StandardCpu {
     pc: u8,
     stack_pointer: u8,
     work: u8,
+    b_counter: u8,
     flags: u8,
 }
+
+type InterpretedArgs = (Option<Reg>, Option<Result<u8, Reg>>);
 
 impl StandardCpu {
     pub fn new(start: u8) -> Self {
@@ -18,13 +21,73 @@ impl StandardCpu {
             pc: start,
             stack_pointer: 0xff,
             work: 0,
+            b_counter: 0,
             flags: 0,
         }
     }
+    fn reg(&self, reg: Reg) -> u8 {
+        match reg {
+            Reg::Sp => self.stack_pointer,
+            Reg::Bc => self.b_counter,
+            Reg::Acc | Reg::AccW => self.work,
+        }
+    }
+    fn reg_mut(&mut self, reg: Reg) -> &mut u8 {
+        match reg {
+            Reg::Sp => &mut self.stack_pointer,
+            Reg::Bc => &mut self.b_counter,
+            Reg::Acc | Reg::AccW => &mut self.work,
+        }
+    }
+    fn interpret_args<M: Memory<<Self as Cpu>::Index>>(&self, args: Args, memory: &M) -> InterpretedArgs {
+        (
+            args.fst,
+            args.snd.map(|s| match s {
+                FullArg::Reg(r) => Err(r),
+                FullArg::Ref(Reference::Val(w)) => Ok(memory.read(w as u8)),
+                FullArg::Ref(Reference::Reg{reg, offset}) => {
+                    let addr = (self.reg(reg) as i8 + offset) as u8;
+
+                    Ok(memory.read(addr))
+                }
+                FullArg::Byte(b) => Ok(b),
+                FullArg::Wide(w) => {debug_assert!(w < 0x100); Ok(w as u8)},
+            })
+        )
+    }
+    fn arg_val_mut(&mut self, arg: InterpretedArgs, def: u8) -> (&mut u8, u8) {
+        let val = (arg.1).map(|res| res.unwrap_or_else(|r| self.reg(r))).unwrap_or(def);
+        let reg = self.reg_mut((arg.0).unwrap_or(Reg::Acc));
+
+        (reg, val)
+    }
+    fn arg_val_reg(&mut self, arg: InterpretedArgs, def: u8) -> (u8, u8) {
+        let val = (arg.1).map(|res| res.unwrap_or_else(|r| self.reg(r))).unwrap_or(def);
+        let reg = self.reg((arg.0).unwrap_or(Reg::Acc));
+
+        (reg, val)
+    }
+    fn arg_u8(&self, arg: InterpretedArgs) -> u8 {
+        match arg {
+            (None, None) => self.work,
+            (Some(r), None) => self.reg(r),
+            (None, Some(res)) => res.unwrap_or_else(|r| self.reg(r)),
+            (Some(_), Some(_)) => panic!("Invalid args"),
+        }
+    }
+    fn arg_mut(&mut self, arg: InterpretedArgs) -> &mut u8 {
+        match arg {
+            (None, None) => &mut self.work,
+            (Some(r), None) => self.reg_mut(r),
+            _ => panic!("Invalid args"),
+        }
+    }
     #[inline]
-    fn sub(&mut self, arg: Args) {
-        let (work, o) = self.work.overflowing_sub(arg.as_u8().unwrap_or(1));
-        self.work = work;
+    fn sub(&mut self, arg: InterpretedArgs) {
+        let (reg, val) = self.arg_val_mut(arg, 1);
+
+        let (work, o) = reg.overflowing_sub(val);
+        *reg = work;
         self.flags &= 0b1111_0000;
         self.flags |= if o {
             0b1100
@@ -35,33 +98,39 @@ impl StandardCpu {
         };
     }
     #[inline]
-    fn binop_overflowing(&mut self, arg: Args, op: fn(u8, u8) -> (u8, bool)) {
-        let (work, o) = op(self.work, arg.as_u8().unwrap_or(self.work));
-        self.work = work;
+    fn binop_overflowing(&mut self, arg: InterpretedArgs, op: fn(u8, u8) -> (u8, bool)) {
+        let (reg, val) = self.arg_val_mut(arg, self.work);
+        
+        let (work, o) = op(*reg, val);
+        *reg = work;
         self.flags &= 0b1111_0000;
         if o {
             self.flags |= 0b1000;
         }
     }
     #[inline]
-    fn binop(&mut self, arg: Args, op: fn(u8, u8) -> u8) {
-        self.work = op(self.work, arg.as_u8().unwrap_or(self.work));
+    fn binop(&mut self, arg: InterpretedArgs, op: fn(u8, u8) -> u8) {
+        let (reg, val) = self.arg_val_mut(arg, self.work);
+
+        *reg = op(*reg, val);
         self.flags &= 0b1111_0000;
     }
     #[inline]
-    fn cmp(&mut self, arg: Args) {
+    fn cmp(&mut self, arg: InterpretedArgs) {
+        let (reg, val) = self.arg_val_reg(arg, 0);
+
         use std::cmp::Ordering::*;
 
         self.flags &= 0b1111_0000;
-        self.flags |= match self.work.cmp(&arg.as_u8().unwrap_or(0)) {
+        self.flags |= match reg.cmp(&val) {
             Greater => 0b0100,
             Less => 0b0010,
             Equal => 0b0001,
         };
     }
     #[inline]
-    fn jmp(&mut self, arg: Args, relative: bool) {
-        let location = arg.as_u8().unwrap_or(self.work);
+    fn jmp(&mut self, arg: InterpretedArgs, relative: bool) {
+        let location = self.arg_u8(arg);
 
         self.pc = if relative {
             (self.pc as i8).wrapping_add(location as i8) as u8
@@ -71,98 +140,71 @@ impl StandardCpu {
     }
 }
 
-#[derive(Debug)]
-pub enum Args {
-    Null,
-    Byte(u8),
-}
-
-use self::Args::*;
-
-impl Args {
-    fn new(args: &[u8]) -> Args {
-        match args.len() {
-            0 => Null,
-            1 => Byte(args[0]),
-            2 | 3 => unimplemented!(),
-            _ => unreachable!(),
-        }
-    }
-    #[inline]
-    fn as_u8(&self) -> Option<u8> {
-        match *self {
-            Null => None,
-            Byte(b) => Some(b),
-        }
-    }
-}
-
 use std::ops::{BitAnd, BitOr, BitXor};
 
 impl Cpu for StandardCpu {
     type Index = u8;
 
     fn run<M: Memory<Self::Index>>(&mut self, memory: &mut M) -> Option<Signal> {
-        let cur_ins = memory.read(self.pc);
+        let (opcode, args, len) = read_instruction(memory.read_to_slice(self.pc, 3), true);
+        let len = len as u8;
+        self.pc += len;
 
-        let args_length = cur_ins >> 6;
-        let args = Args::new(memory.read_to_slice(self.pc+1, args_length));
+        let cur_ins = opcode as u8;
 
-        self.pc += 1 + args_length;
+        let arg = self.interpret_args(args.clone(), &*memory);
 
-        match cur_ins & 0b0011_1111 {
+        match cur_ins {
             0b0100_0000..=0xff => unreachable!(),
             NOP => (),
-            RES8..=RESF => panic!("RESERVED {:02x} @ {:02X}", cur_ins, self.pc-1-args_length),
+            DEPLDL | DEPSTL => panic!("DEPRECATED"),
+            RES6..=RESF => panic!("RESERVED {:02x} @ {:02X}", cur_ins, self.pc-len),
             INVALID => panic!("Invalid instruction call {:02x}!\t{:x?}", cur_ins, self),
             LOAD => {
-                match args {
-                    Null => self.work = 0,
-                    Byte(b) => self.work = b,
-                }
-            }
-            LDL => {
-                self.work = memory.read_index(args.as_u8().unwrap_or_else(|| self.work));
+                let (reg, val) = self.arg_val_mut(arg, 0);
+
+                *reg = val;
             }
             STR => {
-                let location = args.as_u8().unwrap_or(0);
-                memory.write(location, self.work);
+                let (reg, location) = self.arg_val_reg(arg, 0);
+                
+                memory.write(location, reg);
             }
-            STL => {
-                let location = memory.read_index(args.as_u8().unwrap_or(0));
-                memory.write(location, self.work);
-            }
-            COMPARE => self.cmp(args),
-            SUB => self.sub(args),
-            ADD => if let Null = args {
-                self.work += 1;
+            COMPARE => self.cmp(arg),
+            SUB => self.sub(arg),
+            ADD => if let None = arg.1 {
+                *self.reg_mut((arg.0).unwrap_or(Reg::Acc)) += 1;
             } else {
-                self.binop_overflowing(args, u8::overflowing_add)
+                self.binop_overflowing(arg, u8::overflowing_add)
             },
-            MUL => self.binop_overflowing(args, u8::overflowing_mul),
-            DIV => self.binop_overflowing(args, u8::overflowing_div),
-            REM => self.binop_overflowing(args, u8::overflowing_rem),
-            AND => self.binop(args, u8::bitand),
-            OR => self.binop(args, u8::bitor),
-            XOR => self.binop(args, u8::bitxor),
-            NOT => self.work = !args.as_u8().unwrap_or(self.work),
-            JUMP | JMPR => self.jmp(args, cur_ins & 0b1000 == 0b1000),
+            MUL => self.binop_overflowing(arg, u8::overflowing_mul),
+            DIV => self.binop_overflowing(arg, u8::overflowing_div),
+            REM => self.binop_overflowing(arg, u8::overflowing_rem),
+            AND => self.binop(arg, u8::bitand),
+            OR => self.binop(arg, u8::bitor),
+            XOR => self.binop(arg, u8::bitxor),
+            NOT => {
+                let (reg, val) = self.arg_val_mut(arg, self.work);
+
+                *reg = !val;
+            }
+            JUMP | JMPR => self.jmp(arg, cur_ins & 0b1000 == 0b1000),
             JIO | JIOR => if self.flags & 0b1000 == 0b1000 {
-                self.jmp(args, cur_ins & 0b1000 == 0b1000)
+                self.jmp(arg, cur_ins & 0b1000 == 0b1000)
             }
             JEZ..=JNE | JEZR..= JNER => {
                 let mask = cur_ins & 0b0111;
 
                 if self.flags & mask != 0 {
-                    self.jmp(args, cur_ins & 0b1000 == 0b1000);
+                    self.jmp(arg, cur_ins & 0b1000 == 0b1000);
                 }
             }
             PUSH | PUSHW => {
                 self.stack_pointer -= 1;
-                memory.write(self.stack_pointer, args.as_u8().unwrap_or(self.work));
+                memory.write(self.stack_pointer, self.arg_u8(arg));
             }
             POP | POPW => {
-                self.work = memory.read(self.stack_pointer);
+                *self.arg_mut(arg) = memory.read(self.stack_pointer);
                 self.stack_pointer += 1;
             }
             RET => {
@@ -170,32 +212,24 @@ impl Cpu for StandardCpu {
                 self.stack_pointer += 1;
             }
             CALL => {
-                let call_location = args.as_u8().unwrap_or(self.work);
+                let call_location = self.arg_u8(arg);
                 self.stack_pointer -= 1;
                 memory.write(self.stack_pointer, self.pc);
 
                 self.pc = call_location;
-            }
-            LSV => {
-                let location = self.stack_pointer+args.as_u8().unwrap_or(self.work);
-                self.work = memory.read(location);
-            }
-            SSV => {
-                let location = self.stack_pointer+args.as_u8().unwrap_or(0);
-                memory.write(location, self.work);
             }
 
 
             INT1 => {
                 let mut bytes = [0];
                 std::io::stdin().read_exact(&mut bytes).unwrap();
-                self.work = bytes[0];
+                *self.arg_mut(arg) = bytes[0];
             }
             INT2 => {
-                std::io::stdout().write_all(&[args.as_u8().unwrap_or(self.work)]).unwrap();
+                std::io::stdout().write_all(&[self.arg_u8(arg)]).unwrap();
             }
             INT3 => {
-                std::io::stderr().write_all(&[args.as_u8().unwrap_or(self.work)]).unwrap();
+                std::io::stderr().write_all(&[self.arg_u8(arg)]).unwrap();
             }
             INT15 => {
                 eprintln!("{:x?}", self);

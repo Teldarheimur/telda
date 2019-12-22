@@ -1,3 +1,6 @@
+use crate::TeldaEndian;
+use byteorder::ByteOrder;
+
 macro_rules! instructions {
     ($enum_name:ident; $($name:ident $(,$sname:expr)*; $opcode:expr;)*) => {
         $(
@@ -48,9 +51,9 @@ macro_rules! instructions {
 instructions!{Opcode;
     INVALID; 0x00;
     LOAD, "ld", "load"; 0x01;
-    LDL, "lda", "ldl"; 0x02;
+    DEPLDL; 0x02;
     STR, "str", "store"; 0x03;
-    STL, "stl"; 0x04;
+    DEPSTL; 0x04;
     COMPARE, "cmp"; 0x05;
     ADD, "inc", "add"; 0x0a;
     SUB, "dec", "sub"; 0x0b;
@@ -87,9 +90,9 @@ instructions!{Opcode;
     POPW, "popw"; 0x23;
     CALL, "call"; 0x24;
     RET, "ret"; 0x25;
-    LSV, "ldsv", "lsv"; 0x26;
-    SSV, "stsv", "ssv"; 0x27;
-
+    
+    RES6; 0x26;
+    RES7; 0x27;
     RES8; 0x28;
     RES9; 0x29;
     RESA; 0x2a;
@@ -115,4 +118,297 @@ instructions!{Opcode;
     INT13, "intd", "int13"; 0x3d;
     INT14, "inte", "int14"; 0x3e;
     INT15, "intf", "int15"; 0x3f;
+}
+
+/*
+
+    Reg(Reg), // $name 110?_rrRR (? = 1 if RR)
+    Ref(Reference), // [$reg(+o)] 0rrs_oooo | [val] 1110_00rr wide
+    Byte(u8), // bbb 100x_xxrr byte
+    Wide(u16), // dddddd(w) 101x_xxrr wide
+
+*/
+
+pub fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) {
+    let read_wide: Box<dyn Fn(&mut usize, &[u8]) -> u16> = if bit8_mode {
+        Box::new(|len, bytes| {
+            *len += 1;
+            bytes[0] as u16
+        })
+    } else {
+        Box::new(|len, bytes| {
+            *len += 2;
+            TeldaEndian::read_u16(bytes)
+        })
+    };
+
+    let mut len = 1;
+    let op = bytes[0];
+    bytes = &bytes[1..];
+
+    let args = (op & 0b1100_0000) >> 6;
+    let opcode = Opcode::from_u8(op & 0b0011_1111).unwrap();
+
+    let args = match args {
+        0b00 => Args { fst: None, snd: None },
+        0b01 => {
+            len += 1;
+            let reg = Reg::from_u8(bytes[0] & 0b11);
+            
+            Args { fst: Some(reg), snd: None }
+        },
+        0b10 => Args { fst: None, snd: Some({
+            len += 1;
+            let arg = bytes[0];
+            bytes = &bytes[1..];
+
+            if arg & 0b1000_0000 == 0 {
+                let offset_sign = if (arg & 0b1_0000) == 0 { 0 } else { 0b1111_0000 };
+
+                FullArg::Ref(Reference::Reg{ reg: Reg::from_u8((arg & 0b0110_0000) >> 5), offset: (offset_sign | (arg & 0b1111)) as i8})
+            } else if arg & 0b1100_0000 == 0b1000_0000 {
+                if arg & 0b0010_0000 == 0 {
+                    len += 1;
+                    FullArg::Byte(bytes[0])
+                } else {
+                    FullArg::Wide(read_wide(&mut len, bytes))
+                }
+            } else if arg & 0b1110_0000 == 0b1100_0000 {
+                FullArg::Reg(Reg::from_u8((arg & 0b0000_1100) >> 2))
+            } else if arg & 0b1111_0000 == 0b1110_0000 {
+                FullArg::Ref(Reference::Val(read_wide(&mut len, bytes)))
+            } else {
+                panic!("Invalid args")
+            }
+        }) },
+        0b11 => {
+            len += 1;
+            let arg = bytes[0];
+            bytes = &bytes[1..];
+
+            let (fst, snd);
+
+            if arg & 0b1000_0000 == 0 {
+                len += 1;
+                let offset_sign = if (arg & 0b1_0000) == 0 { 0 } else { 0b1111_0000 };
+                snd = FullArg::Ref(Reference::Reg{ reg: Reg::from_u8((arg & 0b0110_0000) >> 5), offset: (offset_sign | (arg & 0b1111)) as i8});
+                fst = Reg::from_u8(bytes[0] & 0b0000_0011);
+            } else if arg & 0b1100_0000 == 0b1000_0000 {
+                snd = if arg & 0b0010_0000 == 0 {
+                    len += 1;
+                    FullArg::Byte(bytes[0])
+                } else {
+                    FullArg::Wide(read_wide(&mut len, bytes))
+                };
+
+                fst = Reg::from_u8(arg & 0b0000_0011);
+            } else if arg & 0b1110_0000 == 0b1100_0000 {
+                fst = Reg::from_u8(arg & 0b0000_0011);
+                snd = FullArg::Reg(Reg::from_u8((arg & 0b0000_1100) >> 2));
+            } else if arg & 0b1111_0000 == 0b1110_0000 {
+                fst = Reg::from_u8(arg & 0b0000_0011);
+                snd = FullArg::Ref(Reference::Val(read_wide(&mut len, bytes)));
+            } else {
+                panic!("Invalid args")
+            }
+
+            Args{
+                fst: Some(fst),
+                snd: Some(snd),
+            }
+        },
+        _ => unreachable!(),
+    };
+
+    (opcode, args, len)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Args {
+    pub fst: Option<Reg>,
+    pub snd: Option<FullArg>,
+}
+
+impl Args {
+    pub fn mask(&self) -> u8 {
+        (self.fst.is_some() as u8 * 0b0100_0000) | (self.snd.is_some() as u8 * 0b1000_0000)
+    }
+    pub fn write(&self, mut bytes: &mut [u8], bit8_mode: bool) -> usize {
+        let mut len = 0;
+
+        let write_wide: Box<dyn Fn(&mut usize, u16, &mut [u8])> = if bit8_mode {
+            Box::new(|len, w, bytes| {
+                *len += 1;
+                bytes[0] = w as u8;
+            })
+        } else {
+            Box::new(|len, w, bytes| {
+                *len += 2;
+                TeldaEndian::write_u16(bytes, w);
+            })
+        };
+
+        match self {
+            Args{fst: None, snd: None} => (),
+            Args{fst: Some(r), snd: None} => {
+                bytes[0] = *r as u8;
+                len += 1;
+            },
+            Args{fst: None, snd: Some(f)} => {
+                match f {
+                    FullArg::Ref(Reference::Reg { reg : r, offset: o}) => {
+                        let o = *o as u8;
+
+                        len += 1;
+                        bytes[0] = ((*r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
+                    }
+                    FullArg::Byte(b) => {
+                        len += 2;
+                        bytes[0] = 0b1000_0000;
+                        bytes[1] = *b;  
+                    }
+                    FullArg::Wide(w) => {
+                        len += 1;
+                        bytes[0] = 0b1010_0000;
+                        write_wide(&mut len, *w, &mut bytes[1..]);
+                    }
+                    FullArg::Reg(r) => {
+                        len += 1;
+                        bytes[0] = 0b1100_0000 | ((*r as u8) << 2);
+                    }
+                    FullArg::Ref(Reference::Val(w)) => {
+                        len += 1;
+                        bytes[0] = 0b1110_0000;
+                        write_wide(&mut len, *w, &mut bytes[1..]);
+                    }
+                }
+            },
+            Args{fst: Some(f_reg), snd: Some(f)} => {
+                match f {
+                    FullArg::Ref(Reference::Reg { reg : r, offset: o}) => {
+                        let o = *o as u8;
+
+                        len += 2;
+                        bytes[0] = ((*r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
+                        bytes[1] = *f_reg as u8;
+                    }
+                    FullArg::Byte(b) => {
+                        len += 2;
+                        bytes[0] = 0b1000_0000 | *f_reg as u8;
+                        bytes[1] = *b;  
+                    }
+                    FullArg::Wide(w) => {
+                        len += 1;
+                        bytes[0] = 0b1010_0000 | *f_reg as u8;
+                        bytes = &mut bytes[1..];
+                        write_wide(&mut len, *w, &mut bytes);
+                    }
+                    FullArg::Reg(r) => {
+                        len += 1;
+                        bytes[0] = 0b1101_0000 | ((*r as u8) << 2) | *f_reg as u8;
+                    }
+                    FullArg::Ref(Reference::Val(w)) => {
+                        len += 1;
+                        bytes[0] = 0b1110_0000 | *f_reg as u8;
+                        bytes = &mut bytes[1..];
+                        write_wide(&mut len, *w, &mut bytes);
+                    }
+                }
+            },
+        }
+
+        len
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn test_read_write(opcode: Opcode, args: Args, bit8_mode: bool) {
+        let mut bytes = [opcode as u8 | args.mask(), 0, 0, 0];
+        
+        let len = args.write(&mut bytes[1..], bit8_mode);
+        eprint!("{:02X?}", &bytes[..len+1]);
+        eprintln!(" ++ {:02X?}", &bytes[len+1..]);
+        let (oc, a, l) = read_instruction(&bytes, bit8_mode);
+
+        assert_eq!((len, opcode, args), (l-1, oc, a));
+    }
+    fn test_read_write_both(opcode: Opcode, args: Args) {
+        test_read_write(opcode, args.clone(), true);
+        test_read_write(opcode, args, false);
+    }
+
+    #[test]
+    fn load_none_none() {
+        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: None});
+    }
+    #[test]
+    fn load_none_wide() {
+        test_read_write(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Wide(0xdead))}, false);
+        test_read_write(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Wide(0xdd))}, true);
+    }
+    #[test]
+    fn load_zero() {
+        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Wide(0x0000))});
+    }
+    #[test]
+    fn load_none_byte() {
+        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Byte(0xad))});
+    }
+    #[test]
+    fn load_none_accw() {
+        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Reg(Reg::AccW))});
+    }
+    #[test]
+    fn load_none_acc() {
+        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Reg(Reg::Acc))});
+    }
+    #[test]
+    fn int2_ref_accw() {
+        test_read_write_both(Opcode::INT2, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::AccW, offset: -2}))});
+    }
+    #[test]
+    fn store_reg_ref_accw() {
+        test_read_write_both(Opcode::STR, Args { fst: Some(Reg::Acc), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: -2}))});
+    }
+    #[test]
+    fn load_into_bc_spp1() {
+        test_read_write_both(Opcode::LOAD, Args { fst: Some(Reg::Bc), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: 1}))});
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[repr(u8)]
+pub enum Reg {
+    Sp = 0b00,
+    Bc = 0b01,
+    Acc = 0b10,
+    AccW = 0b11,
+    // Flags = 0b100,
+    // Bp = 0b101,
+    // BpW = 0b110,
+}
+
+impl Reg {
+    #[inline(always)]
+    fn from_u8(b: u8) -> Reg {
+        debug_assert!(b < 0b100);
+        unsafe { std::mem::transmute(b) }
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum Reference {
+    Reg{reg: Reg, offset: i8},
+    Val(u16),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum FullArg {
+    Reg(Reg), // $name 110?_rrRR (? = 1 if RR)
+    Ref(Reference), // [$reg(+o)] 0rrs_oooo | [val] 1110_00rr wide
+    Byte(u8), // bbb 100x_xxrr byte
+    Wide(u16), // dddddd(w) 101x_xxrr wide
 }
