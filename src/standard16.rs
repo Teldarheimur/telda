@@ -16,31 +16,25 @@ pub struct StandardCpu {
 
 #[derive(Debug, Copy, Clone)]
 enum SecArgs {
-    Reg(Reg),
     Byte(u8),
     Wide(u16),
     Both(u8, u16),
 }
 
 impl SecArgs {
-    fn u8(self, c: &StandardCpu) -> Result<u8, u16> {
+    fn u8(self) -> Result<u8, u16> {
         use self::SecArgs::*;
         match self {
             Byte(b) => Ok(b),
             Both(b, _) => Ok(b as u8),
             Wide(w) => Err(w),
-            Reg(r) => match c.reg(r) {
-                Ok(w) => Err(w),
-                Err(b) => Ok(b),
-            }
         }
     }
-    fn u16(self, c: &StandardCpu) -> Result<u16, u8> {
+    fn u16(self) -> Result<u16, u8> {
         use self::SecArgs::*;
         match self {
             Wide(w) | Both(_, w) => Ok(w),
             Byte(b) => Ok(b as u16),
-            Reg(r) => c.reg(r),
         }
     }
 }
@@ -90,7 +84,14 @@ impl StandardCpu {
         (
             args.fst,
             args.snd.map(|s| match s {
-                FullArg::Reg(r) => SecArgs::Reg(r),
+                FullArg::Reg(r) => match self.reg(r) {
+                    Ok(w) => SecArgs::Wide(w),
+                    Err(b) => SecArgs::Byte(b),
+                },
+                FullArg::OffsetReg(r, o) => match self.reg(r) {
+                    Ok(w) => SecArgs::Wide((w as i16 + o) as u16),
+                    Err(b) => SecArgs::Byte((b as i8 + o as i8) as u8),
+                },
                 FullArg::Ref(Reference::Val(w)) => SecArgs::Both(memory.read(w), memory.read_index(w)),
                 FullArg::Ref(Reference::Reg{reg, offset}) => {
                     let addr = (self.reg(reg).unwrap_or_else(|b| b as u16) as i16 + offset as i16) as u16;
@@ -105,11 +106,11 @@ impl StandardCpu {
     fn arg_val_mut(&mut self, arg: InterpretedArgs, def: u16) -> Result<(&mut u16, u16), (&mut u8, u8)> {
         match (arg.0).unwrap_or(Reg::AccW) {
             Reg::Acc => {
-                let val = (arg.1).map(|ar| ar.u8(&self).expect(":'(")).unwrap_or(def as u8);
+                let val = (arg.1).map(|ar| ar.u8().expect(":'(")).unwrap_or(def as u8);
                 Err((self.acc_u8_mut(), val))
             }
             reg => {
-                let val = (arg.1).map(|ar| ar.u16(&self).expect(":(")).unwrap_or(def);
+                let val = (arg.1).map(|ar| ar.u16().expect(":(")).unwrap_or(def);
                 Ok((self.reg_mut(reg).unwrap(), val))
             }
         }
@@ -118,38 +119,33 @@ impl StandardCpu {
         let reg = self.reg((arg.0).unwrap_or(Reg::AccW));
 
         match reg {
-            Ok(reg) => Ok((reg, (arg.1).map(|ar| ar.u16(&self).expect(":(")).unwrap_or(def))),
-            Err(reg) => Err((reg, (arg.1).map(|ar| ar.u8(&self).expect(":'(")).unwrap_or(def as u8))),
+            Ok(reg) => Ok((reg, (arg.1).map(|ar| ar.u16().expect(":(")).unwrap_or(def))),
+            Err(reg) => Err((reg, (arg.1).map(|ar| ar.u8().expect(":'(")).unwrap_or(def as u8))),
         }
     }
     fn arg_val16_reg(&mut self, arg: InterpretedArgs, def: u16) -> Result<(u16, u16), (u8, u16)> {
         let reg = self.reg((arg.0).unwrap_or(Reg::AccW));
 
         match reg {
-            Ok(reg) => Ok((reg, (arg.1).map(|ar| ar.u16(&self).expect(":(")).unwrap_or(def))),
-            Err(reg) => Err((reg, (arg.1).map(|ar| ar.u16(&self).expect(":(")).unwrap_or(def))),
+            Ok(reg) => Ok((reg, (arg.1).map(|ar| ar.u16().expect(":(")).unwrap_or(def))),
+            Err(reg) => Err((reg, (arg.1).map(|ar| ar.u16().expect(":(")).unwrap_or(def))),
         }
     }
-    fn arg(&self, arg: InterpretedArgs) -> Result<u16, u8> {
+    fn sarg_u16(&self, arg: InterpretedArgs) -> Result<u16, u8> {
         match arg {
             (None, None) => Ok(self.accumulator),
-            (Some(r), None) => self.reg(r),
-            (None, Some(ar)) => ar.u16(&self),
-            (Some(_), Some(_)) => panic!("Invalid args"),
+            (None, Some(ar)) => ar.u16(),
+            (Some(_), _) => panic!("Invalid args"),
         }
     }
-    fn arg_u8(&self, arg: InterpretedArgs) -> Result<u8, u16> {
+    fn sarg_u8(&self, arg: InterpretedArgs) -> Result<u8, u16> {
         match arg {
             (None, None) => Ok(self.acc_u8()),
-            (Some(r), None) => match self.reg(r) {
-                Ok(w) => Err(w),
-                Err(b) => Ok(b),
-            },
-            (None, Some(ar)) => ar.u8(&self),
-            (Some(_), Some(_)) => panic!("Invalid args"),
+            (None, Some(ar)) => ar.u8(),
+            (Some(_), _) => panic!("Invalid args"),
         }
     }
-    fn arg_mut(&mut self, arg: InterpretedArgs) -> Result<&mut u16, &mut u8> {
+    fn farg_mut(&mut self, arg: InterpretedArgs) -> Result<&mut u16, &mut u8> {
         match arg {
             (None, None) => Ok(&mut self.accumulator),
             (Some(r), None) => self.reg_mut(r),
@@ -226,7 +222,7 @@ impl StandardCpu {
     }
     #[inline]
     fn jmp(&mut self, arg: InterpretedArgs, relative: bool) {
-        let location = self.arg(arg).unwrap_or_else(|b| b as u16);
+        let location = self.sarg_u16(arg).unwrap_or_else(|b| b as u16);
 
         self.pc = if relative {
             (self.pc as i16).wrapping_add(location as i16) as u16
@@ -242,7 +238,7 @@ impl Cpu for StandardCpu {
     type Index = u16;
 
     fn run<M: Memory<Self::Index>>(&mut self, memory: &mut M) -> Option<Signal> {
-        let (opcode, args, len) = read_instruction(memory.read_to_slice(self.pc, 4), false);
+        let (opcode, args, len) = read_instruction16(memory.read_to_slice(self.pc, 4));
         let len = len as u16;
         self.pc += len;
 
@@ -271,7 +267,7 @@ impl Cpu for StandardCpu {
             COMPARE => self.cmp(arg),
             SUB => self.sub(arg),
             ADD => if let None = arg.1 {
-                match self.arg_mut(arg) {
+                match self.farg_mut(arg) {
                     Ok(reg) => *reg += 1,
                     Err(reg) => *reg += 1,
                 }
@@ -300,7 +296,7 @@ impl Cpu for StandardCpu {
                 }
             }
             PUSH => {
-                match self.arg_u8(arg) {
+                match self.sarg_u8(arg) {
                     Ok(b) => {
                         self.stack_pointer -= 1;
                         memory.write(self.stack_pointer, b);
@@ -312,28 +308,30 @@ impl Cpu for StandardCpu {
                 }
             }
             PUSHW => {
-                let val = self.arg(arg).expect("wide");
+                let val = self.sarg_u16(arg).expect("wide");
                 self.stack_pointer -= 2;
                 memory.write_index(self.stack_pointer, val);
             }
             POP => {
                 let sp = self.stack_pointer;
 
-                match self.arg(arg) {
-                    Ok(_) => self.stack_pointer += 2,
-                    Err(_) => self.stack_pointer += 1,
-                }
-
-                match self.arg_mut(arg) {
-                    Ok(reg) => *reg = memory.read_index(sp),
-                    Err(reg) => *reg = memory.read(sp),
-                }
+                let width = match self.farg_mut(arg) {
+                    Ok(reg) => {
+                        *reg = memory.read_index(sp);
+                        2
+                    }
+                    Err(reg) => {
+                        *reg = memory.read(sp);
+                        1
+                    }
+                };
+                self.stack_pointer += width;
             }
             POPW => {
                 let sp = self.stack_pointer;
                 self.stack_pointer += 2;
 
-                match self.arg_mut(arg) {
+                match self.farg_mut(arg) {
                     Ok(reg) => {
                         *reg = memory.read_index(sp);
                     },
@@ -343,12 +341,13 @@ impl Cpu for StandardCpu {
                 }
             }
             RET => {
+                assert!(arg.0.is_none() && arg.1.is_none(), "ret takes no args");
                 self.pc = memory.read_index(self.stack_pointer);
                 self.stack_pointer += 2;
             }
             CALL => {
-                let call_location = self.arg(arg).unwrap_or_else(|b| b as u16);
-                
+                let call_location = self.sarg_u16(arg).unwrap_or_else(|b| b as u16);
+
                 self.stack_pointer -= 2;
                 memory.write_index(self.stack_pointer, self.pc);
 
@@ -361,10 +360,10 @@ impl Cpu for StandardCpu {
                 *self.acc_u8_mut() = bytes[0];
             }
             INT2 => {
-                std::io::stdout().write_all(&[self.arg_u8(arg).expect("byte")]).unwrap();
+                std::io::stdout().write_all(&[self.sarg_u8(arg).expect("byte")]).unwrap();
             }
             INT3 => {
-                std::io::stderr().write_all(&[self.arg_u8(arg).expect("byte")]).unwrap();
+                std::io::stderr().write_all(&[self.sarg_u8(arg).expect("byte")]).unwrap();
             }
             INT15 => {
                 eprintln!("{:x?}", self);

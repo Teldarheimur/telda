@@ -123,13 +123,22 @@ instructions!{Opcode;
 /*
 
     Reg(Reg), // $name 110?_rrRR (? = 1 if RR)
-    Ref(Reference), // [$reg(+o)] 0rrs_oooo | [val] 1110_00rr wide
-    Byte(u8), // bbb 100x_xxrr byte
-    Wide(u16), // dddddd(w) 101x_xxrr wide
+    Ref(Reference), // [$reg(+o)] 0rrs_oooo | [val] 1110_00rr wide | [$reg(+o)] (o>0xf) 1001_rrRR iwide
+    OffsetReg(Reg, i16), // $reg+o 1111_rrRR iwide
+    Byte(u8), // bbb 1000_00rr byte
+    Wide(u16), // dddddd(w) 1010_00rr wide
 
 */
+#[inline]
+pub fn read_instruction8(bytes: &[u8]) -> (Opcode, Args, usize) {
+    read_instruction(bytes, true)
+}
+#[inline]
+pub fn read_instruction16(bytes: &[u8]) -> (Opcode, Args, usize) {
+    read_instruction(bytes, false)
+}
 
-pub fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) {
+fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) {
     let read_wide: Box<dyn Fn(&mut usize, &[u8]) -> u16> = if bit8_mode {
         Box::new(|len, bytes| {
             *len += 1;
@@ -165,20 +174,48 @@ pub fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usi
             if arg & 0b1000_0000 == 0 {
                 let offset_sign = if (arg & 0b1_0000) == 0 { 0 } else { 0b1111_0000 };
 
-                FullArg::Ref(Reference::Reg{ reg: Reg::from_u8((arg & 0b0110_0000) >> 5), offset: (offset_sign | (arg & 0b1111)) as i8})
+                FullArg::Ref(Reference::Reg{ reg: Reg::from_u8((arg & 0b0110_0000) >> 5), offset: (offset_sign | (arg & 0b1111)) as i8 as i16})
             } else if arg & 0b1100_0000 == 0b1000_0000 {
-                if arg & 0b0010_0000 == 0 {
-                    len += 1;
-                    FullArg::Byte(bytes[0])
-                } else {
-                    FullArg::Wide(read_wide(&mut len, bytes))
+                match arg & 0b0011_0000 {
+                    0b0000_0000 => {
+                        len += 1;
+                        FullArg::Byte(bytes[0])
+                    }
+                    0b0010_0000 => FullArg::Wide(read_wide(&mut len, bytes)),
+                    0b0001_0000 => {
+                        // [$reg(+o)] (o>0xf) 1001_rrRR iwide
+
+                        let offset = read_wide(&mut len, bytes);
+                        println!("{}", offset);
+
+                        let offset = if bit8_mode {
+                            offset as u8 as i8 as i16
+                        } else {
+                            offset as i16
+                        };
+                        println!("{:04X} {0:016b}: {0}", offset);
+
+                        FullArg::Ref(Reference::Reg{reg: Reg::from_u8((arg & 0b0000_1100) >> 2), offset})
+                    }
+                    0b0011_0000 => unimplemented!("Not used yet. On an old version?"),
+                    _ => unreachable!(),
                 }
             } else if arg & 0b1110_0000 == 0b1100_0000 {
                 FullArg::Reg(Reg::from_u8((arg & 0b0000_1100) >> 2))
             } else if arg & 0b1111_0000 == 0b1110_0000 {
                 FullArg::Ref(Reference::Val(read_wide(&mut len, bytes)))
             } else {
-                panic!("Invalid args")
+                assert_eq!(arg & 0b1111_0000, 0b1111_0000, "Invalid args");
+
+                let offset = read_wide(&mut len, bytes);
+
+                let offset = if bit8_mode {
+                    offset as u8 as i8 as i16
+                } else {
+                    offset as i16
+                };
+
+                FullArg::OffsetReg(Reg::from_u8((arg & 0b0000_1100) >> 2), offset)
             }
         }) },
         0b11 => {
@@ -188,17 +225,33 @@ pub fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usi
 
             let (fst, snd);
 
-            if arg & 0b1000_0000 == 0 {
+            if arg & 0b1000_0000 == 0b0000_0000 {
                 len += 1;
                 let offset_sign = if (arg & 0b1_0000) == 0 { 0 } else { 0b1111_0000 };
-                snd = FullArg::Ref(Reference::Reg{ reg: Reg::from_u8((arg & 0b0110_0000) >> 5), offset: (offset_sign | (arg & 0b1111)) as i8});
+                snd = FullArg::Ref(Reference::Reg{ reg: Reg::from_u8((arg & 0b0110_0000) >> 5), offset: (offset_sign | (arg & 0b1111)) as i8 as i16});
                 fst = Reg::from_u8(bytes[0] & 0b0000_0011);
             } else if arg & 0b1100_0000 == 0b1000_0000 {
-                snd = if arg & 0b0010_0000 == 0 {
-                    len += 1;
-                    FullArg::Byte(bytes[0])
-                } else {
-                    FullArg::Wide(read_wide(&mut len, bytes))
+                snd = match arg & 0b0011_0000 {
+                    0b0000_0000 => {
+                        len += 1;
+                        FullArg::Byte(bytes[0])
+                    }
+                    0b0010_0000 => FullArg::Wide(read_wide(&mut len, bytes)),
+                    0b0001_0000 => {
+                        // [$reg(+o)] (o>0xf) 1001_rrRR iwide
+
+                        let offset = read_wide(&mut len, bytes);
+                        
+                        let offset = if bit8_mode {
+                            offset as u8 as i8 as i16
+                        } else {
+                            offset as i16
+                        };
+
+                        FullArg::Ref(Reference::Reg{reg: Reg::from_u8((arg & 0b0000_1100) >> 2), offset})
+                    }
+                    0b0011_0000 => unimplemented!("Not used yet, using a new binary?"),
+                    _ => unreachable!(),
                 };
 
                 fst = Reg::from_u8(arg & 0b0000_0011);
@@ -209,7 +262,18 @@ pub fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usi
                 fst = Reg::from_u8(arg & 0b0000_0011);
                 snd = FullArg::Ref(Reference::Val(read_wide(&mut len, bytes)));
             } else {
-                panic!("Invalid args")
+                assert_eq!(arg & 0b1111_0000, 0b1111_0000, "Invalid args");
+                fst = Reg::from_u8(arg & 0b0000_0011);
+
+                let offset = read_wide(&mut len, bytes);
+
+                let offset = if bit8_mode {
+                    offset as u8 as i8 as i16
+                } else {
+                    offset as i16
+                };
+
+                snd = FullArg::OffsetReg(Reg::from_u8((arg & 0b0000_1100) >> 2), offset);
             }
 
             Args{
@@ -257,10 +321,25 @@ impl Args {
             Args{fst: None, snd: Some(f)} => {
                 match f {
                     FullArg::Ref(Reference::Reg { reg : r, offset: o}) => {
-                        let o = *o as u8;
+                        debug_assert!(if bit8_mode {
+                            *o as i8 as i16 == *o
+                        } else { true }, "impossible offset");
 
+                        if (*o & 0b01111111_11111111) < 0x10 {
+                            let o = *o as i8 as u8;
+    
+                            len += 1;
+                            bytes[0] = ((*r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
+                        } else {
+                            len += 1;
+                            bytes[0] = 0b1001_0000 | ((*r as u8) << 2);
+                            write_wide(&mut len, *o as u16, &mut bytes[1..]);
+                        }
+                    }
+                    FullArg::OffsetReg(reg, o) => {
                         len += 1;
-                        bytes[0] = ((*r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
+                        bytes[0] = 0b1111_0000 | ((*reg as u8) << 2);
+                        write_wide(&mut len, *o as u16, &mut bytes[1..]);
                     }
                     FullArg::Byte(b) => {
                         len += 2;
@@ -286,11 +365,25 @@ impl Args {
             Args{fst: Some(f_reg), snd: Some(f)} => {
                 match f {
                     FullArg::Ref(Reference::Reg { reg : r, offset: o}) => {
-                        let o = *o as u8;
+                        debug_assert!(if bit8_mode {
+                            *o as i8 as i16 == *o
+                        } else { true }, "impossible offset");
+                        if (*o & 0b01111111_11111111) < 0x10 {
+                            let o = *o as u8;
 
-                        len += 2;
-                        bytes[0] = ((*r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
-                        bytes[1] = *f_reg as u8;
+                            len += 2;
+                            bytes[0] = ((*r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
+                            bytes[1] = *f_reg as u8;
+                        } else {
+                            len += 1;
+                            bytes[0] = 0b1001_0000 | ((*r as u8) << 2) | *f_reg as u8;
+                            write_wide(&mut len, *o as u16, &mut bytes[1..]);
+                        }
+                    }
+                    FullArg::OffsetReg(r, o) => {
+                        len += 1;
+                        bytes[0] = 0b1111_0000 | ((*r as u8) << 2) | *f_reg as u8;
+                        write_wide(&mut len, *o as u16, &mut bytes[1..]);
                     }
                     FullArg::Byte(b) => {
                         len += 2;
@@ -336,8 +429,8 @@ mod tests {
         assert_eq!((len, opcode, args), (l-1, oc, a));
     }
     fn test_read_write_both(opcode: Opcode, args: Args) {
+        test_read_write(opcode, args.clone(), false);
         test_read_write(opcode, args.clone(), true);
-        test_read_write(opcode, args, false);
     }
 
     #[test]
@@ -351,7 +444,7 @@ mod tests {
     }
     #[test]
     fn load_zero() {
-        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Wide(0x0000))});
+        test_read_write_both(Opcode::RET, Args {fst: None, snd: Some(FullArg::Wide(0x0000))});
     }
     #[test]
     fn load_none_byte() {
@@ -371,11 +464,43 @@ mod tests {
     }
     #[test]
     fn store_reg_ref_accw() {
-        test_read_write_both(Opcode::STR, Args { fst: Some(Reg::Acc), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: -2}))});
+        test_read_write_both(Opcode::STR, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: -2}))});
+    }
+    #[test]
+    fn load_reg_ref_accw_neg_big() {
+        test_read_write_both(Opcode::STR, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: -100}))});
+    }
+    #[test]
+    fn load_reg_ref_accw_pos_big() {
+        test_read_write_both(Opcode::LOAD, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: 120}))});
+    }
+    #[test]
+    fn load_ref_accw_neg_big() {
+        test_read_write_both(Opcode::STR, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: -100}))});
+    }
+    #[test]
+    fn load_ref_accw_pos_big() {
+        test_read_write_both(Opcode::LOAD, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: 120}))});
     }
     #[test]
     fn load_into_bc_spp1() {
         test_read_write_both(Opcode::LOAD, Args { fst: Some(Reg::Bc), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: 1}))});
+    }
+    #[test]
+    fn push_offset_reg() {
+        test_read_write_both(Opcode::PUSH, Args { fst: None, snd: Some(FullArg::OffsetReg(Reg::Acc, 120))});
+    }
+    #[test]
+    fn push_reg_offset_reg() {
+        test_read_write_both(Opcode::PUSH, Args { fst: Some(Reg::Sp), snd: Some(FullArg::OffsetReg(Reg::Acc, 120))});
+    }
+    #[test]
+    fn push_offset_neg_reg() {
+        test_read_write_both(Opcode::PUSH, Args { fst: None, snd: Some(FullArg::OffsetReg(Reg::Acc, -120))});
+    }
+    #[test]
+    fn push_reg_offset_neg_reg() {
+        test_read_write_both(Opcode::PUSH, Args { fst: Some(Reg::Sp), snd: Some(FullArg::OffsetReg(Reg::Acc, -120))});
     }
 }
 
@@ -401,14 +526,24 @@ impl Reg {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Reference {
-    Reg{reg: Reg, offset: i8},
+    Reg{reg: Reg, offset: i16},
     Val(u16),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum FullArg {
+    // RR is the register argument of the argument pair
     Reg(Reg), // $name 110?_rrRR (? = 1 if RR)
-    Ref(Reference), // [$reg(+o)] 0rrs_oooo | [val] 1110_00rr wide
-    Byte(u8), // bbb 100x_xxrr byte
-    Wide(u16), // dddddd(w) 101x_xxrr wide
+    Ref(Reference), // [$reg(+o)] 0rrs_oooo | [val] 1110_00RR wide | [$reg(+o)] (o>0xf) 1001_rrRR iwide
+    OffsetReg(Reg, i16), // $reg+o 1111_rrRR iwide
+    Byte(u8), // bbb 1000_00RR byte
+    Wide(u16), // dddddd(w) 1010_00RR wide
+
+    // Unassigned:
+    /*
+    1011_xxxx
+    *(y != 0):
+    1000_yyxx
+    1010_yyxx
+    */
 }

@@ -99,7 +99,7 @@ struct LabelReference {
     memory_index: u16,
     line_num: u32,
     label_name: String,
-    offset: i8,
+    offset: i16,
     args: Option<Args>,
 }
 
@@ -115,7 +115,7 @@ impl LabelReference {
         }
     }
     #[inline]
-    fn with_args(memory_index: u16, line_num: u32, label_name: String, offset: i8, args: Args) -> Self {
+    fn with_args(memory_index: u16, line_num: u32, label_name: String, offset: i16, args: Args) -> Self {
         LabelReference {
             memory_index,
             line_num,
@@ -250,7 +250,7 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_
                             *i += 1;
                         }
                     }
-                    Operand::Reg(_) | Operand::RefReg(_, _) | Operand::Reference(_, _) => panic!("Invalid data"),
+                    Operand::RegOff(_, _) | Operand::Reg(_) | Operand::RefReg(_, _) | Operand::Reference(_, _) => panic!("Invalid data"),
                 }
             } else {
                 eprintln!("Invalid data at line {}", line_num);
@@ -331,6 +331,7 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_
                     arg
                 }
                 Operand::RefReg(reg, offset) => FullArg::Ref(Reference::Reg{reg, offset}),
+                Operand::RegOff(reg, offset) => FullArg::OffsetReg(reg, offset),
             }
         }
 
@@ -386,8 +387,9 @@ pub enum Operand {
     Index(u16),
     Label(String),
     Reg(Reg),
-    Reference(String, i8),
-    RefReg(Reg, i8),
+    Reference(String, i16),
+    RefReg(Reg, i16),
+    RegOff(Reg, i16),
     String(Vec<u8>),
 }
 
@@ -448,7 +450,18 @@ impl Operand {
                 Some(Operand::String(buf))
             }
         } else if s.starts_with("$") {
-            reg(&s[1..]).map(|r| Operand::Reg(r))
+            if let Some(offset_index) = s.find(|c| c == '+' || c == '-') {
+                let offset = if s.as_bytes()[0] == b'+' {
+                    &s[offset_index+1..]
+                } else {
+                    &s[offset_index..]
+                }.parse::<i16>().ok()?;
+
+                let reg = reg(&s[1..offset_index])?;
+                Some(Operand::RegOff(reg, offset))
+            } else {
+                reg(&s[1..]).map(|r| Operand::Reg(r))
+            }
         } else if s.starts_with("[") && s.ends_with("]") {
             let s = &s[1..s.len()-1];
 
@@ -460,7 +473,7 @@ impl Operand {
                     &s[offset_index+1..]
                 } else {
                     &s[offset_index..]
-                }.parse::<i8>().ok()?
+                }.parse::<i16>().ok()?
             };
 
             if s.starts_with("$") {

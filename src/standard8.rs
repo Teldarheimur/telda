@@ -13,7 +13,7 @@ pub struct StandardCpu {
     flags: u8,
 }
 
-type InterpretedArgs = (Option<Reg>, Option<Result<u8, Reg>>);
+type InterpretedArgs = (Option<Reg>, Option<u8>);
 
 impl StandardCpu {
     pub fn new(start: u8) -> Self {
@@ -43,39 +43,40 @@ impl StandardCpu {
         (
             args.fst,
             args.snd.map(|s| match s {
-                FullArg::Reg(r) => Err(r),
-                FullArg::Ref(Reference::Val(w)) => Ok(memory.read(w as u8)),
+                FullArg::Reg(r) => self.reg(r),
+                FullArg::OffsetReg(r, o) => (self.reg(r) as i8 + o as i8) as u8,
+                FullArg::Ref(Reference::Val(w)) => memory.read(w as u8),
                 FullArg::Ref(Reference::Reg{reg, offset}) => {
-                    let addr = (self.reg(reg) as i8 + offset) as u8;
+                    debug_assert!(offset < 0x100);
+                    let addr = (self.reg(reg) as i8 + offset as i8) as u8;
 
-                    Ok(memory.read(addr))
+                    memory.read(addr)
                 }
-                FullArg::Byte(b) => Ok(b),
-                FullArg::Wide(w) => {debug_assert!(w < 0x100); Ok(w as u8)},
+                FullArg::Byte(b) => b,
+                FullArg::Wide(w) => {debug_assert!(w < 0x100); w as u8},
             })
         )
     }
     fn arg_val_mut(&mut self, arg: InterpretedArgs, def: u8) -> (&mut u8, u8) {
-        let val = (arg.1).map(|res| res.unwrap_or_else(|r| self.reg(r))).unwrap_or(def);
+        let val = (arg.1).unwrap_or(def);
         let reg = self.reg_mut((arg.0).unwrap_or(Reg::Acc));
 
         (reg, val)
     }
     fn arg_val_reg(&mut self, arg: InterpretedArgs, def: u8) -> (u8, u8) {
-        let val = (arg.1).map(|res| res.unwrap_or_else(|r| self.reg(r))).unwrap_or(def);
+        let val = (arg.1).unwrap_or(def);
         let reg = self.reg((arg.0).unwrap_or(Reg::Acc));
 
         (reg, val)
     }
-    fn arg_u8(&self, arg: InterpretedArgs) -> u8 {
+    fn sarg_u8(&self, arg: InterpretedArgs) -> u8 {
         match arg {
             (None, None) => self.work,
-            (Some(r), None) => self.reg(r),
-            (None, Some(res)) => res.unwrap_or_else(|r| self.reg(r)),
-            (Some(_), Some(_)) => panic!("Invalid args"),
+            (None, Some(n)) => n,
+            (Some(_), _) => panic!("Invalid args"),
         }
     }
-    fn arg_mut(&mut self, arg: InterpretedArgs) -> &mut u8 {
+    fn farg_mut(&mut self, arg: InterpretedArgs) -> &mut u8 {
         match arg {
             (None, None) => &mut self.work,
             (Some(r), None) => self.reg_mut(r),
@@ -130,7 +131,7 @@ impl StandardCpu {
     }
     #[inline]
     fn jmp(&mut self, arg: InterpretedArgs, relative: bool) {
-        let location = self.arg_u8(arg);
+        let location = self.sarg_u8(arg);
 
         self.pc = if relative {
             (self.pc as i8).wrapping_add(location as i8) as u8
@@ -146,7 +147,7 @@ impl Cpu for StandardCpu {
     type Index = u8;
 
     fn run<M: Memory<Self::Index>>(&mut self, memory: &mut M) -> Option<Signal> {
-        let (opcode, args, len) = read_instruction(memory.read_to_slice(self.pc, 3), true);
+        let (opcode, args, len) = read_instruction8(memory.read_to_slice(self.pc, 3));
         let len = len as u8;
         self.pc += len;
 
@@ -201,10 +202,10 @@ impl Cpu for StandardCpu {
             }
             PUSH | PUSHW => {
                 self.stack_pointer -= 1;
-                memory.write(self.stack_pointer, self.arg_u8(arg));
+                memory.write(self.stack_pointer, self.sarg_u8(arg));
             }
             POP | POPW => {
-                *self.arg_mut(arg) = memory.read(self.stack_pointer);
+                *self.farg_mut(arg) = memory.read(self.stack_pointer);
                 self.stack_pointer += 1;
             }
             RET => {
@@ -212,7 +213,7 @@ impl Cpu for StandardCpu {
                 self.stack_pointer += 1;
             }
             CALL => {
-                let call_location = self.arg_u8(arg);
+                let call_location = self.sarg_u8(arg);
                 self.stack_pointer -= 1;
                 memory.write(self.stack_pointer, self.pc);
 
@@ -223,13 +224,13 @@ impl Cpu for StandardCpu {
             INT1 => {
                 let mut bytes = [0];
                 std::io::stdin().read_exact(&mut bytes).unwrap();
-                *self.arg_mut(arg) = bytes[0];
+                *self.farg_mut(arg) = bytes[0];
             }
             INT2 => {
-                std::io::stdout().write_all(&[self.arg_u8(arg)]).unwrap();
+                std::io::stdout().write_all(&[self.sarg_u8(arg)]).unwrap();
             }
             INT3 => {
-                std::io::stderr().write_all(&[self.arg_u8(arg)]).unwrap();
+                std::io::stderr().write_all(&[self.sarg_u8(arg)]).unwrap();
             }
             INT15 => {
                 eprintln!("{:x?}", self);
