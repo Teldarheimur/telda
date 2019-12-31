@@ -26,7 +26,46 @@ impl DynMemory {
     }
 }
 
+impl Memory<u8> for DynMemory {
+    const INDEX_WIDTH: u8 = 1;
+    #[inline]
+    fn read(&self, r: u8) -> u8 {
+        self.mem.get(r as usize).copied().unwrap_or(0)
+    }
+    #[inline]
+    fn read_index(&self, r: u8) -> u8 {
+        match self.mode {
+            Mode::Bit8 => self.read(r),
+            Mode::Bit16 => panic!("Incorrect read_index"),
+        }
+    }
+    #[inline]
+    fn write(&mut self, r: u8, c: u8) {
+        let new_length = r as usize + 1;
+        if new_length > self.mem.len() {
+            self.mem.resize(new_length, 0);
+        }
+        self.mem[r as usize] = c;
+    }
+    #[inline]
+    fn write_index(&mut self, r: u8, c: u8) {
+        let new_length = usize::from(r) + self.mode.size();
+        if new_length > self.mem.len() {
+            self.mem.resize(new_length, 0);
+        }
+        match self.mode {
+            Mode::Bit8 => self.mem[r as usize] = c,
+            Mode::Bit16 => panic!("Incorrect write_index"),
+        }
+    }
+    #[inline]
+    fn size(&self) -> usize {
+        self.mem.len()
+    }
+}
+
 impl Memory<u16> for DynMemory {
+    const INDEX_WIDTH: u16 = 2;
     #[inline]
     fn read(&self, r: u16) -> u8 {
         self.mem.get(r as usize).copied().unwrap_or(0)
@@ -39,9 +78,6 @@ impl Memory<u16> for DynMemory {
                 TeldaEndian::read_u16(&self.mem[r as usize..])
             } else { 0 },
         }
-    }
-    fn read_to_slice(&self, r: u16, length: u16) -> &[u8] {
-        &self.mem[r as usize..(r+length) as usize]
     }
     #[inline]
     fn write(&mut self, r: u16, c: u8) {

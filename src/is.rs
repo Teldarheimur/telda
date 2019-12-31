@@ -1,4 +1,5 @@
-use crate::TeldaEndian;
+use crate::{TeldaEndian, Memory, MemoryIter, NextIndex};
+use std::iter::Iterator;
 use byteorder::ByteOrder;
 
 macro_rules! instructions {
@@ -129,31 +130,34 @@ instructions!{Opcode;
     Wide(u16), // dddddd(w) 1010_00rr wide
 
 */
-#[inline]
-pub fn read_instruction8(bytes: &[u8]) -> (Opcode, Args, usize) {
-    read_instruction(bytes, true)
-}
-#[inline]
-pub fn read_instruction16(bytes: &[u8]) -> (Opcode, Args, usize) {
-    read_instruction(bytes, false)
+
+pub trait IntoI16 {
+    fn into_i16(n: u16) -> i16;
 }
 
-fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) {
-    let read_wide: Box<dyn Fn(&mut usize, &[u8]) -> u16> = if bit8_mode {
-        Box::new(|len, bytes| {
-            *len += 1;
-            bytes[0] as u16
-        })
-    } else {
-        Box::new(|len, bytes| {
-            *len += 2;
-            TeldaEndian::read_u16(bytes)
-        })
-    };
+impl IntoI16 for u16 {
+    #[inline(always)]
+    fn into_i16(n: u16) -> i16 {
+        n as i16
+    }
+}
+impl IntoI16 for u8 {
+    #[inline(always)]
+    fn into_i16(n: u16) -> i16 {
+        n as u8 as i8 as i16
+    }
+}
+
+pub fn read_instruction<'a, T: 'a + Memory<I>, I: 'a + IntoI16 + Into<u16>>(mut bytes: MemoryIter<'a, T, I>) -> (Opcode, Args, usize)
+where MemoryIter<'a, T, I>: Iterator<Item=u8> + NextIndex<I>, usize: From<I> {
+    fn read_wide<'a, T: 'a + Memory<I>, I: 'a + Into<u16> + Into<usize>>(len: &mut usize, bytes: &mut MemoryIter<'a, T, I>) -> u16
+    where MemoryIter<'a, T, I>: Iterator<Item=u8> + NextIndex<I>, usize: From<I>  {
+        *len += usize::from(<T as Memory<I>>::INDEX_WIDTH);
+        bytes.next_index().into()
+    }
 
     let mut len = 1;
-    let op = bytes[0];
-    bytes = &bytes[1..];
+    let op = bytes.next().unwrap();
 
     let args = (op & 0b1100_0000) >> 6;
     let opcode = Opcode::from_u8(op & 0b0011_1111).unwrap();
@@ -162,14 +166,13 @@ fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) 
         0b00 => Args { fst: None, snd: None },
         0b01 => {
             len += 1;
-            let reg = Reg::from_u8(bytes[0] & 0b11);
+            let reg = Reg::from_u8(bytes.next().unwrap() & 0b11);
             
             Args { fst: Some(reg), snd: None }
         },
         0b10 => Args { fst: None, snd: Some({
             len += 1;
-            let arg = bytes[0];
-            bytes = &bytes[1..];
+            let arg = bytes.next().unwrap();
 
             if arg & 0b1000_0000 == 0 {
                 let offset_sign = if (arg & 0b1_0000) == 0 { 0 } else { 0b1111_0000 };
@@ -179,21 +182,13 @@ fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) 
                 match arg & 0b0011_0000 {
                     0b0000_0000 => {
                         len += 1;
-                        FullArg::Byte(bytes[0])
+                        FullArg::Byte(bytes.next().unwrap())
                     }
-                    0b0010_0000 => FullArg::Wide(read_wide(&mut len, bytes)),
+                    0b0010_0000 => FullArg::Wide(read_wide(&mut len, &mut bytes)),
                     0b0001_0000 => {
                         // [$reg(+o)] (o>0xf) 1001_rrRR iwide
 
-                        let offset = read_wide(&mut len, bytes);
-                        println!("{}", offset);
-
-                        let offset = if bit8_mode {
-                            offset as u8 as i8 as i16
-                        } else {
-                            offset as i16
-                        };
-                        println!("{:04X} {0:016b}: {0}", offset);
+                        let offset = I::into_i16(read_wide(&mut len, &mut bytes));
 
                         FullArg::Ref(Reference::Reg{reg: Reg::from_u8((arg & 0b0000_1100) >> 2), offset})
                     }
@@ -203,25 +198,18 @@ fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) 
             } else if arg & 0b1110_0000 == 0b1100_0000 {
                 FullArg::Reg(Reg::from_u8((arg & 0b0000_1100) >> 2))
             } else if arg & 0b1111_0000 == 0b1110_0000 {
-                FullArg::Ref(Reference::Val(read_wide(&mut len, bytes)))
+                FullArg::Ref(Reference::Val(read_wide(&mut len, &mut bytes)))
             } else {
                 assert_eq!(arg & 0b1111_0000, 0b1111_0000, "Invalid args");
 
-                let offset = read_wide(&mut len, bytes);
-
-                let offset = if bit8_mode {
-                    offset as u8 as i8 as i16
-                } else {
-                    offset as i16
-                };
+                let offset = I::into_i16(read_wide(&mut len, &mut bytes));
 
                 FullArg::OffsetReg(Reg::from_u8((arg & 0b0000_1100) >> 2), offset)
             }
         }) },
         0b11 => {
             len += 1;
-            let arg = bytes[0];
-            bytes = &bytes[1..];
+            let arg = bytes.next().unwrap();
 
             let (fst, snd);
 
@@ -229,24 +217,18 @@ fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) 
                 len += 1;
                 let offset_sign = if (arg & 0b1_0000) == 0 { 0 } else { 0b1111_0000 };
                 snd = FullArg::Ref(Reference::Reg{ reg: Reg::from_u8((arg & 0b0110_0000) >> 5), offset: (offset_sign | (arg & 0b1111)) as i8 as i16});
-                fst = Reg::from_u8(bytes[0] & 0b0000_0011);
+                fst = Reg::from_u8(bytes.next().unwrap() & 0b0000_0011);
             } else if arg & 0b1100_0000 == 0b1000_0000 {
                 snd = match arg & 0b0011_0000 {
                     0b0000_0000 => {
                         len += 1;
-                        FullArg::Byte(bytes[0])
+                        FullArg::Byte(bytes.next().unwrap())
                     }
-                    0b0010_0000 => FullArg::Wide(read_wide(&mut len, bytes)),
+                    0b0010_0000 => FullArg::Wide(read_wide(&mut len, &mut bytes)),
                     0b0001_0000 => {
                         // [$reg(+o)] (o>0xf) 1001_rrRR iwide
 
-                        let offset = read_wide(&mut len, bytes);
-                        
-                        let offset = if bit8_mode {
-                            offset as u8 as i8 as i16
-                        } else {
-                            offset as i16
-                        };
+                        let offset = I::into_i16(read_wide(&mut len, &mut bytes));
 
                         FullArg::Ref(Reference::Reg{reg: Reg::from_u8((arg & 0b0000_1100) >> 2), offset})
                     }
@@ -260,18 +242,12 @@ fn read_instruction(mut bytes: &[u8], bit8_mode: bool) -> (Opcode, Args, usize) 
                 snd = FullArg::Reg(Reg::from_u8((arg & 0b0000_1100) >> 2));
             } else if arg & 0b1111_0000 == 0b1110_0000 {
                 fst = Reg::from_u8(arg & 0b0000_0011);
-                snd = FullArg::Ref(Reference::Val(read_wide(&mut len, bytes)));
+                snd = FullArg::Ref(Reference::Val(read_wide(&mut len, &mut bytes)));
             } else {
                 assert_eq!(arg & 0b1111_0000, 0b1111_0000, "Invalid args");
                 fst = Reg::from_u8(arg & 0b0000_0011);
 
-                let offset = read_wide(&mut len, bytes);
-
-                let offset = if bit8_mode {
-                    offset as u8 as i8 as i16
-                } else {
-                    offset as i16
-                };
+                let offset = I::into_i16(read_wide(&mut len, &mut bytes));
 
                 snd = FullArg::OffsetReg(Reg::from_u8((arg & 0b0000_1100) >> 2), offset);
             }
@@ -418,13 +394,50 @@ impl Args {
 mod tests {
     use super::*;
 
+    impl Memory<u8> for [u8; 4] {
+        const INDEX_WIDTH: u8 = 1;
+        fn read(&self, i: u8) -> u8 {
+            self[i as usize]
+        }
+        fn read_index(&self, i: u8) -> u8 {
+            self[i as usize]
+        }
+        fn write(&mut self, i: u8, c: u8) {
+            self[i as usize] = c;
+        }
+        fn write_index(&mut self, i: u8, c: u8) {
+            self[i as usize] = c;
+        }
+        fn size(&self) -> usize { self.len() }
+    }
+    impl Memory<u16> for [u8; 4] {
+        const INDEX_WIDTH: u16 = 2;
+        fn read(&self, i: u16) -> u8 {
+            self[i as usize]
+        }
+        fn read_index(&self, i: u16) -> u16 {
+            TeldaEndian::read_u16(&self[i as usize..])
+        }
+        fn write(&mut self, i: u16, c: u8) {
+            self[i as usize] = c;
+        }
+        fn write_index(&mut self, i: u16, c: u16) {
+            TeldaEndian::write_u16(&mut self[i as usize..], c);
+        }
+        fn size(&self) -> usize { self.len() }
+    }
+
     fn test_read_write(opcode: Opcode, args: Args, bit8_mode: bool) {
         let mut bytes = [opcode as u8 | args.mask(), 0, 0, 0];
         
         let len = args.write(&mut bytes[1..], bit8_mode);
         eprint!("{:02X?}", &bytes[..len+1]);
         eprintln!(" ++ {:02X?}", &bytes[len+1..]);
-        let (oc, a, l) = read_instruction(&bytes, bit8_mode);
+        let (oc, a, l) = if bit8_mode {
+            read_instruction(bytes.read_iter_from(0u8))
+        } else {
+            read_instruction(bytes.read_iter_from(0u16))
+        };
 
         assert_eq!((len, opcode, args), (l-1, oc, a));
     }

@@ -147,7 +147,7 @@ impl Cpu for StandardCpu {
     type Index = u8;
 
     fn run<M: Memory<Self::Index>>(&mut self, memory: &mut M) -> Option<Signal> {
-        let (opcode, args, len) = read_instruction8(memory.read_to_slice(self.pc, 3));
+        let (opcode, args, len) = read_instruction(memory.read_iter_from(self.pc));
         let len = len as u8;
         self.pc += len;
 

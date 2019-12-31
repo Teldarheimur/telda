@@ -33,24 +33,33 @@ fn main() {
         eprintln!("Invalid format");
         std::process::exit(2);
     }
+
+    let [version] = version;
+
     match version {
-        [8] => {
+        8 => {
             let mut start = [0; 1];
             file.read_exact(&mut start).unwrap();
             let [start] = start;
 
             let mut memory = [0; 0x100];
             file.read(&mut memory).unwrap();
+
+            drop(file);
+
             let mut machine = Machine::new(memory, Cpu8::new(start));
             machine.run();
         },
-        [16] => {
+        16 => {
             let mut start = [0; 2];
             file.read_exact(&mut start).unwrap();
             let start = TeldaEndian::read_u16(&start);
 
             let mut memory = [0; 0x10000];
             file.read(&mut memory).unwrap();
+
+            drop(file);
+
             let mut machine = Machine::new(memory, Cpu16::new(start));
             machine.run();
         }
