@@ -13,75 +13,36 @@ use byteorder::ByteOrder;
 
 struct DynMemory {
     mem: Vec<u8>,
-    mode: Mode,
 }
 
 impl DynMemory {
     #[inline]
-    fn new(mode: Mode) -> Self {
+    fn new() -> Self {
         DynMemory {
-            mode,
             mem: Vec::new(),
         }
     }
 }
 
-impl Memory<u8> for DynMemory {
-    const INDEX_WIDTH: u8 = 1;
-    #[inline]
-    fn read(&self, r: u8) -> u8 {
-        self.mem.get(r as usize).copied().unwrap_or(0)
-    }
-    #[inline]
-    fn read_index(&self, r: u8) -> u8 {
-        match self.mode {
-            Mode::Bit8 => self.read(r),
-            Mode::Bit16 => panic!("Incorrect read_index"),
-        }
-    }
-    #[inline]
-    fn write(&mut self, r: u8, c: u8) {
-        let new_length = r as usize + 1;
-        if new_length > self.mem.len() {
-            self.mem.resize(new_length, 0);
-        }
-        self.mem[r as usize] = c;
-    }
-    #[inline]
-    fn write_index(&mut self, r: u8, c: u8) {
-        let new_length = usize::from(r) + self.mode.size();
-        if new_length > self.mem.len() {
-            self.mem.resize(new_length, 0);
-        }
-        match self.mode {
-            Mode::Bit8 => self.mem[r as usize] = c,
-            Mode::Bit16 => panic!("Incorrect write_index"),
-        }
-    }
-    #[inline]
-    fn size(&self) -> usize {
-        self.mem.len()
-    }
-}
+const BIN_EXTENSION: &'static str = "tld";
+const INDEX_WIDTH: usize = 2;
+const BYTE_WIDTH: usize = 1;
 
 impl Memory<u16> for DynMemory {
-    const INDEX_WIDTH: u16 = 2;
+    const INDEX_WIDTH: u16 = INDEX_WIDTH as u16;
     #[inline]
     fn read(&self, r: u16) -> u8 {
         self.mem.get(r as usize).copied().unwrap_or(0)
     }
     #[inline]
     fn read_index(&self, r: u16) -> u16 {
-        match self.mode {
-            Mode::Bit8 => self.read(r) as u16,
-            Mode::Bit16 => if (r as usize) < self.mem.len() {
-                TeldaEndian::read_u16(&self.mem[r as usize..])
-            } else { 0 },
-        }
+        if (r as usize) < self.mem.len() {
+            TeldaEndian::read_u16(&self.mem[r as usize..])
+        } else { 0 }
     }
     #[inline]
     fn write(&mut self, r: u16, c: u8) {
-        let new_length = r as usize + 1;
+        let new_length = r as usize + BYTE_WIDTH;
         if new_length > self.mem.len() {
             self.mem.resize(new_length, 0);
         }
@@ -89,45 +50,15 @@ impl Memory<u16> for DynMemory {
     }
     #[inline]
     fn write_index(&mut self, r: u16, c: u16) {
-        let new_length = usize::from(r) + self.mode.size();
+        let new_length = usize::from(r) + INDEX_WIDTH;
         if new_length > self.mem.len() {
             self.mem.resize(new_length, 0);
         }
-        match self.mode {
-            Mode::Bit8 => self.mem[r as usize] = c as u8,
-            Mode::Bit16 => TeldaEndian::write_u16(&mut self.mem[r as usize..], c),
-        }
+        TeldaEndian::write_u16(&mut self.mem[r as usize..], c)
     }
     #[inline]
     fn size(&self) -> usize {
         self.mem.len()
-    }
-}
-
-#[derive(Debug, Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
-enum Mode {
-    Bit8,
-    Bit16,
-}
-
-impl Mode {
-    fn size(self) -> usize {
-        match self {
-            Mode::Bit8 => 1,
-            Mode::Bit16 => 2,
-        }
-    }
-    fn eight(self) -> bool {
-        match self {
-            Mode::Bit8 => true,
-            Mode::Bit16 => false,
-        }
-    }
-    fn bin_extension(self) -> &'static str {
-        match self {
-            Mode::Bit8 => "t8",
-            Mode::Bit16 => "tld",
-        }
     }
 }
 
@@ -172,12 +103,7 @@ fn main() -> IOResult<()> {
         eprintln!("Oh dear, you didn't give me a file to compile");
         std::process::exit(1);
     }
-    let mode = match path.extension().and_then(|a| a.to_str()).unwrap_or("") {
-        "telda8" | "fvm8" | "fvm8c" => Mode::Bit8,
-        "telda" | "telda16" | "fvm16" | "fvm16c" => Mode::Bit16,
-        _ => Mode::Bit16,
-    };
-    let mut memory = DynMemory::new(mode);
+    let mut memory = DynMemory::new();
 
     let file = BufReader::new(File::open(&path)?);
 
@@ -193,11 +119,11 @@ fn main() -> IOResult<()> {
         line_num += 1;
 
         if !line.is_empty() && !line.starts_with("#") {
-            parse_line(line, &mut memory, &mut i, mode, line_num, &mut labels, &mut label_references)?;
+            parse_line(line, &mut memory, &mut i, line_num, &mut labels, &mut label_references)?;
         }
     }
 
-    process_labels(label_references, &mut memory, mode, &labels);
+    process_labels(label_references, &mut memory, &labels);
 
     let start = if let Some(start) = labels.get("start") {
         *start
@@ -206,26 +132,20 @@ fn main() -> IOResult<()> {
         std::process::exit(3);
     };
 
-    let mut output_file = File::create(&args.next().map(Into::into).unwrap_or_else(|| path.with_extension(mode.bin_extension())))?;
+    let mut output_file = File::create(&args.next().map(Into::into).unwrap_or_else(|| path.with_extension(BIN_EXTENSION)))?;
     output_file.write_all(b"tld")?;
-    output_file.write_all(&[match mode {
-        Mode::Bit8 => 8,
-        Mode::Bit16 => 16,
-    }])?;
-    match mode {
-        Mode::Bit8 => output_file.write_all(&[start as u8])?,
-        Mode::Bit16 => {
-            let mut start_buf = [0; 2];
-            TeldaEndian::write_u16(&mut start_buf, start);
-            output_file.write_all(&start_buf)?;
-        }
+    output_file.write_all(&[16])?;
+    {
+        let mut start_buf = [0; 2];
+        TeldaEndian::write_u16(&mut start_buf, start);
+        output_file.write_all(&start_buf)?;
     }
     output_file.write_all(&memory.mem)?;
 
     Ok(())
 }
 
-fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory, mode: Mode, labels: &HashMap<String, u16>) {
+fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory, labels: &HashMap<String, u16>) {
     for LabelReference { memory_index, line_num, args, label_name, offset } in label_references {
         let replacement = {
             if let Some(&p) = labels.get(&label_name) {
@@ -246,7 +166,7 @@ fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory,
 
             let mut buf = [0; 3];
     
-            let len = args.write(&mut buf, mode.eight());
+            let len = args.write(&mut buf);
 
             for (b, i) in buf[..len].iter().zip(0..) {
                 memory.write(memory_index+i, *b);
@@ -257,7 +177,7 @@ fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory,
     }
 } 
 
-fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_num: u32, labels: &mut HashMap<String, u16>, label_references: &mut Vec<LabelReference>) -> IOResult<()> {
+fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, labels: &mut HashMap<String, u16>, label_references: &mut Vec<LabelReference>) -> IOResult<()> {
     // eprintln!("{:3}: {:02X}: {}", line_num, i, line);
 
     let first_space_index = line.find(' ').unwrap_or(line.len());
@@ -274,11 +194,11 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_
                     }
                     Operand::Index(p) => {
                         memory.write_index(*i, *p);
-                        *i += mode.size() as u16;
+                        *i += INDEX_WIDTH as u16;
                     }
                     Operand::Label(l) => {
                         label_references.push(LabelReference::new(*i, line_num, l.to_owned()));
-                        *i += mode.size() as u16;
+                        *i += INDEX_WIDTH as u16;
                     }
                     Operand::String(s) => {
                         for &b in s {
@@ -307,11 +227,11 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_
                 let line = line.trim();
 
                 if !line.is_empty() && !line.starts_with("#") {
-                    parse_line(line, memory, i, mode, line_num, &mut inc_labels, &mut label_references)?;
+                    parse_line(line, memory, i, line_num, &mut inc_labels, &mut label_references)?;
                 }
             }
 
-            process_labels(label_references, memory, mode, &inc_labels);
+            process_labels(label_references, memory, &inc_labels);
 
             // Remove all labels that don't begin in capital letters
             labels.extend(
@@ -336,19 +256,11 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_
             std::process::exit(2);
         }
 
-        fn parse_full_arg_from_operand(operand: Operand, i: u16, line_num: u32, label_references: &mut Vec<LabelReference>, mode: Mode) -> FullArg {
+        fn parse_full_arg_from_operand(operand: Operand, i: u16, line_num: u32, label_references: &mut Vec<LabelReference>) -> FullArg {
             match operand {
                 Operand::String(_) => panic!(),
                 Operand::Byte(b) => FullArg::Byte(b),
-                Operand::Index(w) => match mode {
-                    Mode::Bit16 => FullArg::Wide(w),
-                    Mode::Bit8 => if w > 0xff {
-                        eprintln!("Pointer too big for 8-bit");
-                        std::process::exit(3);
-                    } else {
-                        FullArg::Byte(w as u8)
-                    }
-                },
+                Operand::Index(w) => FullArg::Wide(w),
                 Operand::Reg(r) => FullArg::Reg(r),
                 Operand::Label(label) => {
                     let arg = FullArg::Wide(0xff);
@@ -382,10 +294,10 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_
                 },
                 (None, Operand::Reg(r)) => Args { fst: Some(r), snd: None },
 
-                (None, op) => Args { fst: None, snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references, mode))},
+                (None, op) => Args { fst: None, snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references))},
 
-                (Some(Operand::Byte(0)), op) => Args { fst: None, snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references, mode)) },
-                (Some(Operand::Reg(r)), op) => Args { fst: Some(r), snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references, mode))},
+                (Some(Operand::Byte(0)), op) => Args { fst: None, snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references))},
+                (Some(Operand::Reg(r)), op) => Args { fst: Some(r), snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references))},
                 (Some(_), _) => {
                     eprintln!("Error: First argument can only be a register (or null) at line {}", line_num);
                     std::process::exit(2)
@@ -396,7 +308,7 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, mode: Mode, line_
         let mut buf = [0; 3];
 
         memory.write(*i-1, ins | args.mask());
-        let len = args.write(&mut buf, mode.eight());
+        let len = args.write(&mut buf);
         
         for b in &buf[..len] {
             memory.write(*i, *b);

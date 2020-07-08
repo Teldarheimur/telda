@@ -49,6 +49,10 @@ macro_rules! instructions {
 // g: instruction group
 // i: instruction
 
+// TODO: Remove `l` here, not all instrcuctions have variants with all 4 possibilities, this'll free up a few opcodes for new instrcuctions
+// This'll require re-working `Opcode` and likely `Args` too, but it might end up neater
+// This'll mess up all old binaries too, since all opcodes will be shifted
+
 instructions!{Opcode;
     INVALID; 0x00;
     LOAD, "ld", "load"; 0x01;
@@ -273,7 +277,8 @@ impl Args {
     pub fn mask(&self) -> u8 {
         (self.fst.is_some() as u8 * 0b0100_0000) | (self.snd.is_some() as u8 * 0b1000_0000)
     }
-    pub fn write(&self, mut bytes: &mut [u8], bit8_mode: bool) -> usize {
+    pub fn write(&self, mut bytes: &mut [u8]) -> usize {
+        let bit8_mode = false;
         let mut len = 0;
 
         let write_wide: Box<dyn Fn(&mut usize, u16, &mut [u8])> = if bit8_mode {
@@ -394,22 +399,6 @@ impl Args {
 mod tests {
     use super::*;
 
-    impl Memory<u8> for [u8; 4] {
-        const INDEX_WIDTH: u8 = 1;
-        fn read(&self, i: u8) -> u8 {
-            self[i as usize]
-        }
-        fn read_index(&self, i: u8) -> u8 {
-            self[i as usize]
-        }
-        fn write(&mut self, i: u8, c: u8) {
-            self[i as usize] = c;
-        }
-        fn write_index(&mut self, i: u8, c: u8) {
-            self[i as usize] = c;
-        }
-        fn size(&self) -> usize { self.len() }
-    }
     impl Memory<u16> for [u8; 4] {
         const INDEX_WIDTH: u16 = 2;
         fn read(&self, i: u16) -> u8 {
@@ -427,93 +416,84 @@ mod tests {
         fn size(&self) -> usize { self.len() }
     }
 
-    fn test_read_write(opcode: Opcode, args: Args, bit8_mode: bool) {
+    fn test_read_write(opcode: Opcode, args: Args) {
         let mut bytes = [opcode as u8 | args.mask(), 0, 0, 0];
-        
-        let len = args.write(&mut bytes[1..], bit8_mode);
+
+        let len = args.write(&mut bytes[1..]);
         eprint!("{:02X?}", &bytes[..len+1]);
         eprintln!(" ++ {:02X?}", &bytes[len+1..]);
-        let (oc, a, l) = if bit8_mode {
-            read_instruction(bytes.read_iter_from(0u8))
-        } else {
-            read_instruction(bytes.read_iter_from(0u16))
-        };
+        let (oc, a, l) = read_instruction(bytes.read_iter_from(0u16));
 
         assert_eq!((len, opcode, args), (l-1, oc, a));
-    }
-    fn test_read_write_both(opcode: Opcode, args: Args) {
-        test_read_write(opcode, args.clone(), false);
-        test_read_write(opcode, args.clone(), true);
     }
 
     #[test]
     fn load_none_none() {
-        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: None});
+        test_read_write(Opcode::LOAD, Args {fst: None, snd: None});
     }
     #[test]
     fn load_none_wide() {
-        test_read_write(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Wide(0xdead))}, false);
-        test_read_write(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Wide(0xdd))}, true);
+        test_read_write(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Wide(0xdead))});
     }
     #[test]
     fn load_zero() {
-        test_read_write_both(Opcode::RET, Args {fst: None, snd: Some(FullArg::Wide(0x0000))});
+        test_read_write(Opcode::RET, Args {fst: None, snd: Some(FullArg::Wide(0x0000))});
     }
     #[test]
     fn load_none_byte() {
-        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Byte(0xad))});
+        test_read_write(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Byte(0xad))});
     }
     #[test]
     fn load_none_accw() {
-        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Reg(Reg::AccW))});
+        test_read_write(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Reg(Reg::AccW))});
     }
     #[test]
     fn load_none_acc() {
-        test_read_write_both(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Reg(Reg::Acc))});
+        test_read_write(Opcode::LOAD, Args {fst: None, snd: Some(FullArg::Reg(Reg::Acc))});
     }
     #[test]
     fn int2_ref_accw() {
-        test_read_write_both(Opcode::INT2, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::AccW, offset: -2}))});
+        test_read_write(Opcode::INT2, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::AccW, offset: -2}))});
     }
     #[test]
     fn store_reg_ref_accw() {
-        test_read_write_both(Opcode::STR, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: -2}))});
+        test_read_write(Opcode::STR, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: -2}))});
     }
     #[test]
     fn load_reg_ref_accw_neg_big() {
-        test_read_write_both(Opcode::STR, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: -100}))});
+        test_read_write(Opcode::STR, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: -100}))});
     }
     #[test]
     fn load_reg_ref_accw_pos_big() {
-        test_read_write_both(Opcode::LOAD, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: 120}))});
+        test_read_write(Opcode::LOAD, Args { fst: Some(Reg::AccW), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: 120}))});
     }
     #[test]
     fn load_ref_accw_neg_big() {
-        test_read_write_both(Opcode::STR, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: -100}))});
+        test_read_write(Opcode::STR, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: -100}))});
     }
     #[test]
     fn load_ref_accw_pos_big() {
-        test_read_write_both(Opcode::LOAD, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: 120}))});
+        test_read_write(Opcode::LOAD, Args { fst: None, snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Bc, offset: 120}))});
     }
     #[test]
     fn load_into_bc_spp1() {
-        test_read_write_both(Opcode::LOAD, Args { fst: Some(Reg::Bc), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: 1}))});
+        test_read_write(Opcode::LOAD, Args { fst: Some(Reg::Bc), snd: Some(FullArg::Ref(Reference::Reg{reg: Reg::Sp, offset: 1}))});
     }
     #[test]
     fn push_offset_reg() {
-        test_read_write_both(Opcode::PUSH, Args { fst: None, snd: Some(FullArg::OffsetReg(Reg::Acc, 120))});
+        test_read_write(Opcode::PUSH, Args { fst: None, snd: Some(FullArg::OffsetReg(Reg::Acc, 120))});
     }
     #[test]
     fn push_reg_offset_reg() {
-        test_read_write_both(Opcode::PUSH, Args { fst: Some(Reg::Sp), snd: Some(FullArg::OffsetReg(Reg::Acc, 120))});
+        test_read_write(Opcode::PUSH, Args { fst: Some(Reg::Sp), snd: Some(FullArg::OffsetReg(Reg::Acc, 120))});
     }
     #[test]
     fn push_offset_neg_reg() {
-        test_read_write_both(Opcode::PUSH, Args { fst: None, snd: Some(FullArg::OffsetReg(Reg::Acc, -120))});
+        test_read_write(Opcode::PUSH, Args { fst: None, snd: Some(FullArg::OffsetReg(Reg::Acc, -120))});
     }
     #[test]
     fn push_reg_offset_neg_reg() {
-        test_read_write_both(Opcode::PUSH, Args { fst: Some(Reg::Sp), snd: Some(FullArg::OffsetReg(Reg::Acc, -120))});
+        test_read_write(Opcode::PUSH, Args { fst: Some(Reg::Sp), snd: Some(FullArg::OffsetReg(Reg::Acc, -120))});
     }
 }
 

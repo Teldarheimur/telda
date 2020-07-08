@@ -82,17 +82,7 @@ macro_rules! impl_prim {
     };
 }
 
-#[inline(always)]
-fn first(b: &[u8]) -> u8 {
-    *unsafe{b.get_unchecked(0)}
-}
-#[inline(always)]
-fn replace_first(b: &mut [u8], n: u8) {
-    unsafe{*b.get_unchecked_mut(0) = n};
-}
-
 impl_prim!{
-    Memory8Bit, u8, self::first, self::replace_first
     Memory16Bit, u16, TeldaEndian::read_u16, TeldaEndian::write_u16
     Memory32Bit, u32, TeldaEndian::read_u32, TeldaEndian::write_u32
 }
@@ -137,7 +127,6 @@ impl<I, M: Memory<I>, Cp: Cpu<Index = I>> Machine<I, M, Cp> {
 
 pub type TeldaEndian = LittleEndian;
 
-pub mod standard8;
 pub mod standard16;
 pub mod is;
 pub mod lazy16;
