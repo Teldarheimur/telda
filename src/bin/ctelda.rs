@@ -1,6 +1,7 @@
 use telda::{
     Memory, TeldaEndian,
-    is::{Opcode, Reg, Reference, FullArg, Args},
+    is::{Reg, Reference, FullArg, OpAndArg, write_snd},
+    standard16::VERSION,
 };
 use std::{
     io::{Write, BufReader, BufRead, Result as IOResult},
@@ -36,7 +37,7 @@ impl Memory<u16> for DynMemory {
     }
     #[inline]
     fn read_index(&self, r: u16) -> u16 {
-        if (r as usize) < self.mem.len() {
+        if (r as usize) < self.mem.len() { 
             TeldaEndian::read_u16(&self.mem[r as usize..])
         } else { 0 }
     }
@@ -67,7 +68,7 @@ struct LabelReference {
     line_num: u32,
     label_name: String,
     offset: i16,
-    args: Option<Args>,
+    full_arg: Option<FullArg>,
 }
 
 impl LabelReference {
@@ -78,17 +79,17 @@ impl LabelReference {
             line_num,
             label_name,
             offset: 0,
-            args: None,
+            full_arg: None,
         }
     }
     #[inline]
-    fn with_args(memory_index: u16, line_num: u32, label_name: String, offset: i16, args: Args) -> Self {
+    fn with_args(memory_index: u16, line_num: u32, label_name: String, offset: i16, full_arg: FullArg) -> Self {
         LabelReference {
             memory_index,
             line_num,
             label_name,
             offset,
-            args: Some(args),
+            full_arg: Some(full_arg),
         }
     }
 }
@@ -134,7 +135,7 @@ fn main() -> IOResult<()> {
 
     let mut output_file = File::create(&args.next().map(Into::into).unwrap_or_else(|| path.with_extension(BIN_EXTENSION)))?;
     output_file.write_all(b"tld")?;
-    output_file.write_all(&[16])?;
+    output_file.write_all(&[VERSION])?;
     {
         let mut start_buf = [0; 2];
         TeldaEndian::write_u16(&mut start_buf, start);
@@ -146,7 +147,7 @@ fn main() -> IOResult<()> {
 }
 
 fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory, labels: &HashMap<String, u16>) {
-    for LabelReference { memory_index, line_num, args, label_name, offset } in label_references {
+    for LabelReference { memory_index, line_num, full_arg, label_name, offset } in label_references {
         let replacement = {
             if let Some(&p) = labels.get(&label_name) {
                 (p as i16 + offset as i16) as u16
@@ -156,8 +157,8 @@ fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory,
             }
         };
 
-        if let Some(mut args) = args {
-            if let Some(FullArg::Wide(ref mut p)) | Some(FullArg::Ref(Reference::Val(ref mut p))) = args.snd {
+        if let Some(mut full_arg) = full_arg {
+            if let FullArg::Wide(ref mut p) | FullArg::Ref(Reference::Val(ref mut p)) = full_arg {
                 assert_eq!(*p, 0xff, "ICE: invalid label reference");
                 *p = replacement;
             } else {
@@ -166,7 +167,7 @@ fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory,
 
             let mut buf = [0; 3];
     
-            let len = args.write(&mut buf);
+            let len = write_snd(&mut buf, full_arg);
 
             for (b, i) in buf[..len].iter().zip(0..) {
                 memory.write(memory_index+i, *b);
@@ -239,9 +240,13 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
                 .filter(|(k, _)| k.chars().next().map(|c| c.is_uppercase()).unwrap_or(false))
             );
         }
-    } else if let Some(ins) = Opcode::from_str(ins) {
-        let ins = ins as u8;
-        
+    } else if ins.ends_with(":") {
+        let o = labels.insert(ins[..ins.len()-1].to_owned(), *i);
+        if o.is_some() {
+            eprintln!("Label {} is already defined once before, cannot be defined again at line {}", &ins[..ins.len()-1], line_num);
+            std::process::exit(3);
+        }
+    } else {
         let mut args: Vec<_> = args.map(|arg| {
             if let Some(operand) = Operand::from_str(arg) {
                 operand
@@ -264,17 +269,15 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
                 Operand::Reg(r) => FullArg::Reg(r),
                 Operand::Label(label) => {
                     let arg = FullArg::Wide(0xff);
-                    let args = Args { fst : None, snd: Some(arg)};
 
-                    label_references.push(LabelReference::with_args(i, line_num, label, 0, args));
+                    label_references.push(LabelReference::with_args(i, line_num, label, 0, arg));
 
                     arg
                 },
                 Operand::Reference(label, offset) => {
                     let arg = FullArg::Ref(Reference::Val(0xff));
-                    let args = Args { fst : None, snd: Some(arg) };
 
-                    label_references.push(LabelReference::with_args(i, line_num, label, offset, args));
+                    label_references.push(LabelReference::with_args(i, line_num, label, offset, arg));
 
                     arg
                 }
@@ -286,18 +289,18 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
         *i += 1;
 
         let args = match args.pop() {
-            None => Args { fst: None, snd: None},
+            None => (None, None),
             Some(snd) => match (args.pop(), snd) {
                 (_, Operand::String(_)) | (Some(Operand::String(_)), _) => {
                     eprintln!("Invalid instruction {} at line {}", ins, line_num);
                     std::process::exit(2)
                 },
-                (None, Operand::Reg(r)) => Args { fst: Some(r), snd: None },
+                (None, Operand::Reg(r)) => (Some(r), None),
 
-                (None, op) => Args { fst: None, snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references))},
+                (None, op) => (None, Some(parse_full_arg_from_operand(op, *i, line_num, label_references))),
 
-                (Some(Operand::Byte(0)), op) => Args { fst: None, snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references))},
-                (Some(Operand::Reg(r)), op) => Args { fst: Some(r), snd: Some(parse_full_arg_from_operand(op, *i, line_num, label_references))},
+                (Some(Operand::Byte(0)), op) => (None, Some(parse_full_arg_from_operand(op, *i, line_num, label_references))),
+                (Some(Operand::Reg(r)), op) => (Some(r), Some(parse_full_arg_from_operand(op, *i, line_num, label_references))),
                 (Some(_), _) => {
                     eprintln!("Error: First argument can only be a register (or null) at line {}", line_num);
                     std::process::exit(2)
@@ -305,26 +308,22 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
             }
         };
 
-        let mut buf = [0; 3];
+        if let Some(op_and_arg) = OpAndArg::from_str(ins, args) {
+            let ins = op_and_arg.opcode as u8;
 
-        memory.write(*i-1, ins | args.mask());
-        let len = args.write(&mut buf);
-        
-        for b in &buf[..len] {
-            memory.write(*i, *b);
-            *i += 1;
+            let mut buf = [0; 3];
+
+            memory.write(*i-1, ins);
+            let len = op_and_arg.write(&mut buf);
+            
+            for b in &buf[..len] {
+                memory.write(*i, *b);
+                *i += 1;
+            }
+        } else {
+            eprintln!("Invalid instruction {} at line {}", ins, line_num);
+            std::process::exit(2);
         }
-
-
-    } else if ins.ends_with(":") {
-        let o = labels.insert(ins[..ins.len()-1].to_owned(), *i);
-        if o.is_some() {
-            eprintln!("Label {} is already defined once before, cannot be defined again at line {}", &ins[..ins.len()-1], line_num);
-            std::process::exit(3);
-        }
-    } else {
-        eprintln!("Invalid instruction {} at line {}", ins, line_num);
-        std::process::exit(2);
     }
     Ok(())
 }

@@ -53,7 +53,7 @@ macro_rules! impl_prim {
     ($($collective_type:ident, $t:ty, $read_index:path, $write_index:path)*) => {
         $(
         pub type $collective_type = [u8; (1 << 8 * ::std::mem::size_of::<$t>())];
-        impl Memory<$t> for [u8; (1 << 8 * ::std::mem::size_of::<$t>())] {
+        impl Memory<$t> for $collective_type {
             const INDEX_WIDTH: $t = ::std::mem::size_of::<$t>() as $t;
             #[inline]
             fn read(&self, i: $t) -> u8 {
@@ -90,7 +90,7 @@ impl_prim!{
 pub trait Cpu {
     type Index;
 
-    fn run<M: Memory<Self::Index>>(&mut self, mem: &mut M) -> Option<Signal>;
+    fn run<'a, M: Memory<Self::Index>>(&'a mut self, mem: &'a mut M) -> Option<Signal>;
 }
 
 pub enum Signal {

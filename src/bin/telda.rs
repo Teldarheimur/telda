@@ -5,7 +5,7 @@ use std::{
 };
 use telda::{
     TeldaEndian, Machine,
-    standard16::StandardCpu as Cpu16,
+    standard16::{self, StandardCpu as Cpu16},
 };
 use byteorder::ByteOrder;
 
@@ -36,7 +36,7 @@ fn main() {
     let [version] = version;
 
     match version {
-        16 => {
+        standard16::VERSION => {
             let mut start = [0; 2];
             file.read_exact(&mut start).unwrap();
             let start = TeldaEndian::read_u16(&start);
