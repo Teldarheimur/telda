@@ -234,7 +234,7 @@ instructions!{Opcode; 0x50..=0xff =>
     /// Jump to address plus given value interpreted as signed, if the greater-than or equals flag is set
     JGER, "jger"; 10 => 0x3d;
     /// Jump to address in given value, if either the greater-than or less-than is set (not the zero flag)
-    JNE, "jne"; 10 => 0x36;
+    JNE, "jne", "jnz"; 10 => 0x36;
     /// Jump to address plus given value interpreted as signed, if either the greater-than or less-than is set (not the zero flag)
     JNER, "jner"; 10 => 0x3e;
     /// Jump to address in given value, if the overflow flag is set.
