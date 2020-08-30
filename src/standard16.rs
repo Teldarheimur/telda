@@ -423,6 +423,7 @@ impl StandardCpu {
         }
     }
     #[inline]
+    #[track_caller]
     fn reg_mut_val(&mut self, reg: Reg, val: SecArgs) -> Result<(&mut u16, u16), (&mut u8, u8)> {
         match self.reg_mut(reg) {
             Ok(wide) => Ok((wide, val.u16())),

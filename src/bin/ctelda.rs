@@ -1,6 +1,6 @@
 use telda::{
     Memory, TeldaEndian,
-    is::{Reg, Reference, FullArg, OpAndArg, write_snd},
+    is::{Reg, Reference, FullArg, OpAndArg, write_snd, write_both},
     standard16::VERSION,
 };
 use std::{
@@ -68,7 +68,7 @@ struct LabelReference {
     line_num: u32,
     label_name: String,
     offset: i16,
-    full_arg: Option<FullArg>,
+    args: Option<(Option<Reg>, FullArg)>,
 }
 
 impl LabelReference {
@@ -79,17 +79,17 @@ impl LabelReference {
             line_num,
             label_name,
             offset: 0,
-            full_arg: None,
+            args: None,
         }
     }
     #[inline]
-    fn with_args(memory_index: u16, line_num: u32, label_name: String, offset: i16, full_arg: FullArg) -> Self {
+    fn with_args(memory_index: u16, line_num: u32, label_name: String, offset: i16, args: (Option<Reg>, FullArg)) -> Self {
         LabelReference {
             memory_index,
             line_num,
             label_name,
             offset,
-            full_arg: Some(full_arg),
+            args: Some(args),
         }
     }
 }
@@ -147,7 +147,7 @@ fn main() -> IOResult<()> {
 }
 
 fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory, labels: &HashMap<String, u16>) {
-    for LabelReference { memory_index, line_num, full_arg, label_name, offset } in label_references {
+    for LabelReference { memory_index, line_num, args, label_name, offset } in label_references {
         let replacement = {
             if let Some(&p) = labels.get(&label_name) {
                 (p as i16 + offset as i16) as u16
@@ -157,8 +157,8 @@ fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory,
             }
         };
 
-        if let Some(mut full_arg) = full_arg {
-            if let FullArg::Wide(ref mut p) | FullArg::Ref(Reference::Val(ref mut p)) = full_arg {
+        if let Some(mut args) = args {
+            if let FullArg::Wide(ref mut p) | FullArg::Ref(Reference::Val(ref mut p)) = args.1 {
                 assert_eq!(*p, 0xff, "ICE: invalid label reference");
                 *p = replacement;
             } else {
@@ -166,8 +166,11 @@ fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory,
             }
 
             let mut buf = [0; 3];
-    
-            let len = write_snd(&mut buf, full_arg);
+
+            let len = match args {
+                (None, full_arg) => write_snd(&mut buf, full_arg),
+                (Some(r), full_arg) => write_both(&mut buf, r, full_arg),
+            };
 
             for (b, i) in buf[..len].iter().zip(0..) {
                 memory.write(memory_index+i, *b);
@@ -261,8 +264,8 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
             std::process::exit(2);
         }
 
-        fn parse_full_arg_from_operand(operand: Operand, i: u16, line_num: u32, label_references: &mut Vec<LabelReference>) -> FullArg {
-            match operand {
+        fn parse_full_arg(fst: Option<Reg>, operand: Operand, i: u16, line_num: u32, label_references: &mut Vec<LabelReference>) -> (Option<Reg>, Option<FullArg>) {
+            (fst, Some(match operand {
                 Operand::String(_) => panic!(),
                 Operand::Byte(b) => FullArg::Byte(b),
                 Operand::Index(w) => FullArg::Wide(w),
@@ -270,20 +273,20 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
                 Operand::Label(label) => {
                     let arg = FullArg::Wide(0xff);
 
-                    label_references.push(LabelReference::with_args(i, line_num, label, 0, arg));
+                    label_references.push(LabelReference::with_args(i, line_num, label, 0, (fst, arg)));
 
                     arg
                 },
                 Operand::Reference(label, offset) => {
                     let arg = FullArg::Ref(Reference::Val(0xff));
 
-                    label_references.push(LabelReference::with_args(i, line_num, label, offset, arg));
+                    label_references.push(LabelReference::with_args(i, line_num, label, offset, (fst, arg)));
 
                     arg
                 }
                 Operand::RefReg(reg, offset) => FullArg::Ref(Reference::Reg{reg, offset}),
                 Operand::RegOff(reg, offset) => FullArg::OffsetReg(reg, offset),
-            }
+            }))
         }
 
         *i += 1;
@@ -297,10 +300,10 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
                 },
                 (None, Operand::Reg(r)) => (Some(r), None),
 
-                (None, op) => (None, Some(parse_full_arg_from_operand(op, *i, line_num, label_references))),
+                (Some(Operand::Byte(0)), op) | (None, op) => parse_full_arg(None, op, *i, line_num, label_references),
 
-                (Some(Operand::Byte(0)), op) => (None, Some(parse_full_arg_from_operand(op, *i, line_num, label_references))),
-                (Some(Operand::Reg(r)), op) => (Some(r), Some(parse_full_arg_from_operand(op, *i, line_num, label_references))),
+                (Some(Operand::Reg(r)), op) => parse_full_arg(Some(r), op, *i, line_num, label_references),
+
                 (Some(_), _) => {
                     eprintln!("Error: First argument can only be a register (or null) at line {}", line_num);
                     std::process::exit(2)

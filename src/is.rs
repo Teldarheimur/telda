@@ -878,12 +878,12 @@ fn write_wide(len: &mut usize, w: u16, bytes: &mut [u8]) {
 
 pub fn write_snd(bytes: &mut [u8], snd: SndArg) -> usize {
     let mut len = 0;
-
+    
     match snd {
         FullArg::Ref(Reference::Reg { reg : r, offset: o}) => {
             if (o & 0b01111111_11111111) < 0x10 {
                 let o = o as i8 as u8;
-
+                
                 len += 1;
                 bytes[0] = ((r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
             } else {
@@ -920,71 +920,74 @@ pub fn write_snd(bytes: &mut [u8], snd: SndArg) -> usize {
 
     len
 }
+pub fn write_both(mut bytes: &mut [u8], f_reg: FstArg, f: SndArg) -> usize {
+    let mut len = 0;
+
+    match f {
+        FullArg::Ref(Reference::Reg { reg : r, offset: o}) => {
+            debug_assert!(if false {
+                o as i8 as i16 == o
+            } else { true }, "impossible offset");
+            if (o & 0b01111111_11111111) < 0x10 {
+                let o = o as u8;
+
+                len += 2;
+                bytes[0] = ((r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
+                bytes[1] = f_reg as u8;
+            } else {
+                len += 1;
+                bytes[0] = 0b1001_0000 | ((r as u8) << 2) | f_reg as u8;
+                write_wide(&mut len, o as u16, &mut bytes[1..]);
+            }
+        }
+        FullArg::OffsetReg(r, o) => {
+            len += 1;
+            bytes[0] = 0b1111_0000 | ((r as u8) << 2) | f_reg as u8;
+            write_wide(&mut len, o as u16, &mut bytes[1..]);
+        }
+        FullArg::Byte(b) => {
+            len += 2;
+            bytes[0] = 0b1000_0000 | f_reg as u8;
+            bytes[1] = b;  
+        }
+        FullArg::Wide(w) => {
+            len += 1;
+            bytes[0] = 0b1010_0000 | f_reg as u8;
+            bytes = &mut bytes[1..];
+            write_wide(&mut len, w, &mut bytes);
+        }
+        FullArg::Reg(r) => {
+            len += 1;
+            bytes[0] = 0b1101_0000 | ((r as u8) << 2) | f_reg as u8;
+        }
+        FullArg::Ref(Reference::Val(w)) => {
+            len += 1;
+            bytes[0] = 0b1110_0000 | f_reg as u8;
+            bytes = &mut bytes[1..];
+            write_wide(&mut len, w, &mut bytes);
+        }
+    }
+
+    len
+}
 
 impl OpAndArg {
-    pub fn write(&self, mut bytes: &mut [u8]) -> usize {
-        let mut len = 0;
-
+    #[inline]
+    pub fn write(&self, bytes: &mut [u8]) -> usize {
         match self.opcode.arg_identity() {
-            a!(00) => (),
+            a!(00) => 0,
             a!(01) => {
                 bytes[0] = unsafe { self.args.fst } as u8;
-                len += 1;
+                1
             },
             a!(10) => {
-                len += write_snd(bytes, unsafe { self.args.snd });
+                write_snd(bytes, unsafe { self.args.snd })
             },
             a!(11) => {
                 let (f_reg, f) = unsafe { self.args.both };
-
-                match f {
-                    FullArg::Ref(Reference::Reg { reg : r, offset: o}) => {
-                        debug_assert!(if false {
-                            o as i8 as i16 == o
-                        } else { true }, "impossible offset");
-                        if (o & 0b01111111_11111111) < 0x10 {
-                            let o = o as u8;
-
-                            len += 2;
-                            bytes[0] = ((r as u8) << 5) | ((o & 0b1000_0000) >> 3) | ((o & 0b1111) as u8);
-                            bytes[1] = f_reg as u8;
-                        } else {
-                            len += 1;
-                            bytes[0] = 0b1001_0000 | ((r as u8) << 2) | f_reg as u8;
-                            write_wide(&mut len, o as u16, &mut bytes[1..]);
-                        }
-                    }
-                    FullArg::OffsetReg(r, o) => {
-                        len += 1;
-                        bytes[0] = 0b1111_0000 | ((r as u8) << 2) | f_reg as u8;
-                        write_wide(&mut len, o as u16, &mut bytes[1..]);
-                    }
-                    FullArg::Byte(b) => {
-                        len += 2;
-                        bytes[0] = 0b1000_0000 | f_reg as u8;
-                        bytes[1] = b;  
-                    }
-                    FullArg::Wide(w) => {
-                        len += 1;
-                        bytes[0] = 0b1010_0000 | f_reg as u8;
-                        bytes = &mut bytes[1..];
-                        write_wide(&mut len, w, &mut bytes);
-                    }
-                    FullArg::Reg(r) => {
-                        len += 1;
-                        bytes[0] = 0b1101_0000 | ((r as u8) << 2) | f_reg as u8;
-                    }
-                    FullArg::Ref(Reference::Val(w)) => {
-                        len += 1;
-                        bytes[0] = 0b1110_0000 | f_reg as u8;
-                        bytes = &mut bytes[1..];
-                        write_wide(&mut len, w, &mut bytes);
-                    }
-                }
+                write_both(bytes, f_reg, f)
             },
         }
-
-        len
     }
 }
 
