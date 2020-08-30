@@ -9,6 +9,8 @@ pub type StandardMachine = Machine<u16, Memory16Bit, StandardCpu>;
 
 #[derive(Debug)]
 pub struct StandardCpu {
+    #[cfg(feature = "ops")]
+    pub ops: u32,
     pc: u16,
     stack_pointer: u16,
     accumulator: u16,
@@ -377,6 +379,8 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
 impl StandardCpu {
     pub fn new(start: u16) -> Self {
         StandardCpu {
+            #[cfg(feature = "ops")]
+            ops: 0,
             pc: start,
             stack_pointer: 0xffff,
             accumulator: 0,
@@ -476,6 +480,10 @@ impl Cpu for StandardCpu {
         let (op_and_arg, len) = read_instruction(memory.read_iter_from(self.pc));
         let len = len as u16;
         self.pc += len;
+        #[cfg(feature = "ops")]
+        {
+            self.ops += 1;
+        }
 
         handle(&mut (self, memory), op_and_arg)
     }

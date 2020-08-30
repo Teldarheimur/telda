@@ -48,6 +48,8 @@ fn main() {
 
             let mut machine = Machine::new(memory, Cpu16::new(start));
             machine.run();
+            #[cfg(feature = "ops")]
+            println!("cycles: {}", machine.cpu.ops);
         }
         _ => {
             eprintln!("Invalid format");
