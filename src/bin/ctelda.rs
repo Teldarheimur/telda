@@ -361,6 +361,8 @@ fn decode_number_or_string(text: &str) -> Result<Result<u16, u8>, &str> {
             3..=4 => u16::from_str_radix(s, 16).map(Ok).ok(),
             _ => None,
         }.ok_or(text)
+    } else if text.starts_with("~") {
+        text[1..].parse().map(Ok).map_err(|_| text)
     } else if let Ok(b) = text.parse() {
         Ok(Err(b))
     } else {
