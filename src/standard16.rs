@@ -433,22 +433,25 @@ impl StandardCpu {
 
     #[inline]
     fn binop_overflowing(&mut self, reg: Reg, sec: SecArgs, op: fn(u8, u8) -> (u8, bool), opw: fn(u16, u16) -> (u16, bool)) {
-        let o = match self.reg_mut_val(reg, sec) {
+        let (o, zero) = match self.reg_mut_val(reg, sec) {
             Ok((reg, val)) => {
                 let (val, o) = opw(*reg, val);
                 *reg = val;
-                o
+                (o, val == 0)
             }
             Err((reg, val)) => {
                 let (val, o) = op(*reg, val);
                 *reg = val;
-                o
+                (o, val == 0)
             }
         };
 
         self.flags &= 0b1111_0000;
+        if zero {
+            self.flags |= flags::EZ;
+        }
         if o {
-            self.flags |= 0b1000;
+            self.flags |= flags::OF;
         }
     }
     #[inline]
@@ -457,6 +460,8 @@ impl StandardCpu {
             Ok((reg, val)) => *reg = opw(*reg, val),
             Err((reg, val)) => *reg = op(*reg, val),
         }
+
+        // TODO set zero flag?
 
         self.flags &= 0b1111_0000;
     }
