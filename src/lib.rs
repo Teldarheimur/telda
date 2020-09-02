@@ -130,3 +130,4 @@ pub type TeldaEndian = LittleEndian;
 pub mod standard16;
 pub mod is;
 pub mod lazy16;
+pub mod wrappers;

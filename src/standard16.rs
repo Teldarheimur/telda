@@ -1,7 +1,9 @@
 use super::{Machine, Memory, Memory16Bit, Cpu, Signal};
 use crate::is::*;
+use crate::wrappers::SplittableWord;
 use std::io::{Write, Read};
 use std::fmt::Debug;
+use std::borrow::{Borrow, BorrowMut};
 
 pub const VERSION: u8 = 17;
 
@@ -13,7 +15,7 @@ pub struct StandardCpu {
     pub ops: u32,
     pc: u16,
     stack_pointer: u16,
-    accumulator: u16,
+    accumulator: SplittableWord,
     b_counter: u16,
     flags: u8,
 }
@@ -303,12 +305,12 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
         }
     }
     fn jne(&mut self, location: Self::Snd) {
-        if self.0.flags & (flags::GT | flags::LT) != 0 {
+        if self.0.flags & flags::EZ == 0 {
             self.jump(location);
         }
     }
     fn jner(&mut self, location: Self::Snd) {
-        if self.0.flags & (flags::GT | flags::LT) != 0 {
+        if self.0.flags & flags::EZ == 0 {
             self.jumpr(location);
         }
     }
@@ -329,15 +331,15 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     fn int1(&mut self) -> Option<Self::InterruptSignal> {
         let mut bytes = [0];
         std::io::stdin().read_exact(&mut bytes).unwrap();
-        *self.0.acc_u8_mut() = bytes[0];
+        *self.0.accumulator.borrow_mut() = bytes[0];
         None
     }
     fn int2(&mut self) -> Option<Self::InterruptSignal> {
-        std::io::stdout().write_all(&[self.0.acc_u8()]).unwrap();
+        std::io::stdout().write_all(&[*self.0.accumulator.borrow()]).unwrap();
         None
     }
     fn int3(&mut self) -> Option<Self::InterruptSignal> {
-        std::io::stderr().write_all(&[self.0.acc_u8()]).unwrap();
+        std::io::stderr().write_all(&[*self.0.accumulator.borrow()]).unwrap();
         None
     }
     #[inline(always)]
@@ -383,22 +385,9 @@ impl StandardCpu {
             ops: 0,
             pc: start,
             stack_pointer: 0xffff,
-            accumulator: 0,
+            accumulator: 0.into(),
             b_counter: 0,
             flags: 0,
-        }
-    }
-    #[inline]
-    fn acc_u8(&self) -> u8 {
-        let b: &u8 = unsafe {
-            std::mem::transmute(&self.accumulator)
-        };
-        *b
-    }
-    #[inline]
-    fn acc_u8_mut(&mut self) -> &mut u8 {
-        unsafe {
-            std::mem::transmute(&mut self.accumulator)
         }
     }
     #[inline]
@@ -406,8 +395,8 @@ impl StandardCpu {
         match reg {
             Reg::Sp => Ok(self.stack_pointer),
             Reg::Bc => Ok(self.b_counter),
-            Reg::AccW => Ok(self.accumulator),
-            Reg::Acc => Err(self.acc_u8())
+            Reg::AccW => Ok(*self.accumulator.borrow()),
+            Reg::Acc => Err(*self.accumulator.borrow())
         }
     }
     #[inline]
@@ -415,8 +404,8 @@ impl StandardCpu {
         match reg {
             Reg::Sp => Ok(&mut self.stack_pointer),
             Reg::Bc => Ok(&mut self.b_counter),
-            Reg::AccW => Ok(&mut self.accumulator),
-            Reg::Acc => Err(self.acc_u8_mut())
+            Reg::AccW => Ok(self.accumulator.borrow_mut()),
+            Reg::Acc => Err(self.accumulator.borrow_mut())
         }
     }
     #[inline]
