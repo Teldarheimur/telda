@@ -178,8 +178,14 @@ impl FmtCode for Statement {
             Statement::Assignment(ident, e) => write!(f, "{} = {:?}", ident, DebugCode(&e)),
             Statement::Expr(expr) => FmtCode::fmt(expr, f),
             Statement::If(if_) => FmtCode::fmt(if_, f),
-            Statement::While(expr, b) => unimplemented!(),
-            Statement::For(init, condition, inc, b) => unimplemented!(),
+            Statement::While(expr, b) => {
+                write!(f, "while ({:?}) ", DebugCode(&expr))?;
+                FmtCode::fmt(&b, f)
+            }
+            Statement::For(init, condition, inc, b) => {
+                write!(f, "for ({:?}; {:?}; {:?}) ", init, condition, inc)?;
+                FmtCode::fmt(&b, f)
+            }
         }
     }
 }
