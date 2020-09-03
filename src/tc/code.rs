@@ -191,17 +191,19 @@ impl FmtCode for VariableDeclaration {
         FmtCode::fmt(&self.var_type, f)?;
         write!(f, " {}", &*self.name)?;
         if let Some(value) = &self.value {
-            write!(f, " = {:?}", DebugCode(&value))
-        } else {
-            Ok(())
+            write!(f, " = {:?}", DebugCode(&value))?;
         }
+        write!(f, ";")
     }
 }
 
 impl FmtCode for Item {
     fn fmt(&self, f: &mut Formatter<'_>) -> Result {
         match self {
-            Item::StaticVariable(vd) => FmtCode::fmt(vd, f),
+            Item::StaticVariable(vd) => {
+                write!(f, "static ")?;
+                FmtCode::fmt(vd, f)
+            }
             Item::Function{return_type, name, arguments, body} => {
                 FmtCode::fmt(return_type, f)?;
                 write!(f, " {}(", name)?;
@@ -212,5 +214,14 @@ impl FmtCode for Item {
                 FmtCode::fmt(body, f)
             }
         }
+    }
+}
+
+impl FmtCode for Program {
+    fn fmt(&self, f: &mut Formatter<'_>) -> Result {
+        for item in &self.0 {
+            writeln!(f, "{:?}", DebugCode(item))?;
+        }
+        Ok(())
     }
 }

@@ -1,8 +1,8 @@
 use telda::tc::*;
-use telda::s;
+use telda::{s, program};
 
 pub fn hello_world() -> Program {
-    vec![
+    program![
         Item::StaticVariable(VariableDeclaration {
             constant: true,
             name: s!("hello"),
@@ -15,7 +15,11 @@ pub fn hello_world() -> Program {
             arguments: vec![],
             body: Block {
                 statements: vec![
-                    Statement::Expr(Expr::FunctionApplication(s!("print"), vec![Expr::Variable(s!("hello"))])),
+                    Statement::If(If{condition: Expr::Value(LiteralValue::Byte(1)), block: Block {
+                        statements: vec![
+                            Statement::Expr(Expr::FunctionApplication(s!("print"), vec![Expr::Variable(s!("hello"))])),
+                        ]
+                    }, else_: None}),
                     Statement::Expr(Expr::FunctionApplication(s!("print"), vec![Expr::Variable(s!("hello"))])),
                 ]
             }

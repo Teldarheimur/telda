@@ -107,4 +107,18 @@ pub enum LiteralValue {
     // Union(Identifier, Box<Self>),
 }
 
-pub type Program = List<Item>;
+#[derive(Debug, Clone)]
+pub struct Program(pub List<Item>);
+
+#[macro_export]
+macro_rules! program {
+    ($val:expr; $num:expr) => {
+        Program(vec![$val; $num])
+    };
+    ($($val:expr),*) => {
+        Program(vec![$($val),*])
+    };
+    ($($val:expr),*,) => {
+        Program(vec![$($val),*])
+    };
+}
