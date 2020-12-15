@@ -366,11 +366,9 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     fn int14(&mut self) -> Option<Self::InterruptSignal> { None }
     fn int15(&mut self) -> Option<Self::InterruptSignal> {
         eprintln!("{:x?}", self.0);
-        let mut stack = Vec::new();
-        let mut i = self.0.stack_pointer;
-        while i < 0xffff {
+        let mut stack = Vec::with_capacity((0xffff - self.0.stack_pointer) as usize);
+        for i in self.0.stack_pointer..0xffff {
             stack.push(self.1.read(i));
-            i += 1;
         }
         eprintln!("Stack: {:x?}", stack);
 

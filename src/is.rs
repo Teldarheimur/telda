@@ -36,6 +36,7 @@ macro_rules! instructions {
                     _ => Self::$invalid,
                 }
             }
+            #[track_caller]
             pub fn into_str(self) -> &'static str {
                 match self {
                     Self::$invalid => panic!("the invalid opcode has no str representation"),
@@ -43,16 +44,17 @@ macro_rules! instructions {
                 }
             }
             /// Panics on the invalid opcode
+            #[track_caller]
             pub fn arg_identity(self) -> ArgIdentity {
                 match self {
                     Self::$invalid => panic!("the invalid opcode has no arg identity"),
                     $( Self::$name => a!($arg_ident), )*
                 }
             }
-            pub fn from_u8(i: u8) -> Option<Self> {
+            pub fn from_u8(i: u8) -> Self {
                 match i {
-                    $uncovered => None,
-                    _ => unsafe { Some(std::mem::transmute(i)) },
+                    $uncovered => Self::$invalid,
+                    _ => unsafe { std::mem::transmute(i) },
                 }
             }
             pub fn valid(self) -> Option<Self> {
@@ -757,6 +759,7 @@ impl OpAndArg {
     }
 }
 
+#[track_caller]
 pub fn read_instruction<'a, T: 'a + Memory<I>, I: 'a + IntoI16 + Into<u16>>(mut bytes: MemoryIter<'a, T, I>) -> (OpAndArg, usize)
 where MemoryIter<'a, T, I>: Iterator<Item=u8> + NextIndex<I>, usize: From<I> {
     fn read_wide<'a, T: 'a + Memory<I>, I: 'a + Into<u16> + Into<usize>>(len: &mut usize, bytes: &mut MemoryIter<'a, T, I>) -> u16
@@ -768,7 +771,11 @@ where MemoryIter<'a, T, I>: Iterator<Item=u8> + NextIndex<I>, usize: From<I> {
     let mut len = 1;
     let op = bytes.next().unwrap();
 
-    let opcode = Opcode::from_u8(op).unwrap();
+    let opcode = if let Some(opcode) = Opcode::from_u8(op).valid() {
+        opcode
+    } else {
+        panic!("invalid opcode {:02x} at {:02x}", op, bytes.index.into().wrapping_sub(1))
+    };
     let args = opcode.arg_identity();
 
     let args = match args {
