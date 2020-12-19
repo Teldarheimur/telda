@@ -132,3 +132,4 @@ pub mod is;
 pub mod lazy16;
 pub mod wrappers;
 pub mod tc;
+pub mod teldasm;

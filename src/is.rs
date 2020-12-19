@@ -1103,20 +1103,34 @@ mod tests {
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 #[repr(u8)]
 pub enum Reg {
-    Sp = 0b00,
-    Bc = 0b01,
-    Acc = 0b10,
-    AccW = 0b11,
-    // Flags = 0b100,
-    // Bp = 0b101,
-    // BpW = 0b110,
+    Ac = 0b000,
+    Ab = 0b001,
+    Bp = 0b010,
+    Sp = 0b011,
+    Ba = 0b100,
+    Bb = 0b101,
+    Sr = 0b110,
+    Ds = 0b111,
 }
 
 impl Reg {
     #[inline(always)]
-    fn from_u8(b: u8) -> Reg {
-        debug_assert!(b < 0b100);
+    fn from_u8(b: u8) -> Self {
+        debug_assert!(b < 0b1000);
         unsafe { std::mem::transmute(b) }
+    }
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "ac" => Some(Self::Ac),
+            "ab" => Some(Self::Ab),
+            "bp" => Some(Self::Bp),
+            "sp" => Some(Self::Sp),
+            "ba" => Some(Self::Ba),
+            "bb" => Some(Self::Bb),
+            "sr" => Some(Self::Sr),
+            "ds" => Some(Self::Ds),
+            _ => None,
+        }
     }
 }
 

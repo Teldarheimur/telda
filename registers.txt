@@ -1,0 +1,59 @@
+flags:
+oglz_dtxx
+
+overflow
+greater
+less
+zero
+direction
+trap
+
+(hidden $ip and $flags)
+
+000 - $ac      - accumulator
+001 - $ab [u8]
+010 - $bp      - base pointer (might be used as temporary stack pointer in future, in use with enter and leave)
+011 - $sp      - stack pointer (affected by push, pop, call, ret)
+100 - $ba      - b-accumulator
+101 - $bb [u8]
+110 - $sr      - source (affected by smv)
+111 - $ds      - destination (affected by smv)
+
+enter:
+push $bp
+load $bp, $sp
+
+leave:
+load $sp, $bp
+pop $bp
+
+~ - wide
+[] - indirection
+$ - register
+
+arith $reg, $reg/(~)[location]
+
+load $r1, $reg/(~)imm/(~)[~imm|$reg]
+  - loads into $r1 the value in 2nd arg
+str $r1, $reg/(~)imm/(~)[~imm|$reg]
+  - stores a value from $r1 into location in 2nd arg
+
+load $ac, [400] <-> str $ac, 400
+
+jmp snd
+ret snd
+
+smv ("string mov") (moves value from [$sr] to [$ds] and {if flag(d) increments else decrements} $sr and $ds afterwards)
+
+arg types:
+$r        : rrr0_xxxx
+
+$r, $R    : rrr1_RRR0
+$r, [$R]  : rrr1_RRR1
+$r, imm   : rrr0_0xxx imm_{size of $r}            # xxx -> Sss; follow as: {if S then imm=ss_{size of $r} else imm_{size of $r}}
+$r, [~loc]: rrr0_1xxx loc_short as {size of $r}   # no good idea for xxx: could be offset: xxx -> soo; follow as: -||- + soo_signed
+
+$R        : 0RRR_xxxx
+imm       : 10wx_xxxx imm_{if w then short else byte}           # Same ideas as above
+(~)[loc]  : 110w_xxxx loc_short as {if w then short else byte}  # Same ideas as above
+(~)[$R]   : 111w_RRRR as {if w then short else byte}
