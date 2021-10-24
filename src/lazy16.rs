@@ -19,7 +19,7 @@ impl Debug for Lazy16Memory {
 
 impl Lazy16Memory {
     #[inline(always)]
-    pub fn new() -> Self {
+    pub const fn new() -> Self {
         Lazy16Memory {
             slots: arr![None; 256],
         }

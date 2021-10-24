@@ -5,6 +5,7 @@ use super::is::Reg;
 
 impl Display for Reg {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        use super::is::Reg::*;
         match self {
             Ac => write!(f, "$ac"),
             Ab => write!(f, "$ab"),

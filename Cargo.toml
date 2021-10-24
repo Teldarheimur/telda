@@ -8,6 +8,7 @@ edition = "2018"
 
 [features]
 ops = []
+print_instruction = []
 
 [dependencies]
 nom = "6"

@@ -46,14 +46,44 @@ ret snd
 smv ("string mov") (moves value from [$sr] to [$ds] and {if flag(d) increments else decrements} $sr and $ds afterwards)
 
 arg types:
+ 01:
 $r        : rrr0_xxxx
 
-$r, $R    : rrr1_RRR0
-$r, [$R]  : rrr1_RRR1
-$r, imm   : rrr0_0xxx imm_{size of $r}            # xxx -> Sss; follow as: {if S then imm=ss_{size of $r} else imm_{size of $r}}
-$r, [~loc]: rrr0_1xxx loc_short as {size of $r}   # no good idea for xxx: could be offset: xxx -> soo; follow as: -||- + soo_signed
+ 11:
+$r, $R       : rrr1_0RRR
+$r, [$R]     : rrr1_1RRR
+$r, imm      : rrr0_0xxx imm_{size of $r}            # xxx -> Sss; follow as: {if S then imm=ss_{size of $r} else imm_{size of $r}}
+$r, [$R s of]: rrr0_11RR Rsoo_oooo
+$r, [~loc]   : rrr0_10xx loc_short as {size of $r}
 
-$R        : 0RRR_xxxx
-imm       : 10wx_xxxx imm_{if w then short else byte}           # Same ideas as above
-(~)[loc]  : 110w_xxxx loc_short as {if w then short else byte}  # Same ideas as above
-(~)[$R]   : 111w_RRRR as {if w then short else byte}
+ 10:
+$R           : 0RRR_xxxx
+imm          : 10wx_xxxx imm_{if w then short else byte}           # Same ideas as above
+(~)[loc]     : 110w_xxxx loc_short as {if w then short else byte}  # Same ideas as above
+(~)[$R]      : 111w_0RRR as {if w then short else byte}
+(~)[$R s of] : 111w_1RRR as {if w then short else byte} xsoo_oooo
+
+ (s = +, - = 0, 1) # s indicates whether it's negative
+of =
+  if s +:
+    oo_oooo as short + 1
+  else:
+    -(oo_oooo as short + 1)
+(range: [-64, +64])
+
+# Future proposals
+
+keep current system, but add
+4 extra splittable general purpose
+registers only accesible through these
+extra opreand modes:
+
+ 100:
+$r, $R : rrrr_RRRR
+
+ 101:
+copy of 11, but it only uses the extra registers
+
+# Future proposals 2
+
+Floating point

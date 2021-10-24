@@ -5,7 +5,7 @@ use std::io::{Write, Read};
 use std::fmt::Debug;
 use std::borrow::{Borrow, BorrowMut};
 
-pub const VERSION: u8 = 17;
+pub const VERSION: u8 = 18;
 
 pub type StandardMachine = Machine<u16, Memory16Bit, StandardCpu>;
 
@@ -15,8 +15,11 @@ pub struct StandardCpu {
     pub ops: u32,
     pc: u16,
     stack_pointer: u16,
+    base_pointer: u16,
+    source_pointer: u16,
+    destination_pointer: u16,
     accumulator: SplittableWord,
-    b_counter: u16,
+    b_counter: SplittableWord,
     flags: u8,
 }
 
@@ -24,23 +27,32 @@ pub struct StandardCpu {
 pub enum SecArgs {
     Byte(u8),
     Wide(u16),
-    Both(u8, u16),
 }
 
 impl SecArgs {
-    fn u8(self) -> Result<u8, u16> {
+    const fn from_reg_with(reg: Reg, byte: u8) -> Self {
+        if reg.is_wide() {
+            Self::Wide(byte as u16)
+        } else {
+            Self::Byte(byte)
+        }
+    }
+
+    fn u8(self) -> u8 {
         use self::SecArgs::*;
         match self {
-            Byte(b) => Ok(b),
-            Both(b, _) => Ok(b),
-            Wide(w) => Err(w),
+            Byte(b) => b,
+            Wide(_) => panic!("Expected byte but had wide"),
         }
     }
     fn u16(self) -> u16 {
         use self::SecArgs::*;
         match self {
-            Wide(w) | Both(_, w) => w,
-            Byte(b) => b as u16,
+            Wide(w) => w,
+            Byte(b) => {
+                eprintln!("Implicitly extended a byte into a wide!!");
+                b as u16
+            }
         }
     }
 }
@@ -49,10 +61,17 @@ pub type CpuAndMemory<'a, M> = (&'a mut StandardCpu, &'a mut M);
 
 pub mod flags {
     /// Overflow
-    pub const OF: u8 = 0b1000;
-    pub const GT: u8 = 0b0100;
-    pub const LT: u8 = 0b0010;
-    pub const EZ: u8 = 0b0001;
+    pub const OF : u8 = 0b1000_0000;
+    pub const GT : u8 = 0b0100_0000;
+    pub const LT : u8 = 0b0010_0000;
+    pub const EZ : u8 = 0b0001_0000;
+    pub const CMP_MASK: u8 = 0b1111_0000;
+    pub const DIR: u8 = 0b0000_1000;
+    pub const TRP: u8 = 0b0000_0100;
+    pub const LF1: u8 = 0b0000_0010;
+    pub const LF2: u8 = 0b0000_0001;
+
+    pub const DEFAULT: u8 = DIR;
 }
 
 impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory<'_, M> {
@@ -72,15 +91,21 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
                 Ok(w) => SecArgs::Wide(w),
                 Err(b) => SecArgs::Byte(b),
             },
-            FullArg::OffsetReg(r, o) => match cpu.reg(r) {
-                Ok(w) => SecArgs::Wide((w as i16 + o) as u16),
-                Err(b) => SecArgs::Byte((b as i8 + o as i8) as u8),
-            },
-            FullArg::Ref(Reference::Val(w)) => SecArgs::Both(memory.read(w), memory.read_index(w)),
-            FullArg::Ref(Reference::Reg{reg, offset}) => {
-                let addr = (cpu.reg(reg).unwrap_or_else(|b| b as u16) as i16 + offset) as u16;
+            FullArg::RegRef(is_wide, reg, offset) => {
+                let addr = ((cpu.reg(reg).unwrap_or_else(|b| b as u16) as i16).wrapping_add(offset as i16)) as u16;
 
-                SecArgs::Both(memory.read(addr), memory.read_index(addr))
+                if is_wide {
+                    SecArgs::Wide(memory.read_index(addr))
+                } else {
+                    SecArgs::Byte(memory.read(addr))
+                }
+            }
+            FullArg::ImmRef(is_wide, addr) => {
+                if is_wide {
+                    SecArgs::Wide(memory.read_index(addr))
+                } else {
+                    SecArgs::Byte(memory.read(addr))
+                }
             }
             FullArg::Byte(b) => SecArgs::Byte(b),
             FullArg::Wide(w) => SecArgs::Wide(w),
@@ -88,9 +113,9 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     }
 
     fn load(&mut self, reg: Self::Fst, val: Self::Snd) {
-        match self.0.reg_mut_val(reg, val) {
-            Ok((wide, val)) => *wide = val,
-            Err((acc, val)) => *acc = val,
+        match self.0.reg_mut(reg) {
+            Err(b) => *b = val.u8(),
+            Ok(w) => *w = val.u16(),
         }
     }
     fn str(&mut self, reg: Self::Fst, location: Self::Snd){
@@ -112,7 +137,7 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
 
         use std::cmp::Ordering::*;
 
-        self.0.flags &= 0b1111_0000;
+        self.0.flags &= !flags::CMP_MASK;
         self.0.flags |= match res {
             Greater => flags::GT,
             Less => flags::LT,
@@ -142,11 +167,11 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     
     #[inline(always)]
     fn inc(&mut self, reg: Self::Fst) {
-        self.add(reg, SecArgs::Both(1, 1))
+        self.add(reg, SecArgs::from_reg_with(reg, 1))
     }
     #[inline(always)]
     fn dec(&mut self, reg: Self::Fst) {
-        self.sub(reg, SecArgs::Both(1, 1))
+        self.sub(reg, SecArgs::from_reg_with(reg, 1))
     }
     fn sub(&mut self, reg: Self::Fst, val: Self::Snd) {
         let (is_zero, o) = match self.0.reg_mut_val(reg, val) {
@@ -161,7 +186,7 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
                 (val == 0, o) 
             }
         };
-        self.0.flags &= 0b1111_0000;
+        self.0.flags &= !flags::CMP_MASK;
         self.0.flags |= if o {
             flags::OF | flags::GT
         } else if is_zero {
@@ -188,21 +213,16 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     }
 
     fn push(&mut self, val: Self::Snd) {
-        match val.u8() {
-            Ok(b) => {
+        match val {
+            SecArgs::Byte(b) => {
                 self.0.stack_pointer -= 1;
                 self.1.write(self.0.stack_pointer, b);
             }
-            Err(w) => {
+            SecArgs::Wide(w) => {
                 self.0.stack_pointer -= 2;
                 self.1.write_index(self.0.stack_pointer, w);
             }
         }
-    }
-    fn pushw(&mut self, val: Self::Snd) {
-        let val = val.u16();
-        self.0.stack_pointer -= 2;
-        self.1.write_index(self.0.stack_pointer, val);
     }
     fn pop(&mut self, reg: Self::Fst) {
         let sp = self.0.stack_pointer;
@@ -219,22 +239,73 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
         };
         self.0.stack_pointer += width;
     }
-    fn popw(&mut self, reg: Self::Fst) {
-        let popped = self.1.read_index(self.0.stack_pointer);
-        
-        match self.0.reg_mut(reg) {
-            Ok(reg) => {
-                *reg = popped;
-            },
-            Err(reg) => {
-                *reg = popped as u8;
+    fn store_at_stack_offset(&mut self, reg: Self::Fst, val: Self::Snd) {
+        let (cpu, memory) = self;
+
+        let offset = match val {
+            // sign extend bytes
+            SecArgs::Byte(b) => b as i8 as i16,
+            SecArgs::Wide(w) => w as i16,
+        };
+
+        let location = (cpu.stack_pointer as i16).wrapping_add(offset) as u16;
+
+        match cpu.reg(reg) {
+            Ok(wide) => memory.write_index(location, wide),
+            Err(acc) => memory.write(location, acc),
+        }
+    }
+    fn setd(&mut self, direction: bool) {
+        if direction {
+            self.0.flags |= flags::DIR;
+        } else {
+            self.0.flags &= !flags::DIR;
+        }
+    }
+    fn sload(&mut self, reg: Self::Fst) {
+        let (cpu, memory) = self;
+
+        let source_location = cpu.source_pointer;
+
+        match cpu.reg_mut(reg) {
+            Err(b) => {
+                *b = memory.read(source_location);
+                self.0.source_pointer += 1;
+            }
+            Ok(w) => {
+                *w = memory.read_index(source_location);
+                self.0.source_pointer += 2;
             }
         }
-        self.0.stack_pointer += 2;
+    }
+
+    fn sstore(&mut self, val: Self::Snd) {
+        match val {
+            SecArgs::Byte(b) => {
+                self.1.write(self.0.destination_pointer, b);
+                self.0.destination_pointer += 1;
+            }
+            SecArgs::Wide(w) => {
+                self.1.write_index(self.0.destination_pointer, w);
+                self.0.destination_pointer += 2;
+            }
+        }
+    }
+    fn smv(&mut self) {
+        let incrementing = self.0.flags & flags::DIR != 0;
+        let b = self.1.read(self.1.read_index(self.0.source_pointer));
+        self.1.write(self.1.read_index(self.0.destination_pointer), b);
+        if incrementing {
+            self.0.source_pointer += 1;
+            self.0.destination_pointer += 1;
+        } else {
+            self.0.source_pointer -= 1;
+            self.0.destination_pointer -= 1;
+        }
     }
     #[inline]
     fn call(&mut self, location: Self::Snd) {
-        self.pushw(SecArgs::Wide(self.0.pc));
+        self.push(SecArgs::Wide(self.0.pc));
 
         self.0.pc = location.u16();
     }
@@ -383,34 +454,45 @@ impl StandardCpu {
             ops: 0,
             pc: start,
             stack_pointer: 0xffff,
+            base_pointer: 0xffff,
+            source_pointer: 0,
+            destination_pointer: 0,
             accumulator: 0.into(),
-            b_counter: 0,
-            flags: 0,
+            b_counter: 0.into(),
+            flags: flags::DEFAULT,
         }
     }
     #[inline]
     fn reg(&self, reg: Reg) -> Result<u16, u8> {
         match reg {
             Reg::Sp => Ok(self.stack_pointer),
-            Reg::Bc => Ok(self.b_counter),
-            Reg::AccW => Ok(*self.accumulator.borrow()),
-            Reg::Acc => Err(*self.accumulator.borrow())
+            Reg::Bp => Ok(self.base_pointer),
+            Reg::Sr => Ok(self.source_pointer),
+            Reg::Ds => Ok(self.destination_pointer),
+            Reg::Ba => Ok(*self.b_counter.borrow()),
+            Reg::Bb => Err(*self.b_counter.borrow()),
+            Reg::Ac => Ok(*self.accumulator.borrow()),
+            Reg::Ab => Err(*self.accumulator.borrow()),
         }
     }
     #[inline]
     fn reg_mut(&mut self, reg: Reg) -> Result<&mut u16, &mut u8> {
         match reg {
             Reg::Sp => Ok(&mut self.stack_pointer),
-            Reg::Bc => Ok(&mut self.b_counter),
-            Reg::AccW => Ok(self.accumulator.borrow_mut()),
-            Reg::Acc => Err(self.accumulator.borrow_mut())
+            Reg::Bp => Ok(&mut self.base_pointer),
+            Reg::Sr => Ok(&mut self.source_pointer),
+            Reg::Ds => Ok(&mut self.destination_pointer),
+            Reg::Ba => Ok(self.b_counter.borrow_mut()),
+            Reg::Bb => Err(self.b_counter.borrow_mut()),
+            Reg::Ac => Ok(self.accumulator.borrow_mut()),
+            Reg::Ab => Err(self.accumulator.borrow_mut()),
         }
     }
     #[inline]
     fn reg_val(&self, reg: Reg, val: SecArgs) -> Result<(u16, u16), (u8, u8)> {
         match self.reg(reg) {
             Ok(wide) => Ok((wide, val.u16())),
-            Err(acc) => Err((acc, val.u8().expect(":("))),
+            Err(acc) => Err((acc, val.u8())),
         }
     }
     #[inline]
@@ -418,7 +500,7 @@ impl StandardCpu {
     fn reg_mut_val(&mut self, reg: Reg, val: SecArgs) -> Result<(&mut u16, u16), (&mut u8, u8)> {
         match self.reg_mut(reg) {
             Ok(wide) => Ok((wide, val.u16())),
-            Err(acc) => Err((acc, val.u8().expect(":("))),
+            Err(acc) => Err((acc, val.u8())),
         }
     }
 
@@ -437,7 +519,7 @@ impl StandardCpu {
             }
         };
 
-        self.flags &= 0b1111_0000;
+        self.flags &= !flags::CMP_MASK;
         if zero {
             self.flags |= flags::EZ;
         }
@@ -454,7 +536,7 @@ impl StandardCpu {
 
         // TODO set zero flag?
 
-        self.flags &= 0b1111_0000;
+        self.flags &= !flags::CMP_MASK;
     }
 }
 

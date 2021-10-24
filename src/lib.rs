@@ -90,6 +90,7 @@ impl_prim!{
 pub trait Cpu {
     type Index;
 
+    /// Run for one cycle
     fn run<'a, M: Memory<Self::Index>>(&'a mut self, mem: &'a mut M) -> Option<Signal>;
 }
 

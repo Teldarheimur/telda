@@ -1,6 +1,6 @@
 use telda::{
     Memory, TeldaEndian,
-    is::{Reg, Reference, FullArg, OpAndArg, write_snd, write_both},
+    is::{Reg, FullArg, OpAndArg, write_snd, write_both},
     standard16::VERSION,
 };
 use std::{
@@ -28,6 +28,8 @@ impl DynMemory {
 const BIN_EXTENSION: &'static str = "tld";
 const INDEX_WIDTH: usize = 2;
 const BYTE_WIDTH: usize = 1;
+
+const UNDEFINED_REFERENCE: u16 = u16::MAX;
 
 impl Memory<u16> for DynMemory {
     const INDEX_WIDTH: u16 = INDEX_WIDTH as u16;
@@ -158,8 +160,8 @@ fn process_labels(label_references: Vec<LabelReference>, memory: &mut DynMemory,
         };
 
         if let Some(mut args) = args {
-            if let FullArg::Wide(ref mut p) | FullArg::Ref(Reference::Val(ref mut p)) = args.1 {
-                assert_eq!(*p, 0xff, "ICE: invalid label reference");
+            if let FullArg::Wide(ref mut p) | FullArg::ImmRef(_, ref mut p) = args.1 {
+                assert_eq!(*p, UNDEFINED_REFERENCE, "ICE: reference to replace wasn't undefined");
                 *p = replacement;
             } else {
                 panic!("ICE: invalid label reference");
@@ -210,7 +212,7 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
                             *i += 1;
                         }
                     }
-                    Operand::RegOff(_, _) | Operand::Reg(_) | Operand::RefReg(_, _) | Operand::Reference(_, _) => panic!("Invalid data"),
+                    Operand::Reg(_) | Operand::RefReg(_, _, _) | Operand::Reference(_, _) => panic!("Invalid data"),
                 }
             } else {
                 eprintln!("Invalid data at line {}", line_num);
@@ -271,21 +273,31 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
                 Operand::Index(w) => FullArg::Wide(w),
                 Operand::Reg(r) => FullArg::Reg(r),
                 Operand::Label(label) => {
-                    let arg = FullArg::Wide(0xff);
+                    let arg = FullArg::Wide(UNDEFINED_REFERENCE);
 
                     label_references.push(LabelReference::with_args(i, line_num, label, 0, (fst, arg)));
 
                     arg
                 },
-                Operand::Reference(label, offset) => {
-                    let arg = FullArg::Ref(Reference::Val(0xff));
+                Operand::Reference(mut w, label) => {
+                    // If the first argument is a wide register, then the reference implicitly is to a wide
+                    if fst.map(|r| r.is_wide()).unwrap_or(false) {
+                        w = true;
+                    }
+                    let arg = FullArg::ImmRef(w, UNDEFINED_REFERENCE);
 
-                    label_references.push(LabelReference::with_args(i, line_num, label, offset, (fst, arg)));
+                    label_references.push(LabelReference::with_args(i, line_num, label, 0, (fst, arg)));
 
                     arg
                 }
-                Operand::RefReg(reg, offset) => FullArg::Ref(Reference::Reg{reg, offset}),
-                Operand::RegOff(reg, offset) => FullArg::OffsetReg(reg, offset),
+                Operand::RefReg(mut w, reg, offset) => {
+                    // If the first argument is a wide register, then the reference implicitly is to a wide
+                    if fst.map(|r| r.is_wide()).unwrap_or(false) {
+                        w = true;
+                    }
+
+                    FullArg::RegRef(w, reg, offset)
+                }
             }))
         }
 
@@ -310,6 +322,15 @@ fn parse_line(line: &str, memory: &mut DynMemory, i: &mut u16, line_num: u32, la
                 },
             }
         };
+
+        let size_match = args.0
+            .and_then(|r| args.1.and_then(|fa| fa.is_wide().map(|w| w == r.is_wide()).ok()))
+            .unwrap_or(true);
+
+        if !size_match {
+            eprintln!("Mismatching sizes in instruction {} at line {}", ins, line_num);
+            std::process::exit(2);
+        }
 
         if let Some(op_and_arg) = OpAndArg::from_str(ins, args) {
             let ins = op_and_arg.opcode as u8;
@@ -337,9 +358,8 @@ pub enum Operand {
     Index(u16),
     Label(String),
     Reg(Reg),
-    Reference(String, i16),
-    RefReg(Reg, i16),
-    RegOff(Reg, i16),
+    Reference(bool, String),
+    RefReg(bool, Reg, i8),
     String(Vec<u8>),
 }
 
@@ -402,40 +422,28 @@ impl Operand {
                 Some(Operand::String(buf))
             }
         } else if s.starts_with("$") {
-            if let Some(offset_index) = s.find(|c| c == '+' || c == '-') {
-                let offset = if s.as_bytes()[0] == b'+' {
-                    &s[offset_index+1..]
-                } else {
-                    &s[offset_index..]
-                }.parse::<i16>().ok()?;
-
-                let reg = reg(&s[1..offset_index])?;
-                Some(Operand::RegOff(reg, offset))
-            } else {
-                reg(&s[1..]).map(|r| Operand::Reg(r))
-            }
-        } else if s.starts_with("[") && s.ends_with("]") {
-            let s = &s[1..s.len()-1];
-
-            let offset_index = s.find(|c| c == '+' || c == '-').unwrap_or(s.len());
-            let offset = if offset_index == s.len() {
-                0
-            } else {
-                if s.as_bytes()[0] == b'+' {
-                    &s[offset_index+1..]
-                } else {
-                    &s[offset_index..]
-                }.parse::<i16>().ok()?
-            };
+            Reg::from_str(&s[1..]).map(|r| Operand::Reg(r))
+        } else if (s.starts_with("[") || s.starts_with("~[")) && s.ends_with("]") {
+            let is_ref_to_wide = s.starts_with("~");
+            let s = &s[1 + is_ref_to_wide as usize..s.len()-1];
 
             if s.starts_with("$") {
-                let reg = reg(&s[1..offset_index])?;
+                let offset_index = s.find(|c| c == '+' || c == '-').unwrap_or(s.len());
+                let offset = if offset_index == s.len() {
+                    0
+                } else {
+                    if s.as_bytes()[0] == b'+' {
+                        &s[offset_index+1..]
+                    } else {
+                        &s[offset_index..]
+                    }.parse::<i8>().ok()?
+                };
 
-                Some(Operand::RefReg(reg, offset))
+                let reg = Reg::from_str(&s[1..offset_index])?;
+
+                Some(Operand::RefReg(is_ref_to_wide, reg, offset))
             } else {
-                let label = s[..offset_index].to_owned();
-
-                Some(Operand::Reference(label, offset))
+                Some(Operand::Reference(is_ref_to_wide, s.to_owned()))
             }
         } else {
             match decode_number_or_string(s) {
@@ -444,16 +452,5 @@ impl Operand {
                 Err(s) => Some(Operand::Label(s.to_owned())),
             }
         }
-    }
-}
-
-#[inline]
-fn reg(s: &str) -> Option<Reg> {
-    match s {
-        "s" | "sp" => Some(Reg::Sp),
-        "b" | "bc" => Some(Reg::Bc),
-        "a" => Some(Reg::Acc),
-        "ac" => Some(Reg::AccW),
-        _ => None,
     }
 }
