@@ -1,6 +1,6 @@
 use crate::{TeldaEndian, Memory, MemoryIter, NextIndex};
 use std::iter::Iterator;
-use std::fmt::{self, Debug};
+use std::fmt::{self, Debug, Display};
 use byteorder::ByteOrder;
 
 macro_rules! instructions {
@@ -350,6 +350,9 @@ pub trait InstructionHandler {
     fn int13(&mut self) -> Option<Self::InterruptSignal>;
     fn int14(&mut self) -> Option<Self::InterruptSignal>;
     fn int15(&mut self) -> Option<Self::InterruptSignal>;
+
+    #[cfg(feature = "print_instruction")]
+    fn print_instruction(&self, op_and_arg: OpAndArg);
 }
 
 pub fn handle<T: InstructionHandler>(h: &mut T, op_and_arg: OpAndArg) -> Option<T::InterruptSignal> {
@@ -358,12 +361,7 @@ pub fn handle<T: InstructionHandler>(h: &mut T, op_and_arg: OpAndArg) -> Option<
 
     #[cfg(feature = "print_instruction")]
     {
-        let s = op_and_arg.map(String::new, |r| format!("{:?}", r), |s| format!("{:?}", s), |f, s| format!("{:?}, {:?}", f, s));
-    
-        eprintln!("{:?} {}", op_and_arg.opcode, s);
-    
-        drop(s);
-        // std::thread::sleep_ms(500);
+        h.print_instruction(op_and_arg);
     }
 
     match op_and_arg.opcode {
@@ -569,7 +567,7 @@ pub fn handle<T: InstructionHandler>(h: &mut T, op_and_arg: OpAndArg) -> Option<
         RET => {
             op_and_arg.none();
             h.ret();
-        }
+            }
         CALL => h.call(h.convert_snd(op_and_arg.snd())),
 
         HALT => {
@@ -682,6 +680,18 @@ impl Debug for OpAndArg {
                 a!(11) => &self.args.both,
             } })
             .finish()
+    }
+}
+
+impl Display for OpAndArg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.opcode.into_str())?;
+        unsafe { match self.opcode.arg_identity() {
+            a!(00) => Ok(()),
+            a!(01) => write!(f, " ${}", self.args.fst.into_str()),
+            a!(10) => write!(f, " {}{}", if matches!(self.args.snd, FullArg::Reg(_)) { "0, "} else { "" }, self.args.snd),
+            a!(11) => write!(f, " ${}, {}", self.args.both.0.into_str(), self.args.both.1),
+        } }
     }
 }
 
@@ -1297,6 +1307,18 @@ impl Reg {
             _ => None,
         }
     }
+    pub fn into_str(self) -> &'static str {
+        match self {
+            Self::Ac => "ac",
+            Self::Ab => "ab",
+            Self::Bp => "bp",
+            Self::Sp => "sp",
+            Self::Ba => "ba",
+            Self::Bb => "bb",
+            Self::Sr => "sr",
+            Self::Ds => "ds",
+        }
+    }
     /// Whether the value stored in this register is wide (otherwise a byte)
     pub const fn is_wide(&self) -> bool {
         use self::Reg::*;
@@ -1335,5 +1357,21 @@ impl FullArg {
             Byte(_) => false,
             Wide(_) => true,
         })
+    }
+}
+
+impl Display for FullArg {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            FullArg::Byte(b) => write!(f, "0x{:02x}", b),
+            FullArg::Wide(w) => write!(f, "0x{:03x}", w),
+            FullArg::Reg(r) => write!(f, "${}", r.into_str()),
+            FullArg::ImmRef(b, w) => write!(f, "{}[0x{:03x}]", if b { "~" } else { "" }, w),
+            FullArg::RegRef(b, r, o) => if o == 0 {
+                write!(f, "{}[${}]", if b { "~" } else { "" }, r.into_str())
+            } else {
+                write!(f, "{}[${}{:+}]", if b { "~" } else { "" }, r.into_str(), o)
+            }
+        }
     }
 }

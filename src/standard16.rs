@@ -13,6 +13,8 @@ pub type StandardMachine = Machine<u16, Memory16Bit, StandardCpu>;
 pub struct StandardCpu {
     #[cfg(feature = "ops")]
     pub ops: u32,
+    #[cfg(feature = "print_instruction")]
+    pub indent: u32,
     pc: u16,
     stack_pointer: u16,
     base_pointer: u16,
@@ -305,12 +307,22 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     }
     #[inline]
     fn call(&mut self, location: Self::Snd) {
+        #[cfg(feature = "print_instruction")]
+        {
+            self.0.indent += 1;
+        }
+
         self.push(SecArgs::Wide(self.0.pc));
 
         self.0.pc = location.u16();
     }
     #[inline(always)]
     fn ret(&mut self) {
+        #[cfg(feature = "print_instruction")]
+        {
+            self.0.indent -= 1;
+        }
+
         self.0.pc = self.1.read_index(self.0.stack_pointer);
         
         self.0.stack_pointer += 2;
@@ -401,8 +413,12 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     }
     fn int1(&mut self) -> Option<Self::InterruptSignal> {
         let mut bytes = [0];
-        std::io::stdin().read_exact(&mut bytes).unwrap();
-        *self.0.accumulator.borrow_mut() = bytes[0];
+        let read = std::io::stdin().read(&mut bytes).unwrap();
+        if read == 0 {
+            *self.0.accumulator.borrow_mut() = 0x04u8;
+        } else {
+            *self.0.accumulator.borrow_mut() = bytes[0];
+        }
         None
     }
     fn int2(&mut self) -> Option<Self::InterruptSignal> {
@@ -452,6 +468,14 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
 
         None
     }
+
+    #[cfg(feature = "print_instruction")]
+    fn print_instruction(&self, op_and_arg: OpAndArg) {
+        for _ in 0..self.0.indent {
+            eprint!("  ");
+        }
+        eprintln!("    {}", op_and_arg);
+    }
 }
 
 impl StandardCpu {
@@ -459,6 +483,8 @@ impl StandardCpu {
         StandardCpu {
             #[cfg(feature = "ops")]
             ops: 0,
+            #[cfg(feature = "print_instruction")]
+            indent: 0,
             pc: start,
             stack_pointer: 0xffff,
             base_pointer: 0xffff,
