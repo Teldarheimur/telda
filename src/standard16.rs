@@ -16,10 +16,10 @@ pub struct StandardCpu {
     pc: u16,
     stack_pointer: u16,
     base_pointer: u16,
+    accumulator: SplittableWord,
+    b_accum: SplittableWord,
     source_pointer: u16,
     destination_pointer: u16,
-    accumulator: SplittableWord,
-    b_counter: SplittableWord,
     flags: u8,
 }
 
@@ -293,8 +293,8 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     }
     fn smv(&mut self) {
         let incrementing = self.0.flags & flags::DIR != 0;
-        let b = self.1.read(self.1.read_index(self.0.source_pointer));
-        self.1.write(self.1.read_index(self.0.destination_pointer), b);
+        let b = self.1.read(self.0.source_pointer);
+        self.1.write(self.0.destination_pointer, b);
         if incrementing {
             self.0.source_pointer += 1;
             self.0.destination_pointer += 1;
@@ -434,9 +434,16 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     #[inline(always)]
     fn int13(&mut self) -> Option<Self::InterruptSignal> { None }
     #[inline(always)]
-    fn int14(&mut self) -> Option<Self::InterruptSignal> { None }
+    fn int14(&mut self) -> Option<Self::InterruptSignal> {
+        let sr = self.1.read(self.0.source_pointer);
+        let ds = self.1.read(self.0.destination_pointer);
+        eprintln!("[$sr]: {:02x} {:?} {0:3}   [$ds]: {:02x} {:?} {2:3}",
+            sr, sr as char, ds, ds as char);
+
+        None
+    }
     fn int15(&mut self) -> Option<Self::InterruptSignal> {
-        eprintln!("{:x?}", self.0);
+        eprintln!("{:#x?}", self.0);
         let mut stack = Vec::with_capacity((0xffff - self.0.stack_pointer) as usize);
         for i in self.0.stack_pointer..0xffff {
             stack.push(self.1.read(i));
@@ -458,7 +465,7 @@ impl StandardCpu {
             source_pointer: 0,
             destination_pointer: 0,
             accumulator: 0.into(),
-            b_counter: 0.into(),
+            b_accum: 0.into(),
             flags: flags::DEFAULT,
         }
     }
@@ -469,8 +476,8 @@ impl StandardCpu {
             Reg::Bp => Ok(self.base_pointer),
             Reg::Sr => Ok(self.source_pointer),
             Reg::Ds => Ok(self.destination_pointer),
-            Reg::Ba => Ok(*self.b_counter.borrow()),
-            Reg::Bb => Err(*self.b_counter.borrow()),
+            Reg::Ba => Ok(*self.b_accum.borrow()),
+            Reg::Bb => Err(*self.b_accum.borrow()),
             Reg::Ac => Ok(*self.accumulator.borrow()),
             Reg::Ab => Err(*self.accumulator.borrow()),
         }
@@ -482,8 +489,8 @@ impl StandardCpu {
             Reg::Bp => Ok(&mut self.base_pointer),
             Reg::Sr => Ok(&mut self.source_pointer),
             Reg::Ds => Ok(&mut self.destination_pointer),
-            Reg::Ba => Ok(self.b_counter.borrow_mut()),
-            Reg::Bb => Err(self.b_counter.borrow_mut()),
+            Reg::Ba => Ok(self.b_accum.borrow_mut()),
+            Reg::Bb => Err(self.b_accum.borrow_mut()),
             Reg::Ac => Ok(self.accumulator.borrow_mut()),
             Reg::Ab => Err(self.accumulator.borrow_mut()),
         }
