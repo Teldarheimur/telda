@@ -269,28 +269,38 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
 
         let source_location = cpu.source_pointer;
 
-        match cpu.reg_mut(reg) {
+        let inc = match cpu.reg_mut(reg) {
             Err(b) => {
                 *b = memory.read(source_location);
-                self.0.source_pointer += 1;
+                1
             }
             Ok(w) => {
                 *w = memory.read_index(source_location);
-                self.0.source_pointer += 2;
+                2
             }
+        };
+        if cpu.flags & flags::DIR != 0 {
+            cpu.source_pointer += inc;
+        } else {
+            cpu.source_pointer -= inc;
         }
     }
 
     fn sstore(&mut self, val: Self::Snd) {
-        match val {
+        let inc  = match val {
             SecArgs::Byte(b) => {
                 self.1.write(self.0.destination_pointer, b);
-                self.0.destination_pointer += 1;
+                1
             }
             SecArgs::Wide(w) => {
                 self.1.write_index(self.0.destination_pointer, w);
-                self.0.destination_pointer += 2;
+                2
             }
+        };
+        if self.0.flags & flags::DIR != 0 {
+            self.0.destination_pointer += inc;
+        } else {
+            self.0.destination_pointer -= inc;
         }
     }
     fn smv(&mut self) {
