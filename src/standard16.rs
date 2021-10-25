@@ -1,7 +1,6 @@
 use super::{Machine, Memory, Memory16Bit, Cpu, Signal};
-use crate::is::*;
+use crate::{MachineInterrupt, is::*};
 use crate::wrappers::SplittableWord;
-use std::io::{Write, Read};
 use std::fmt::Debug;
 use std::borrow::{Borrow, BorrowMut};
 
@@ -22,6 +21,7 @@ pub struct StandardCpu {
     b_accum: SplittableWord,
     source_pointer: u16,
     destination_pointer: u16,
+    interrupt_handler: u16,
     flags: u8,
 }
 
@@ -241,6 +241,9 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
         };
         self.0.stack_pointer += width;
     }
+    fn set_interrupt_handler(&mut self, snd: Self::Snd) {
+        self.0.interrupt_handler = snd.u16();
+    }
     fn store_at_stack_offset(&mut self, reg: Self::Fst, val: Self::Snd) {
         let (cpu, memory) = self;
 
@@ -409,26 +412,24 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     }
 
     fn int0(&mut self) -> Option<Self::InterruptSignal> {
-        Some(Signal::PowerOff)
+        if self.0.flags & flags::TRP != 0 {
+            self.0.pop_registers(self.1);
+            None
+        } else {
+            Some(Signal::PowerOff)
+        }
     }
     fn int1(&mut self) -> Option<Self::InterruptSignal> {
-        let mut bytes = [0];
-        let read = std::io::stdin().read(&mut bytes).unwrap();
-        if read == 0 {
-            *self.0.accumulator.borrow_mut() = 0x04u8;
-        } else {
-            *self.0.accumulator.borrow_mut() = bytes[0];
-        }
+        self.0.trigger_interrupt(self.1, MachineInterrupt::In(*self.0.accumulator.borrow()));
         None
     }
+    #[inline(always)]
     fn int2(&mut self) -> Option<Self::InterruptSignal> {
-        std::io::stdout().write_all(&[*self.0.accumulator.borrow()]).unwrap();
-        None
+        // Signal that something needs to be read from the CPU (to stdout)
+        Some(Signal::Read)
     }
-    fn int3(&mut self) -> Option<Self::InterruptSignal> {
-        std::io::stderr().write_all(&[*self.0.accumulator.borrow()]).unwrap();
-        None
-    }
+    #[inline(always)]
+    fn int3(&mut self) -> Option<Self::InterruptSignal> { None }
     #[inline(always)]
     fn int4(&mut self) -> Option<Self::InterruptSignal> { None }
     #[inline(always)]
@@ -449,7 +450,6 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     fn int12(&mut self) -> Option<Self::InterruptSignal> { None }
     #[inline(always)]
     fn int13(&mut self) -> Option<Self::InterruptSignal> { None }
-    #[inline(always)]
     fn int14(&mut self) -> Option<Self::InterruptSignal> {
         let sr = self.1.read(self.0.source_pointer);
         let ds = self.1.read(self.0.destination_pointer);
@@ -492,6 +492,7 @@ impl StandardCpu {
             destination_pointer: 0,
             accumulator: 0.into(),
             b_accum: 0.into(),
+            interrupt_handler: 0xffff,
             flags: flags::DEFAULT,
         }
     }
@@ -571,12 +572,68 @@ impl StandardCpu {
 
         self.flags &= !flags::CMP_MASK;
     }
+    fn push_u8<'a, M: Memory<u16>>(&mut self, mem: &'a mut M, val: u8) {
+        self.stack_pointer -= 1;
+        mem.write(self.stack_pointer, val);
+    }
+    fn push_u16<'a, M: Memory<u16>>(&mut self, mem: &'a mut M, val: u16) {
+        self.stack_pointer -= 2;
+        mem.write_index(self.stack_pointer, val);
+    }
+    fn pop_u8<'a, M: Memory<u16>>(&mut self, mem: &'a mut M) -> u8 {
+        let val = mem.read(self.stack_pointer);
+        self.stack_pointer += 1;
+        val
+    }
+    fn pop_u16<'a, M: Memory<u16>>(&mut self, mem: &'a mut M) -> u16 {
+        let val = mem.read_index(self.stack_pointer);
+        self.stack_pointer += 2;
+        val
+    }
+    fn push_registers<'a, M: Memory<u16>>(&mut self, mem: &'a mut M) {
+        let &mut StandardCpu {
+            #[cfg(feature = "ops")]
+            ops: _,
+            #[cfg(feature = "print_instruction")]
+            indent: _,
+            pc,
+            stack_pointer,
+            base_pointer,
+            accumulator,
+            b_accum,
+            source_pointer,
+            destination_pointer,
+            interrupt_handler,
+            flags,
+        } = self;
+        self.push_u16(mem, pc);
+        self.push_u16(mem, stack_pointer);
+        self.push_u16(mem, base_pointer);
+        self.push_u16(mem, *accumulator.borrow());
+        self.push_u16(mem, *b_accum.borrow());
+        self.push_u16(mem, source_pointer);
+        self.push_u16(mem, destination_pointer);
+        self.push_u16(mem, interrupt_handler);
+        self.push_u8(mem, flags);
+    }
+    fn pop_registers<'a, M: Memory<u16>>(&mut self, mem: &'a mut M) {
+        self.flags = self.pop_u8(mem);
+        self.interrupt_handler = self.pop_u16(mem);
+        self.destination_pointer = self.pop_u16(mem);
+        self.source_pointer = self.pop_u16(mem);
+        *self.b_accum.borrow_mut() = self.pop_u16(mem);
+        *self.accumulator.borrow_mut() = self.pop_u16(mem);
+        self.base_pointer = self.pop_u16(mem);
+        self.stack_pointer = self.pop_u16(mem);
+        self.pc = self.pop_u16(mem);
+    }
 }
 
 use std::ops::{BitAnd, BitOr, BitXor};
 
 impl Cpu for StandardCpu {
     type Index = u16;
+    type Interrupt = MachineInterrupt;
 
     fn run<'a, M: Memory<Self::Index>>(&'a mut self, memory: &'a mut M) -> Option<Signal> {
         let (op_and_arg, len) = read_instruction(memory.read_iter_from(self.pc));
@@ -588,5 +645,37 @@ impl Cpu for StandardCpu {
         }
 
         handle(&mut (self, memory), op_and_arg)
+    }
+
+    fn ready_for_interrupt(&mut self) -> bool {
+        self.flags & flags::TRP != 0
+    }
+
+    fn trigger_interrupt<'a, M: Memory<Self::Index>>(&'a mut self, mem: &'a mut M, interrupt: Self::Interrupt) {
+        use self::MachineInterrupt::*;
+
+        if self.interrupt_handler == 0xffff {
+            // Ignore interrupts if no handler is set
+            return
+        }
+
+        self.push_registers(mem);
+
+        self.flags |= flags::TRP;
+        match interrupt {
+            Eof => {
+                *self.b_accum.borrow_mut() = 0u16;
+                *self.accumulator.borrow_mut() = 0x04u16;
+            }
+            In(b) => {
+                *self.b_accum.borrow_mut() = 1u16;
+                *self.accumulator.borrow_mut() = b as u16;
+            }
+        }
+        self.pc = self.interrupt_handler;
+    }
+
+    fn read_out_port(&mut self) -> u8 {
+        *self.accumulator.borrow()
     }
 }

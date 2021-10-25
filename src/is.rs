@@ -171,7 +171,7 @@ instructions!{Opcode; 0x50..=0xff =>
     /// Group 2 reserved instruction 3
     RES3; 00 => 0x23;
     /// Group 2 reserved instruction 4
-    RES4; 00 => 0x24;
+    SIH, "sih"; 10 => 0x24;
     /// Sets the direction flag to 0, making `smv` decrement
     SDN, "sdn"; 00 => 0x25;
     /// Sets the direction flag to 1, making `smv` increment
@@ -309,6 +309,7 @@ pub trait InstructionHandler {
 
     fn push(&mut self, snd: Self::Snd);
     fn pop(&mut self, reg: Self::Fst);
+    fn set_interrupt_handler(&mut self, snd: Self::Snd);
     fn store_at_stack_offset(&mut self, reg: Self::Fst, val: Self::Snd);
     fn setd(&mut self, direction: bool);
     fn sload(&mut self, reg: Self::Fst);
@@ -366,7 +367,7 @@ pub fn handle<T: InstructionHandler>(h: &mut T, op_and_arg: OpAndArg) -> Option<
 
     match op_and_arg.opcode {
         NOP => (),
-        RES0 | RES1 | RES2 | RES3 | RES4 | RESARITE | RESARITF => panic!("RESERVED"),
+        RES0 | RES1 | RES2 | RES3 | RESARITE | RESARITF => panic!("RESERVED"),
         INVALID => panic!("Invalid instruction call!"),
         LOADA => {
             let snd = op_and_arg.snd();
@@ -550,6 +551,7 @@ pub fn handle<T: InstructionHandler>(h: &mut T, op_and_arg: OpAndArg) -> Option<
             h.store_at_stack_offset(h.convert_fst(fst), h.convert_snd(snd));
         }
 
+        SIH => h.set_interrupt_handler(h.convert_snd(op_and_arg.snd())),
         SDP => {
             op_and_arg.none();
             h.setd(true);

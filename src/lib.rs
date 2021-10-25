@@ -1,3 +1,7 @@
+use std::io::{Read, Write, stdin, stdout};
+use std::thread::spawn;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}, mpsc::{sync_channel, TryRecvError}};
+
 use byteorder::{LittleEndian, ByteOrder};
 
 pub trait Memory<I> {
@@ -89,14 +93,31 @@ impl_prim!{
 
 pub trait Cpu {
     type Index;
+    type Interrupt;
 
     /// Run for one cycle
     fn run<'a, M: Memory<Self::Index>>(&'a mut self, mem: &'a mut M) -> Option<Signal>;
+    /// Whether the CPU is not currently blocking interrupts
+    /// and is therefore ready to receive an interrupt
+    fn ready_for_interrupt(&mut self) -> bool;
+    /// Trigger the given interrupt
+    fn trigger_interrupt<'a, M: Memory<Self::Index>>(&'a mut self, mem: &'a mut M, interrupt: Self::Interrupt);
+    /// Read from the out port
+    /// 
+    /// This is probably garbage if `run` hasn't sent a `Signal::Read`
+    fn read_out_port(&mut self) -> u8;
 }
 
 pub enum Signal {
     PowerOff,
     Restart,
+    Read,
+}
+
+#[derive(Debug, Copy, Clone)]
+pub enum MachineInterrupt {
+    In(u8),
+    Eof,
 }
 
 #[derive(Debug, Clone)]
@@ -105,7 +126,7 @@ pub struct Machine<I, M: Memory<I>, Cp: Cpu<Index = I>> {
     pub cpu: Cp,
 }
 
-impl<I, M: Memory<I>, Cp: Cpu<Index = I>> Machine<I, M, Cp> {
+impl<I, M: Memory<I>, Cp: Cpu<Index = I, Interrupt = MachineInterrupt>> Machine<I, M, Cp> {
     pub fn new(memory: M, cpu: Cp) -> Self {
         Machine {
             memory,
@@ -113,16 +134,43 @@ impl<I, M: Memory<I>, Cp: Cpu<Index = I>> Machine<I, M, Cp> {
         }
     }
     pub fn run(&mut self) {
-        let signal = loop {
-            if let Some(s) = self.cpu.run(&mut self.memory) {
-                break s;
-            }
-        };
+        let running = Arc::new(AtomicBool::new(true));
+        let (tx, rx) = sync_channel(4);
 
-        match signal {
-            Signal::PowerOff => (),
-            Signal::Restart => unimplemented!(),
+        let thread_running = running.clone();
+
+        let thr = spawn(move || {
+            while thread_running.load(Ordering::SeqCst) {
+                let mut buf = [0];
+
+                match stdin().read(&mut buf) {
+                    Ok(0) => tx.send(MachineInterrupt::Eof).unwrap(),
+                    Ok(_) => tx.send(MachineInterrupt::In(buf[0])).unwrap(),
+                    Err(e) => panic!("{:?}", e),
+                }
+            }
+        });
+
+        loop {
+            if let Some(s) = self.cpu.run(&mut self.memory) {
+                match s {
+                    Signal::PowerOff => (),
+                    Signal::Read => {
+                        stdout().write_all(&[self.cpu.read_out_port()]).unwrap();
+                    }
+                    Signal::Restart => unimplemented!(),
+                }
+                break
+            }
+
+            match rx.try_recv() {
+                Ok(int) => self.cpu.trigger_interrupt(&mut self.memory, int),
+                Err(TryRecvError::Empty | TryRecvError::Disconnected) => (),
+            }
         }
+
+        running.store(false, Ordering::SeqCst);
+        thr.join().unwrap();
     }
 }
 
