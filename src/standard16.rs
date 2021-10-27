@@ -482,7 +482,7 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     #[cfg(feature = "print_instruction")]
     fn print_instruction(&self, op_and_arg: OpAndArg) {
         for _ in 0..self.0.indent {
-            eprint!("  ");
+            eprint!("    ");
         }
         eprintln!("    {}", op_and_arg);
     }
