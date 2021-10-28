@@ -21,6 +21,7 @@ macro_rules! instructions {
         }
 
         // This is here to make sure all opcodes are defined
+        #[deny(unreachable_patterns)]
         fn _dummy(n: u8) {
             match n {
                 $invalid_opcode => (),
