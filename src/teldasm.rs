@@ -1,3 +1,5 @@
+#![allow(dead_code)]
+
 use std::io::Read;
 use std::fmt::{self, Display};
 
@@ -266,7 +268,7 @@ pub fn password_src() -> Source {
     ]
 }
 
-pub fn read_source<R: Read>(r: R) -> Result<Source, ()> {
+pub fn read_source<R: Read>(_r: R) -> Result<Source, ()> {
     todo!()
 }
 
