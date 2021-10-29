@@ -346,7 +346,7 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     fn ret(&mut self) {
         #[cfg(feature = "print_instruction")]
         {
-            self.0.indent -= 1;
+            self.0.indent = self.0.indent.saturating_sub(1);
         }
 
         self.0.pc = self.1.read_index(self.0.stack_pointer);
