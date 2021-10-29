@@ -140,8 +140,8 @@ instructions!{Opcode; 0x50..=0xff =>
     ORAT, "or"; 11 => 0x0b;
     XORA, "xor"; 10 => 0x0c;
     XORAT, "xor"; 11 => 0x0d;
-    NOTA, "not"; 10 => 0x0e;
-    NOTAT, "not"; 11 => 0x0f;
+    NOT, "not"; 01 => 0x0e;
+    NEG, "neg"; 01 => 0x0f;
 
     INCA, "inc", "add"; 00 => 0x10;
     INCAT, "inc", "add"; 01 => 0x11;
@@ -206,48 +206,46 @@ instructions!{Opcode; 0x50..=0xff =>
     CALL, "call"; 10 => 0x2c;
     /// Return
     RET, "ret"; 00 => 0x2d;
+    /// Return and afterwards move stack pointer so as
+    /// to deallocate _n_ bytes, where n is the argument given)
+    RETADDSP, "ret"; 10 => 0x2e;
     /// Store at stack offset
     /// 
     /// Writes to [$sp+val] from given register
-    SAS, "sas"; 11 => 0x2e;
+    SAS, "sas"; 11 => 0x2f;
     /// No operation
-    NOP, "nop"; 00 => 0x2f;
+    NOP, "nop"; 00 => 0x30;
 
-    // RGLZ (all = overflow)
-    // relative greater less zero
-    /// Jump to address in given value
-    JUMP, "jmp", "jump"; 10 => 0x30;
-    /// Jump to address plus given value interpreted as signed
-    JMPR, "jmpr"; 10 => 0x38;
-
-    /// Jump to address in given value, if the zero flag is set
-    JEZ, "jez"; 10 => 0x31;
-    /// Jump to address plus given value interpreted as signed, if the zero flag is set
-    JEZR, "jezr"; 10 => 0x39;
-    /// Jump to address in given value, if the less-than flag is set
-    JLT, "jlt"; 10 => 0x32;
-    /// Jump to address plus given value interpreted as signed, if the less-than flag is set
-    JLTR, "jltr"; 10 => 0x3a;
-    /// Jump to address in given value, if the less-than or equals flag is set
-    JLE, "jle"; 10 => 0x33;
-    /// Jump to address plus given value interpreted as signed, if the less-than or equals flag is set
-    JLER, "jler"; 10 => 0x3b;
-    /// Jump to address in given value, if the greater-than flag is set
-    JGT, "jgt"; 10 => 0x34;
-    /// Jump to address plus given value interpreted as signed, if the greater-than flag is set
-    JGTR, "jgtr"; 10 => 0x3c;
-    /// Jump to address in given value, if the greater-than or equals flag is set
-    JGE, "jge"; 10 => 0x35;
-    /// Jump to address plus given value interpreted as signed, if the greater-than or equals flag is set
-    JGER, "jger"; 10 => 0x3d;
-    /// Jump to address in given value, if either the greater-than or less-than is set (not the zero flag)
+    /// Jump, if overflow flag is set
+    JOF, "jof"; 10 => 0x31;
+    /// Jump, if overflow flag is not set
+    JNO, "jno"; 10 => 0x32;
+    /// Jump, if sign flag is set
+    JSB, "jsb", "js"; 10 => 0x33;
+    /// Jump, if sign flag is not set
+    JNS, "jns"; 10 => 0x34;
+    /// Jump, if zero flag is set
+    JEZ, "jez"; 10 => 0x35;
+    /// Jump, if zero flag is not set
     JNE, "jne", "jnz"; 10 => 0x36;
-    /// Jump to address plus given value interpreted as signed, if either the greater-than or less-than is set (not the zero flag)
-    JNER, "jner"; 10 => 0x3e;
-    /// Jump to address in given value, if the overflow flag is set.
-    JIO, "jio"; 10 => 0x37;
-    /// Jump to address plus given value interpreted as signed, if the overflow flag is set.
-    JIOR, "jior"; 10 => 0x3f;
+    /// Jump, if carry flag is set (unsigned below)
+    JCA, "jca", "jb", "jnae"; 10 => 0x37;
+    /// Jump, if carry flag is not set (unsigned above or equals)
+    JNC, "jnc", "jnb", "jae"; 10 => 0x38;
+    /// Jump, if carry or zero flag is set (unsigned below or equals)
+    JCZ, "jcz", "jbe", "jna"; 10 => 0x39;
+    /// Jump, if carry and zero are both not set (unsigned above)
+    JNCZ, "ja", "jnbe"; 10 => 0x3a;
+    /// Jump, if signed and overflow flag are different (signed less than)
+    JLT, "jlt"; 10 => 0x3b;
+    /// Jump, if signed and overflow flag are the same (signed greater than or equals)
+    JGE, "jge", "jnl"; 10 => 0x3c;
+    /// Jump, if signed and overflow flag are different, _and_ the zero flag is set (signed less than or equals)
+    JLE, "jle", "jng"; 10 => 0x3d;
+    /// Jump, if signed and overflow flag are the same, _and_ the zero flag is not set (signed greater than)
+    JGT, "jgt"; 10 => 0x3e;
+    /// Jump to address in given value, unconditionally
+    JUMP, "jmp", "jump"; 10 => 0x3f;
 
     /// Interrupt 0, more commonly known as halt, marks the end of a program
     HALT, "halt", "int0"; 00 => 0x40;
@@ -298,7 +296,8 @@ pub trait InstructionHandler {
     fn and(&mut self, reg: Self::Fst, val: Self::Snd);
     fn or(&mut self, reg: Self::Fst, val: Self::Snd);
     fn xor(&mut self, reg: Self::Fst, val: Self::Snd);
-    fn not(&mut self, reg: Self::Fst, val: Self::Snd);
+    fn not(&mut self, reg: Self::Fst);
+    fn neg(&mut self, reg: Self::Fst);
     
     fn inc(&mut self, reg: Self::Fst);
     fn dec(&mut self, reg: Self::Fst);
@@ -317,23 +316,42 @@ pub trait InstructionHandler {
     fn smv(&mut self);
     fn call(&mut self, location: Self::Snd);
     fn ret(&mut self);
+    /// Equivalent to `ret` and then `add $sp, bytes_to_deallocate`
+    /// although that wouldn't be possible and that `add` instrunction
+    /// would have to be after the corresponding `call`
+    /// 
+    /// This is just a help for caller cleanup calling conventions
+    fn ret_add_sp(&mut self, bytes_to_deallocate: Self::Snd);
 
     fn jump(&mut self, location: Self::Snd);
-    fn jumpr(&mut self, location: Self::Snd);
+    /// Jump, if overflow flag is set
+    fn jof(&mut self, location: Self::Snd);
+    /// Jump, if overflow flag is not set
+    fn jno(&mut self, location: Self::Snd);
+    /// Jump, if sign flag is set
+    fn jsb(&mut self, location: Self::Snd);
+    /// Jump, if sign flag is not set
+    fn jns(&mut self, location: Self::Snd);
+    /// Jump, if zero flag is set
     fn jez(&mut self, location: Self::Snd);
-    fn jezr(&mut self, location: Self::Snd);
-    fn jlt(&mut self, location: Self::Snd);
-    fn jltr(&mut self, location: Self::Snd);
-    fn jle(&mut self, location: Self::Snd);
-    fn jler(&mut self, location: Self::Snd);
-    fn jgt(&mut self, location: Self::Snd);
-    fn jgtr(&mut self, location: Self::Snd);
-    fn jge(&mut self, location: Self::Snd);
-    fn jger(&mut self, location: Self::Snd);
+    /// Jump, if zero flag is not set
     fn jne(&mut self, location: Self::Snd);
-    fn jner(&mut self, location: Self::Snd);
-    fn jio(&mut self, location: Self::Snd);
-    fn jior(&mut self, location: Self::Snd);
+    /// Jump, if carry flag is set (unsigned below)
+    fn jca(&mut self, location: Self::Snd);
+    /// Jump, if carry flag is not set (unsigned above or equals)
+    fn jnc(&mut self, location: Self::Snd);
+    /// Jump, if carry or zero flag are set (unsigned below or equals)
+    fn jcz(&mut self, location: Self::Snd);
+    /// Jump, if carry and zero are both not set (unsigned above)
+    fn jncz(&mut self, location: Self::Snd);
+    /// Jump, if signed and overflow flag are different (signed less than)
+    fn jlt(&mut self, location: Self::Snd);
+    /// Jump, if signed and overflow flag are the same (signed greater than or equals)
+    fn jge(&mut self, location: Self::Snd);
+    /// Jump, if signed and overflow flag are different, or the zero flag is set (signed less than or equals)
+    fn jle(&mut self, location: Self::Snd);
+    /// Jump, if signed and overflow flag are the same, _and_ the zero flag is not set (signed greater than)
+    fn jgt(&mut self, location: Self::Snd);
 
     fn int0(&mut self) -> Option<Self::InterruptSignal>;
     fn int1(&mut self) -> Option<Self::InterruptSignal>;
@@ -512,38 +530,35 @@ pub fn handle<T: InstructionHandler>(h: &mut T, op_and_arg: OpAndArg) -> Option<
 
             h.xor(h.convert_fst(fst), h.convert_snd(snd));
         }
-        NOTA => {
-            let snd = op_and_arg.snd();
-            let reg = Reg::new(snd.is_wide().unwrap_or_else(|b| b));
+        NOT => {
+            let fst = op_and_arg.fst();
 
-            h.not(h.convert_fst(reg), h.convert_snd(snd));
+            h.not(h.convert_fst(fst));
         }
-        NOTAT => {
-            let (fst, snd) = op_and_arg.both();
+        NEG => {
+            let fst = op_and_arg.fst();
 
-            h.not(h.convert_fst(fst), h.convert_snd(snd));
+            h.neg(h.convert_fst(fst));
         }
 
         JUMP => {
             h.jump(h.convert_snd(op_and_arg.snd()));
         }
-        JMPR => {
-            h.jumpr(h.convert_snd(op_and_arg.snd()));
-        }
+        
+        JOF => h.jof(h.convert_snd(op_and_arg.snd())),
+        JNO => h.jno(h.convert_snd(op_and_arg.snd())),
+        JSB => h.jsb(h.convert_snd(op_and_arg.snd())),
+        JNS => h.jns(h.convert_snd(op_and_arg.snd())),
         JEZ => h.jez(h.convert_snd(op_and_arg.snd())),
-        JEZR => h.jezr(h.convert_snd(op_and_arg.snd())),
-        JLT => h.jlt(h.convert_snd(op_and_arg.snd())),
-        JLTR => h.jltr(h.convert_snd(op_and_arg.snd())),
-        JLE => h.jle(h.convert_snd(op_and_arg.snd())),
-        JLER => h.jler(h.convert_snd(op_and_arg.snd())),
-        JGT => h.jgt(h.convert_snd(op_and_arg.snd())),
-        JGTR => h.jgtr(h.convert_snd(op_and_arg.snd())),
-        JGE => h.jge(h.convert_snd(op_and_arg.snd())),
-        JGER => h.jger(h.convert_snd(op_and_arg.snd())),
         JNE => h.jne(h.convert_snd(op_and_arg.snd())),
-        JNER => h.jner(h.convert_snd(op_and_arg.snd())),
-        JIO => h.jio(h.convert_snd(op_and_arg.snd())),
-        JIOR => h.jior(h.convert_snd(op_and_arg.snd())),
+        JCA => h.jca(h.convert_snd(op_and_arg.snd())),
+        JNC => h.jnc(h.convert_snd(op_and_arg.snd())),
+        JCZ => h.jcz(h.convert_snd(op_and_arg.snd())),
+        JNCZ => h.jncz(h.convert_snd(op_and_arg.snd())),
+        JLT => h.jlt(h.convert_snd(op_and_arg.snd())),
+        JGE => h.jge(h.convert_snd(op_and_arg.snd())),
+        JLE => h.jle(h.convert_snd(op_and_arg.snd())),
+        JGT => h.jgt(h.convert_snd(op_and_arg.snd())),
         PUSH => h.push(h.convert_snd(op_and_arg.snd())),
         POP => h.pop(h.convert_fst(op_and_arg.fst())),
         SAS => {
@@ -568,7 +583,8 @@ pub fn handle<T: InstructionHandler>(h: &mut T, op_and_arg: OpAndArg) -> Option<
         RET => {
             op_and_arg.none();
             h.ret();
-            }
+        }
+        RETADDSP => h.ret_add_sp(h.convert_snd(op_and_arg.snd())),
         CALL => h.call(h.convert_snd(op_and_arg.snd())),
 
         HALT => {

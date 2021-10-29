@@ -62,12 +62,15 @@ impl SecArgs {
 pub type CpuAndMemory<'a, M> = (&'a mut StandardCpu, &'a mut M);
 
 pub mod flags {
-    /// Overflow
+    /// Overflow (if signed arithmetic gave the wrong result)
     pub const OF : u8 = 0b1000_0000;
-    pub const GT : u8 = 0b0100_0000;
-    pub const LT : u8 = 0b0010_0000;
+    /// Sign bit
+    pub const SB : u8 = 0b0100_0000;
+    /// Carry (if unsigned arithmetic gave the wrong result)
+    pub const CA : u8 = 0b0010_0000;
+    /// Equals zero
     pub const EZ : u8 = 0b0001_0000;
-    pub const CMP_MASK: u8 = 0b1111_0000;
+    /// Direction of string operations (1 = incrementing, 0 = decrementing)
     pub const DIR: u8 = 0b0000_1000;
     pub const TRP: u8 = 0b0000_0100;
     pub const LF1: u8 = 0b0000_0010;
@@ -115,10 +118,17 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     }
 
     fn load(&mut self, reg: Self::Fst, val: Self::Snd) {
-        match self.0.reg_mut(reg) {
-            Err(b) => *b = val.u8(),
-            Ok(w) => *w = val.u16(),
-        }
+        let res = match self.0.reg_mut(reg) {
+            Err(b) => {
+                *b = val.u8();
+                *b as i8 as i16 as u16
+            }
+            Ok(w) => {
+                *w = val.u16();
+                *w
+            }
+        };
+        self.0.set_status_flags(res, false, false);
     }
     fn str(&mut self, reg: Self::Fst, location: Self::Snd){
         let (cpu, memory) = self;
@@ -131,40 +141,62 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
         }
     }
     #[inline]
-    fn cmp(&mut self, reg: Self::Fst, rhs: Self::Snd) {
-        let res = match self.0.reg_val(reg, rhs) {
-            Ok((wide, rhs)) => wide.cmp(&rhs),
-            Err((acc, rhs)) => acc.cmp(&rhs),
-        };
-
-        use std::cmp::Ordering::*;
-
-        self.0.flags &= !flags::CMP_MASK;
-        self.0.flags |= match res {
-            Greater => flags::GT,
-            Less => flags::LT,
-            Equal => flags::EZ,
-        };
+    fn cmp(&mut self, reg: Self::Fst, val: Self::Snd) {
+        // HACK
+        let stash_reg = self.0.reg(reg);
+        self.sub(reg, val);
+        match self.0.reg_mut(reg) {
+            Ok(r) => *r = stash_reg.unwrap(),
+            Err(r) => *r = stash_reg.unwrap_err(),
+        }
     }
 
     #[inline(always)]
     fn and(&mut self, reg: Self::Fst, val: Self::Snd) {
-        self.0.binop(reg, val, u8::bitand, u16::bitand)
+        self.0.binop_no_overflow(reg, val, u8::bitand, u16::bitand)
     }
     #[inline(always)]
     fn or(&mut self, reg: Self::Fst, val: Self::Snd) {
-        self.0.binop(reg, val, u8::bitor, u16::bitor)
+        self.0.binop_no_overflow(reg, val, u8::bitor, u16::bitor)
     }
     #[inline(always)]
     fn xor(&mut self, reg: Self::Fst, val: Self::Snd) {
-        self.0.binop(reg, val, u8::bitxor, u16::bitxor)
+        self.0.binop_no_overflow(reg, val, u8::bitxor, u16::bitxor)
     }
     #[inline(always)]
-    fn not(&mut self, reg: Self::Fst, val: Self::Snd) {
-        match self.0.reg_mut_val(reg, val) {
-            Ok((reg, val)) => *reg = !val,
-            Err((reg, val)) => *reg = !val,
-        }
+    fn not(&mut self, reg: Self::Fst) {
+        let res = match self.0.reg_mut(reg) {
+            Ok(reg) => {
+                *reg = !*reg;
+                *reg
+            }
+            Err(reg) => {
+                *reg = !*reg;
+                *reg as i8 as i16 as u16
+            }
+        };
+        self.0.set_status_flags(res, false, false);
+    }
+    #[inline(always)]
+    fn neg(&mut self, reg: Self::Fst) {
+        let carry = self.0
+            .reg(reg)
+            .map(|x| x == 0)
+            .unwrap_or_else(|x| x == 0);
+
+        let (result, overflow) = match self.0.reg_mut(reg) {
+            Ok(reg) => {
+                let (res, of) = (*reg as i16).overflowing_neg();
+                *reg = res as u16;
+                (*reg, of)
+            }
+            Err(reg) => {
+                let (res, of) = (*reg as i8).overflowing_neg();
+                *reg = res as u8;
+                (res as i16 as u16, of)
+            }
+        };
+        self.0.set_status_flags(result, overflow, carry);
     }
     
     #[inline(always)]
@@ -176,42 +208,23 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
         self.sub(reg, SecArgs::from_reg_with(reg, 1))
     }
     fn sub(&mut self, reg: Self::Fst, val: Self::Snd) {
-        let (is_zero, o) = match self.0.reg_mut_val(reg, val) {
-            Ok((reg, val)) => {
-                let (val, o) = reg.overflowing_sub(val);
-                *reg = val;
-                (val == 0, o) 
-            }
-            Err((reg, val)) => {
-                let (val, o) = reg.overflowing_sub(val);
-                *reg = val;
-                (val == 0, o) 
-            }
-        };
-        self.0.flags &= !flags::CMP_MASK;
-        self.0.flags |= if o {
-            flags::OF | flags::GT
-        } else if is_zero {
-            flags::EZ
-        } else {
-            flags::LT
-        };
+        self.0.binop_overflowing(reg, val, u8::overflowing_sub, u16::overflowing_sub, i8::overflowing_sub, i16::overflowing_sub)
     }
     #[inline(always)]
     fn add(&mut self, reg: Self::Fst, val: Self::Snd) {
-        self.0.binop_overflowing(reg, val, u8::overflowing_add, u16::overflowing_add)
+        self.0.binop_overflowing(reg, val, u8::overflowing_add, u16::overflowing_add, i8::overflowing_add, i16::overflowing_add)
     }
     #[inline(always)]
     fn mul(&mut self, reg: Self::Fst, val: Self::Snd) {
-        self.0.binop_overflowing(reg, val, u8::overflowing_mul, u16::overflowing_mul)
+        self.0.binop_overflowing(reg, val, u8::overflowing_mul, u16::overflowing_mul, i8::overflowing_mul, i16::overflowing_mul)
     }
     #[inline(always)]
     fn div(&mut self, reg: Self::Fst, val: Self::Snd) {
-        self.0.binop_overflowing(reg, val, u8::overflowing_div, u16::overflowing_div)
+        self.0.binop_overflowing(reg, val, u8::overflowing_div, u16::overflowing_div, i8::overflowing_div, i16::overflowing_div)
     }
     #[inline(always)]
     fn rem(&mut self, reg: Self::Fst, val: Self::Snd) {
-        self.0.binop_overflowing(reg, val, u8::overflowing_rem, u16::overflowing_rem)
+        self.0.binop_overflowing(reg, val, u8::overflowing_rem, u16::overflowing_rem, i8::overflowing_rem, i16::overflowing_rem)
     }
 
     fn push(&mut self, val: Self::Snd) {
@@ -257,25 +270,26 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
             Err(acc) => memory.write(location, acc),
         }
     }
+    #[inline]
     fn setd(&mut self, direction: bool) {
-        if direction {
-            self.0.flags |= flags::DIR;
-        } else {
-            self.0.flags &= !flags::DIR;
-        }
+        self.0.set_flag(flags::DIR, direction);
     }
     fn sload(&mut self, reg: Self::Fst) {
         let (cpu, memory) = self;
 
         let source_location = cpu.source_pointer;
 
+        let res;
+
         let inc = match cpu.reg_mut(reg) {
             Err(b) => {
                 *b = memory.read(source_location);
+                res = *b as i8 as i16 as u16;
                 1
             }
             Ok(w) => {
                 *w = memory.read_index(source_location);
+                res = *w;
                 2
             }
         };
@@ -284,6 +298,7 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
         } else {
             cpu.source_pointer -= inc;
         }
+        self.0.set_status_flags(res, false, false);
     }
 
     fn sstore(&mut self, val: Self::Snd) {
@@ -314,6 +329,7 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
             self.0.source_pointer -= 1;
             self.0.destination_pointer -= 1;
         }
+        self.0.set_status_flags(b as i8 as i16 as u16, false, false);
     }
     #[inline]
     fn call(&mut self, location: Self::Snd) {
@@ -337,84 +353,90 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
         
         self.0.stack_pointer += 2;
     }
+    #[inline(always)]
+    fn ret_add_sp(&mut self, bytes_to_deallocate: Self::Snd) {
+        self.ret();
+
+        self.0.stack_pointer += match bytes_to_deallocate {
+            SecArgs::Byte(b) => b as u16,
+            SecArgs::Wide(w) => w,
+        };
+    }
 
     #[inline(always)]
     fn jump(&mut self, location: Self::Snd) {
         self.0.pc = location.u16();
     }
-    #[inline(always)]
-    fn jumpr(&mut self, location: Self::Snd) {
-        self.0.pc = (self.0.pc as i16).wrapping_add(location.u16() as i16) as u16
-    }
 
+    fn jof(&mut self, location: Self::Snd) {
+        if self.0.get_flag(flags::OF) {
+            self.jump(location);
+        }
+    }
+    fn jno(&mut self, location: Self::Snd) {
+        if !self.0.get_flag(flags::OF) {
+            self.jump(location);
+        }
+    }
+    fn jsb(&mut self, location: Self::Snd) {
+        if self.0.get_flag(flags::SB) {
+            self.jump(location);
+        }
+    }
+    fn jns(&mut self, location: Self::Snd) {
+        if !self.0.get_flag(flags::SB) {
+            self.jump(location);
+        }
+    }
     fn jez(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::EZ != 0 {
+        if self.0.get_flag(flags::EZ) {
             self.jump(location);
-        }
-    }
-    fn jezr(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::EZ != 0 {
-            self.jumpr(location);
-        }
-    }
-    fn jlt(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::LT != 0 {
-            self.jump(location);
-        }
-    }
-    fn jltr(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::LT != 0 {
-            self.jumpr(location);
-        }
-    }
-    fn jle(&mut self, location: Self::Snd) {
-        if self.0.flags & (flags::LT | flags::EZ) != 0 {
-            self.jump(location);
-        }
-    }
-    fn jler(&mut self, location: Self::Snd) {
-        if self.0.flags & (flags::LT | flags::EZ) != 0 {
-            self.jumpr(location);
-        }
-    }
-    fn jgt(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::GT != 0 {
-            self.jump(location);
-        }
-    }
-    fn jgtr(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::GT != 0 {
-            self.jumpr(location);
-        }
-    }
-    fn jge(&mut self, location: Self::Snd) {
-        if self.0.flags & (flags::GT | flags::EZ) != 0 {
-            self.jump(location);
-        }
-    }
-    fn jger(&mut self, location: Self::Snd) {
-        if self.0.flags & (flags::GT | flags::EZ) != 0 {
-            self.jumpr(location);
         }
     }
     fn jne(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::EZ == 0 {
+        if !self.0.get_flag(flags::EZ) {
             self.jump(location);
         }
     }
-    fn jner(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::EZ == 0 {
-            self.jumpr(location);
-        }
-    }
-    fn jio(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::OF != 0 {
+    fn jca(&mut self, location: Self::Snd) {
+        if self.0.get_flag(flags::CA) {
             self.jump(location);
         }
     }
-    fn jior(&mut self, location: Self::Snd) {
-        if self.0.flags & flags::OF != 0 {
-            self.jumpr(location);
+    fn jnc(&mut self, location: Self::Snd) {
+        if !self.0.get_flag(flags::CA) {
+            self.jump(location);
+        }
+    }
+    fn jcz(&mut self, location: Self::Snd) {
+        if self.0.get_flag(flags::CA | flags::EZ) {
+            self.jump(location);
+        }
+    }
+    fn jncz(&mut self, location: Self::Snd) {
+        if !self.0.get_flag(flags::CA | flags::EZ) {
+            self.jump(location);
+        }
+    }
+
+    fn jlt(&mut self, location: Self::Snd) {
+        if self.0.get_flag(flags::SB) != self.0.get_flag(flags::OF) {
+            self.jump(location);
+        }
+    }
+    fn jge(&mut self, location: Self::Snd) {
+        if self.0.get_flag(flags::SB) == self.0.get_flag(flags::OF) {
+            self.jump(location);
+        }
+    }
+    fn jle(&mut self, location: Self::Snd) {
+        if self.0.get_flag(flags::EZ) || (self.0.get_flag(flags::SB) != self.0.get_flag(flags::OF)) {
+            self.jump(location);
+        }
+    }
+    fn jgt(&mut self, location: Self::Snd) {
+        if !self.0.get_flag(flags::EZ) && (self.0.get_flag(flags::SB) == self.0.get_flag(flags::OF)) {
+            self.jump(location);
         }
     }
 
@@ -488,6 +510,8 @@ impl<M: Memory<<StandardCpu as Cpu>::Index>> InstructionHandler for CpuAndMemory
     }
 }
 
+type BinOp<T> = fn(T, T) -> (T, bool);
+
 impl StandardCpu {
     pub fn new(start: u16) -> Self {
         StandardCpu {
@@ -532,13 +556,6 @@ impl StandardCpu {
         }
     }
     #[inline]
-    fn reg_val(&self, reg: Reg, val: SecArgs) -> Result<(u16, u16), (u8, u8)> {
-        match self.reg(reg) {
-            Ok(wide) => Ok((wide, val.u16())),
-            Err(acc) => Err((acc, val.u8())),
-        }
-    }
-    #[inline]
     #[track_caller]
     fn reg_mut_val(&mut self, reg: Reg, val: SecArgs) -> Result<(&mut u16, u16), (&mut u8, u8)> {
         match self.reg_mut(reg) {
@@ -547,39 +564,60 @@ impl StandardCpu {
         }
     }
 
-    #[inline]
-    fn binop_overflowing(&mut self, reg: Reg, sec: SecArgs, op: fn(u8, u8) -> (u8, bool), opw: fn(u16, u16) -> (u16, bool)) {
-        let (o, zero) = match self.reg_mut_val(reg, sec) {
-            Ok((reg, val)) => {
-                let (val, o) = opw(*reg, val);
-                *reg = val;
-                (o, val == 0)
-            }
-            Err((reg, val)) => {
-                let (val, o) = op(*reg, val);
-                *reg = val;
-                (o, val == 0)
-            }
-        };
-
-        self.flags &= !flags::CMP_MASK;
-        if zero {
+    fn set_status_flags(&mut self, result: u16, overflow: bool, carry: bool) {
+        self.flags &= !(flags::OF | flags::SB | flags::CA | flags::EZ);
+        if result == 0 {
             self.flags |= flags::EZ;
+        } else if (result as i16).is_negative() {
+            self.flags |= flags::SB;
         }
-        if o {
+        if overflow {
             self.flags |= flags::OF;
         }
+        if carry {
+            self.flags |= flags::CA;
+        }
+    }
+    fn set_flag(&mut self, flag: u8, set: bool) {
+        if set {
+            self.flags |= flag;
+        } else {
+            self.flags &= !flag;
+        }
+    }
+    const fn get_flag(&self, flag: u8) -> bool {
+        self.flags & flag != 0
+    }
+
+    #[inline]
+    fn binop_overflowing(&mut self, reg: Reg, sec: SecArgs, op: BinOp<u8>, opw: BinOp<u16>, iop: BinOp<i8>, iopw: BinOp<i16>) {
+        // Slightly hacky, but probably simplest
+        let (res, c, o) = match self.reg_mut_val(reg, sec) {
+            Ok((reg, val)) => {
+                let (res, c) = opw(*reg, val);
+                let (_ir, o) = iopw(*reg as i16, val as i16);
+
+                *reg = res;
+                (res, c, o)
+            }
+            Err((reg, val)) => {
+                let (res, c) = op(*reg, val);
+                let (_ir, o) = iop(*reg as i8, val as i8);
+
+                *reg = res;
+                (res as i8 as i16 as u16, c, o)
+            }
+        };
+        self.set_status_flags(res, o, c);
     }
     #[inline]
-    fn binop(&mut self, reg: Reg, sec: SecArgs, op: fn(u8, u8) -> u8, opw: fn(u16, u16) -> u16) {
+    fn binop_no_overflow(&mut self, reg: Reg, sec: SecArgs, op: fn(u8, u8) -> u8, opw: fn(u16, u16) -> u16) {
         match self.reg_mut_val(reg, sec) {
             Ok((reg, val)) => *reg = opw(*reg, val),
             Err((reg, val)) => *reg = op(*reg, val),
         }
 
-        // TODO set zero flag?
-
-        self.flags &= !flags::CMP_MASK;
+        self.set_status_flags(self.reg(reg).unwrap_or_else(|b| b as i8 as i16 as u16), false, false);
     }
 }
 

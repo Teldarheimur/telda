@@ -382,9 +382,15 @@ fn decode_number_or_string(text: &str) -> Result<Result<u16, u8>, &str> {
             _ => None,
         }.ok_or(text)
     } else if text.starts_with("~") {
-        text[1..].parse().map(Ok).map_err(|_| text)
+        text[1..]
+            .parse()
+            .map(Ok)
+            .or_else(|_| text[1..].parse::<i16>().map(|i| Ok(i as u16)))
+            .map_err(|_| text)
     } else if let Ok(b) = text.parse() {
         Ok(Err(b))
+    } else if let Ok(b) = text.parse::<i8>() {
+        Ok(Err(b as u8))
     } else {
         Err(text)
     }
