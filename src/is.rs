@@ -249,11 +249,11 @@ instructions!{Opcode; 0x50..=0xff =>
 
     /// Interrupt 0, more commonly known as halt, marks the end of a program
     HALT, "halt", "int0"; 00 => 0x40;
-    /// Interrupt 1, commonly means read from STDIN
-    INT1, "int1"; 00 => 0x41;
-    /// Interrupt 2, commonly means write to STDOUT
-    INT2, "int2"; 00 => 0x42;
-    /// Interrupt 3, commonly means write to STDERR
+    /// Read $ab from the in port (blocking); interrupt 1
+    WRT, "wrt", "int1"; 00 => 0x41;
+    /// Write $ab to the out port; interrupt 2
+    READ, "read", "int2"; 00 => 0x42;
+    /// Interrupt 3
     INT3, "int3"; 00 => 0x43;
     /// Interrupt 4
     INT4, "int4"; 00 => 0x44;
@@ -591,11 +591,11 @@ pub fn handle<T: InstructionHandler>(h: &mut T, op_and_arg: OpAndArg) -> Option<
             op_and_arg.none();
             return h.int0();
         }
-        INT1 => {
+        WRT => {
             op_and_arg.none();
             return h.int1();
         }
-        INT2 => {
+        READ => {
             op_and_arg.none();
             return h.int2();
         }
@@ -1234,7 +1234,7 @@ mod tests {
     }
     #[test]
     fn int2() {
-        test_read_write(OpAndArg::new_no(Opcode::INT2).unwrap());
+        test_read_write(OpAndArg::new_no(Opcode::READ).unwrap());
     }
     #[test]
     fn store_reg_ref_ac() {

@@ -1,7 +1,7 @@
 use std::{
     env::args,
     fs::File,
-    io::{Read},
+    io::{Read, stdin, stdout},
 };
 use telda::{
     TeldaEndian, Machine,
@@ -46,7 +46,7 @@ fn main() {
 
             drop(file);
 
-            let mut machine = Machine::new(memory, Cpu16::new(start));
+            let mut machine = Machine::new(memory, Cpu16::new(start, stdin(), stdout()));
             machine.run();
             #[cfg(feature = "ops")]
             println!("cycles: {}", machine.cpu.ops);
@@ -57,4 +57,3 @@ fn main() {
         }
     }
 }
-
