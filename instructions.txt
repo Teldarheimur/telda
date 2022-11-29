@@ -1,0 +1,57 @@
+REGS:
+0 zero (both sizes)
+1 al   (byte)
+2 ar   (byte)
+3 bl   (byte)
+4 a    (wide)
+5 b    (wide)
+6 x    (wide)
+7 y    (wide)
+
+OPERAND | SIZE | PURPOSE
+r       | 4 b  | a register, (can be followed by another r)
+R       | 8 b  | a register or an immediate number from 1 up to and including 240 (encoded as 0x10 to 0xff)
+br      | 8 b  | r1 = [0..4], r2 = [4..6] (zero, al, ar, bl), r3 = [6..8] (-||-)
+w       | 16 b | a wide immediate
+b       | 8 b  | a byte immediate
+
+INSTRUCION         | OPCODE | DESCRIPTION
+null               | 00     | invalid instruction, triggers invalid opcode fault (so do all opcodes not mentioned here)
+...                | 01-08  | ...
+write R            | 09     | write to out port (used for simple I/O)
+halt               | 0a     | halts processor, triggers halt fault
+read r             | 0b     | read from in port (used for simple I/O)
+...                | 0c-1f  | ...
+nop                | 20     |
+push R             | 21     |
+call w             | 22     |
+jmp w              | 23     |
+ret b              | 24     |
+pop r              | 25     |
+load r, R          | 26     |
+store R, R         | 27     |
+ldstk r, R         | 28     |
+ststk R, R         | 29     |
+jez R              | 2a     |
+jlt R              | 2b     |
+jle R              | 2c     |
+jgt R              | 2d     |
+jge R              | 2e     |
+jnz R              | 2f     |
+jo  R              | 30     |
+jno R              | 31     |
+jc  R              | 32     |
+jnc R              | 33     |
+ja  R              | 34     |
+jae R              | 35     |
+jb  R              | 36     |
+jbe R              | 37     |
+...                | 3a..40 | funny stuff
+add r1, r2, R      | 41     | r1 = r2 + R
+sub r1, r2, R      | 42     | r1 = r2 - R
+and r1, r2, R      | 43     | r1 = r2 & R
+or  r1, r2, R      | 44     | r1 = r2 | R
+xor r1, r2, R      | 45     | r1 = r2 ^ R
+mul r1, r2, r3, r4 | 46     | r2, r1 = r3 * r4 (r2 has the upper bytes)
+bmul br            | 47     | r1(wide) = r2(byte) * r3(byte)
+div r1, r2, r3, r4 | 48     | r1 = r3 / r4; r2 = r3 % r4
