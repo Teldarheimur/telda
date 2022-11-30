@@ -1,6 +1,19 @@
 pub trait Memory {
     fn read(&self, addr: u16) -> u8;
     fn write(&mut self, addr: u16, val: u8);
+
+    fn read_wide(&self, addr: u16) -> u16 {
+        let lower = self.read(addr);
+        let higher = self.read(addr+1);
+
+        u16::from_le_bytes([lower, higher])
+    }
+    fn write_wide(&mut self, addr: u16, val: u16) {
+        let [lower, higher] = val.to_le_bytes();
+
+        self.write(addr, lower);
+        self.write(addr+1, higher);
+    }
 }
 
 pub struct Lazy {

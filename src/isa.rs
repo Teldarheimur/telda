@@ -1,4 +1,4 @@
-pub struct Register(u8);
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Operand {
     Register(u8),
     /// 1-240
