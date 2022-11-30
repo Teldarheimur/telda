@@ -3,37 +3,37 @@ use std::io::{Write, Read};
 use crate::{cpu::{Registers, TrapMode, Register}, mem::Memory};
 
 #[inline]
-fn read_big_r(r: &mut Registers, m: &dyn Memory) -> u16 {
+pub fn read_big_r(r: &mut Registers, m: &dyn Memory) -> u16 {
     let operand = m.read(r.pc);
     r.pc += 1;
-    if operand >= 0x10 {
-        operand as u16 - 0x9
+    if operand >= 8 {
+        operand as u16 - 7
     } else {
         r.read(Register::new(operand))
     }
 }
 #[inline]
-fn read_registers(r: &mut Registers, m: &dyn Memory) -> (Register, Register) {
+pub fn read_registers(r: &mut Registers, m: &dyn Memory) -> (Register, Register) {
     let operand = m.read(r.pc);
     r.pc += 1;
     (Register::new(operand >> 4), Register::new(operand & 0xf))
 }
 #[inline]
-fn b_read_registers(r: &mut Registers, m: &dyn Memory) -> (Register, Register, Register) {
+pub fn b_read_registers(r: &mut Registers, m: &dyn Memory) -> (Register, Register, Register) {
     let operand = m.read(r.pc);
     r.pc += 1;
     (Register::new((operand & 0b1111_0000) >> 4), Register::new((operand & 0b0000_1100) >> 2), Register::new((operand & 0b0000_0011) >> 0))
 }
 #[inline]
-fn read_rh(r: &mut Registers, m: &dyn Memory) -> (Register, u16) {
+pub fn read_rh(r: &mut Registers, m: &dyn Memory) -> (Register, u16) {
     let low = m.read(r.pc);
     let high = m.read(r.pc+1);
     r.pc += 2;
     let r = Register::new(low >> 4);
-    (r, (((low & 0xf0) as u16) << 4)| (high as u16))
+    (r, u16::from_le_bytes([low & 0x0f, high]))
 }
 #[inline]
-fn read_hr(r: &mut Registers, m: &dyn Memory) -> (u16, Register) {
+pub fn read_hr(r: &mut Registers, m: &dyn Memory) -> (u16, Register) {
     let low = m.read(r.pc);
     let high = m.read(r.pc+1);
     r.pc += 2;
@@ -41,7 +41,7 @@ fn read_hr(r: &mut Registers, m: &dyn Memory) -> (u16, Register) {
     (((low as u16) << 4) | (high as u16 >> 4), r)
 }
 #[inline]
-fn read_wide(r: &mut Registers, m: &dyn Memory) -> u16 {
+pub fn read_wide(r: &mut Registers, m: &dyn Memory) -> u16 {
     let val = m.read_wide(r.pc);
     r.pc += 2;
     val
@@ -50,7 +50,7 @@ fn read_wide(r: &mut Registers, m: &dyn Memory) -> u16 {
 pub static OP_HANDLERS: [OpHandler; 256] = [
     invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, write, halt, read, invalid, invalid, invalid, invalid,
     invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    nop, push, call, jmp, ret, pop, ldstk, store, ststk, invalid, jez, jlt, jle, jgt, jge, jnz,
+    nop, push, call, jmp, ret, pop, ldstk, store, ststk, load, jez, jlt, jle, jgt, jge, jnz,
     jo, jno, jb, jae, ja, jbe, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
     invalid, add, sub, and, or, xor, mul, bmul, div, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
     invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
@@ -199,9 +199,9 @@ fn ldstk(r: &mut Registers, m: &mut dyn Memory) {
     let (reg, h) = read_rh(r, m);
 
     if reg.is_wide() {
-        r.write(reg, m.read_wide(r.sp - h));
+        r.write(reg, m.read_wide(r.sp + h));
     } else if reg.is_byte() {
-        r.write(reg, m.read(r.sp - h) as u16);
+        r.write(reg, m.read(r.sp + h) as u16);
     }
 }
 fn store(r: &mut Registers, m: &mut dyn Memory) {
@@ -217,69 +217,80 @@ fn ststk(r: &mut Registers, m: &mut dyn Memory) {
     let val = r.read(reg);
 
     if reg.is_wide() {
-        m.write_wide(r.sp - h, val);
+        m.write_wide(r.sp + h, val);
     } else {
-        m.write(r.sp - h, val as u8);
+        m.write(r.sp + h, val as u8);
+    }
+}
+fn load(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, r2) = read_registers(r, m);
+    let (r3, _) = read_registers(r, m);
+
+    let addr = r.read(r2) + r.read(r3);
+    if r1.is_wide() {
+        r.write(r1, m.read_wide(addr));
+    } else {
+        r.write(r1, m.read(addr) as u16);
     }
 }
 
 fn jez(r: &mut Registers, m: &mut dyn Memory) {
     if r.zero {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jlt(r: &mut Registers, m: &mut dyn Memory) {
     if r.sign != r.overflow {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jle(r: &mut Registers, m: &mut dyn Memory) {
     if r.sign != r.overflow && r.zero {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jgt(r: &mut Registers, m: &mut dyn Memory) {
     if r.sign == r.overflow && !r.zero {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jge(r: &mut Registers, m: &mut dyn Memory) {
     if r.sign == r.overflow {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jnz(r: &mut Registers, m: &mut dyn Memory) {
     if !r.zero {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jo(r: &mut Registers, m: &mut dyn Memory) {
     if r.overflow {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jno(r: &mut Registers, m: &mut dyn Memory) {
     if !r.overflow {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn ja(r: &mut Registers, m: &mut dyn Memory) {
     if !r.carry && !r.zero {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jae(r: &mut Registers, m: &mut dyn Memory) {
     if !r.carry {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jb(r: &mut Registers, m: &mut dyn Memory) {
     if r.carry {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }
 fn jbe(r: &mut Registers, m: &mut dyn Memory) {
     if r.carry || r.zero {
         jmp(r, m);
-    }
+    } else { r.pc += 2; }
 }

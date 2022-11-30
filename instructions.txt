@@ -10,7 +10,7 @@ REGS:
 
 OPERAND | SIZE | PURPOSE
 r       | 4 b  | a register, (can be followed by another r)
-R       | 8 b  | a register or an immediate number from 1 up to and including 240 (encoded as 0x10 to 0xff)
+R       | 8 b  | a register or an immediate number from 1 up to and including 247 (encoded as 0x08 to 0xff)
 br      | 2 b  | a byte register (zero, al, ar, bl)
 w       | 16 b | a wide immediate
 h       | 12 b | a 12-bit immediate (0-4095 or -2048 to 2047)
@@ -32,7 +32,7 @@ pop r              | 25     |
 ldstk r, h         | 26     | Load into r values at stack pointer offset of h
 store r1, r2, R    | 27     | Write value of R to memory at location [r1 + r2]
 ststk h, r         | 28     | Write value of r to stack offset h
-...                | 29     |
+load r1, r2, r3    | 29     | Load into r1 the value at location in memory [r2 + r3]
 jez w              | 2a     |
 jlt w              | 2b     |
 jle w              | 2c     |

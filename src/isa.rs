@@ -1,10 +1,3 @@
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum Operand {
-    Register(u8),
-    /// 1-240
-    Immediate(u8),
-}
-
 pub const NULL: u8 = 0x00;
 pub const WRITE: u8 = 0x09;
 pub const HALT: u8 = 0x0a;
@@ -16,10 +9,10 @@ pub const CALL: u8 = 0x22;
 pub const JUMP: u8 = 0x23;
 pub const RET: u8 = 0x24;
 pub const POP: u8 = 0x25;
-pub const LOAD: u8 = 0x26;
+pub const LDSTK: u8 = 0x26;
 pub const STORE: u8 = 0x27;
-pub const LDSTK: u8 = 0x28;
-pub const STSTK: u8 = 0x29;
+pub const STSTK: u8 = 0x28;
+pub const LOAD: u8 = 0x29;
 pub const JEZ: u8 = 0x2a;
 pub const JLT: u8 = 0x2b;
 pub const JLE: u8 = 0x2c;

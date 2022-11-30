@@ -1,3 +1,5 @@
+use std::fmt::{Display, self};
+
 use crate::{mem::Memory, isa::OP_HANDLERS};
 
 pub struct Cpu {
@@ -5,6 +7,15 @@ pub struct Cpu {
 }
 
 impl Cpu {
+    pub fn new(pc: u16) -> Self {
+        Cpu {
+            registers: Registers {
+                pc,
+                sp: 0x7f_ff,
+                .. Registers::default()
+            }
+        }
+    }
     pub fn run_instruction(&mut self, mem: &mut dyn Memory) -> Result<(), TrapMode> {
         let opcode = mem.read(self.registers.pc);
         self.registers.pc += 1;
@@ -28,20 +39,22 @@ impl Cpu {
 }
 
 #[repr(u8)]
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum TrapMode {
     Halt = 0,
+    #[default]
     Invalid = 1,
     ZeroDiv = 2,
 }
 
+#[derive(Debug, Default, Clone)]
 pub struct Registers {
-    a: u16,
-    b: u16,
-    x: u16,
-    y: u16,
+    pub a: u16,
+    pub b: u16,
+    pub x: u16,
+    pub y: u16,
 
-    pub(crate) pc: u16,
+    pub pc: u16,
     pub(crate) sp: u16,
     pub(crate) trap: bool,
     pub(crate) trap_mode: TrapMode,
@@ -133,5 +146,21 @@ impl Register {
     #[inline(always)]
     pub const fn is_zero(self) -> bool {
         self.0 == 0
+    }
+}
+
+impl Display for Register {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            0 => write!(f, "z"),
+            1 => write!(f, "al"),
+            2 => write!(f, "ah"),
+            3 => write!(f, "bl"),
+            4 => write!(f, "a"),
+            5 => write!(f, "b"),
+            6 => write!(f, "x"),
+            7 => write!(f, "y"),
+            _ => unimplemented!("no such register")
+        }
     }
 }
