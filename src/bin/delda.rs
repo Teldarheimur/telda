@@ -112,24 +112,24 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
             ret = false;
         }
         STORE_B => {
-            let (r1, r2) = arg_wide_registers(r, m);
-            let big_r = byte_big_r(r, m);
-            print!("store {r1}, {r2}, {big_r}");
+            let (r1, r2) = arg_wide_byte_registers(r, m);
+            let offset = wide_big_r(r, m);
+            print!("store {r1}, {offset}, {r2}");
         }
         STORE_W => {
             let (r1, r2) = arg_wide_registers(r, m);
-            let big_r = wide_big_r(r, m);
-            print!("store {r1}, {r2}, {big_r}");
+            let offset = wide_big_r(r, m);
+            print!("store {r1}, {offset}, {r2}");
         }
         LOAD_B => {
-            let (r1, _) = arg_byte_registers(r, m);
-            let (r3, r4) = arg_wide_registers(r, m);
-            print!("load {r1}, {r3}, {r4}");
+            let (r1, r2) = arg_byte_wide_registers(r, m);
+            let offset = wide_big_r(r, m);
+            print!("load {r1}, {r2}, {offset}");
         }
         LOAD_W => {
-            let (r1, _) = arg_wide_registers(r, m);
-            let (r3, r4) = arg_wide_registers(r, m);
-            print!("load {r1}, {r3}, {r4}");
+            let (r1, r2) = arg_wide_registers(r, m);
+            let offset = wide_big_r(r, m);
+            print!("load {r1}, {r2}, {offset}");
         }
         JUMP => {
             let w = arg_imm_wide(r, m);

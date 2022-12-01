@@ -32,6 +32,18 @@ pub fn arg_wide_registers(r: &mut Registers, m: &dyn Memory) -> (Wr, Wr) {
     r.pc += 1;
     (Wr::new(operand >> 4), Wr::new(operand & 0xf))
 }
+#[inline]
+pub fn arg_byte_wide_registers(r: &mut Registers, m: &dyn Memory) -> (Br, Wr) {
+    let operand = m.read(r.pc);
+    r.pc += 1;
+    (Br::new(operand >> 4), Wr::new(operand & 0xf))
+}
+#[inline]
+pub fn arg_wide_byte_registers(r: &mut Registers, m: &dyn Memory) -> (Wr, Br) {
+    let operand = m.read(r.pc);
+    r.pc += 1;
+    (Wr::new(operand >> 4), Br::new(operand & 0xf))
+}
 
 #[inline]
 pub fn arg_imm_byte(r: &mut Registers, m: &dyn Memory) -> u8 {
@@ -255,31 +267,31 @@ fn ret(r: &mut Registers, m: &mut dyn Memory) {
     r.pc = ret_addr;
 }
 fn store_b(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, r2) = arg_wide_registers(r, m);
-    let big_r = arg_byte_big_r(r, m);
+    let (r1, r2) = arg_wide_byte_registers(r, m);
+    let offset = arg_wide_big_r(r, m);
 
-    let addr = r.read_wide(r1) + r.read_wide(r2);
-    m.write(addr, big_r);
+    let addr = r.read_wide(r1) + offset;
+    m.write(addr, r.read_byte(r2));
 }
 fn store_w(r: &mut Registers, m: &mut dyn Memory) {
     let (r1, r2) = arg_wide_registers(r, m);
-    let big_r = arg_wide_big_r(r, m);
+    let offset = arg_wide_big_r(r, m);
 
-    let addr = r.read_wide(r1) + r.read_wide(r2);
-    m.write_wide(addr, big_r);
+    let addr = r.read_wide(r1) + offset;
+    m.write_wide(addr, r.read_wide(r2));
 }
 fn load_b(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, _r2) = arg_byte_registers(r, m);
-    let (r3, r4) = arg_wide_registers(r, m);
+    let (r1, r2) = arg_byte_wide_registers(r, m);
+    let offset = arg_wide_big_r(r, m);
 
-    let addr = r.read_wide(r3) + r.read_wide(r4);
+    let addr = r.read_wide(r2) + offset;
     r.write_byte(r1, m.read(addr));
 }
 fn load_w(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, _r2) = arg_wide_registers(r, m);
-    let (r3, r4) = arg_wide_registers(r, m);
+    let (r1, r2) = arg_wide_registers(r, m);
+    let offset = arg_wide_big_r(r, m);
 
-    let addr = r.read_wide(r3) + r.read_wide(r4);
+    let addr = r.read_wide(r2) + offset;
     r.write_wide(r1, m.read_wide(addr));
 }
 fn jmp(r: &mut Registers, m: &mut dyn Memory) {

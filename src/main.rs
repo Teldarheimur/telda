@@ -47,13 +47,21 @@ fn write_data_operand(mem: &mut Vec<u8>, id_to_pos: &HashMap<usize, u16>, dat_op
         ImmediateWide(w) => {
             mem.extend_from_slice(&parse_wide(w, id_to_pos).to_le_bytes());
         }
-        TwoWideOneByteBig(r1, r2, br) => {
-            mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.push(big_r_to_byte(br));
-        }
         TwoByteOneBig(r1, r2, br) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
             mem.push(big_r_to_byte(br));
+        }
+        WideBigByte(r1, wr, r2) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+        }
+        ByteWideBig(r1, r2, wr) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+        }
+        WideBigWide(r1, wr, r2) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
         }
         TwoWideOneBig(r1, r2, wr) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
@@ -65,14 +73,6 @@ fn write_data_operand(mem: &mut Vec<u8>, id_to_pos: &HashMap<usize, u16>, dat_op
         }
         FourWide(r1, r2, r3, r4) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.push(((r3 as u8) << 4) | r4 as u8);
-        }
-        ThreeWide(r1, r3, r4) => {
-            mem.push(r1 as u8);
-            mem.push(((r3 as u8) << 4) | r4 as u8);
-        }
-        OneByteTwoWide(r1, r3, r4) => {
-            mem.push((r1 as u8) << 4);
             mem.push(((r3 as u8) << 4) | r4 as u8);
         }
     }

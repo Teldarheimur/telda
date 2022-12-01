@@ -26,7 +26,7 @@ wR      | 16 b | a register or an immediate number from 1 up to and including 65
 w       | 16 b | a wide immediate
 b       | 8 b  | a byte immediate
 
-INSTRUCION             | OPCODE | DESCRIPTION
+INSTRUCTION            | OPCODE | DESCRIPTION
 null                   | 00     | invalid instruction, triggers invalid opcode fault (so do all opcodes not mentioned here)
 ...                    | 01-09  | ...
 halt                   | 0a     | halts processor, triggers halt fault
@@ -38,10 +38,10 @@ pop br                 | 23     |
 pop wr                 | 24     |
 call w                 | 25     |
 ret b                  | 26     |
-store wr1, wr2, bR     | 27     | Write value of R to memory at location [r1 + r2]
-store wr1, wr2, wR     | 28     | Write value of R to memory at location [r1 + r2]
-load br1, wr3, wr4     | 29     | Load into r1 the value at location in memory [r2 + r3]
-load wr1, wr3, wr4     | 2a     | Load into r1 the value at location in memory [r2 + r3]
+store wr1, wR3, br2    | 27     | Write value of R to memory at location [r1 + r2]
+store wr1, wR3, wr2    | 28     | Write value of R to memory at location [r1 + r2]
+load br1, wr2, wR3     | 29     | Load into r1 the value at location in memory [r2 + r3]
+load wr1, wr2, wR3     | 2a     | Load into r1 the value at location in memory [r2 + r3]
 jmp w                  | 2b     |
 jmp wr                 | 2c     |
 jez w                  | 2d     |

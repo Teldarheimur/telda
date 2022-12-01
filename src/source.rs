@@ -219,21 +219,21 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u
         "call" => (CALL, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
         "ret" => (RET, O::parse_nothing(ops.clone()).map(|_| DataOperand::ImmediateByte(0)).or_else(|| O::parse_immediate_u8(ops)).expect("either nothing or a byte")),
         "store" => {
-            if let Some(dat_op) = O::parse_two_wide_one_byte_big(ops.clone()) {
+            if let Some(dat_op) = O::parse_wide_big_byte(ops.clone(), lbl_mkr) {
                 (STORE_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_wide_big_wide(ops, lbl_mkr) {
                 (STORE_W, dat_op)
             } else {
-                panic!("two registers and big r");
+                panic!("a wide and a big for destination and a source register (any size)");
             }
         }
         "load" => {
-             if let Some(dat_op) = O::parse_one_byte_two_wide(ops.clone()) {
+             if let Some(dat_op) = O::parse_byte_wide_big(ops.clone(), lbl_mkr) {
                 (LOAD_B, dat_op)
-            } else if let Some(dat_op) = O::parse_three_wide(ops) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
                 (LOAD_W, dat_op)
             } else {
-                panic!("three registers");
+                panic!("a destination register (any size) and then a wide and a big");
             }
         }
         "jmp" | "jump" => {
@@ -370,11 +370,11 @@ pub enum DataOperand {
     WideRegister(WReg),
     ImmediateByte(u8),
     ImmediateWide(Wide),
-    TwoWideOneByteBig(WReg, WReg, BBigR),
-    ThreeWide(WReg, WReg, WReg),
-    OneByteTwoWide(BReg, WReg, WReg),
     TwoByteOneBig(BReg, BReg, BBigR),
     TwoWideOneBig(WReg, WReg, WBigR),
+    WideBigWide(WReg, WBigR, WReg),
+    ByteWideBig(BReg, WReg, WBigR),
+    WideBigByte(WReg, WBigR, BReg),
     FourByte(BReg, BReg, BReg, BReg),
     FourWide(WReg, WReg, WReg, WReg),
 }
@@ -390,11 +390,11 @@ impl DataOperand {
             WideRegister(_) => 1,
             ImmediateByte(_) => 1,
             ImmediateWide(_) => 2,
-            TwoWideOneByteBig(_, _, _) => 2,
-            OneByteTwoWide(_, _, _) => 2,
-            ThreeWide(_, _, _) => 2,
             TwoByteOneBig(_, _, _) => 2,
             TwoWideOneBig(_, _, _) => 3,
+            WideBigWide(_, _, _) => 3,
+            ByteWideBig(_, _, _) => 3,
+            WideBigByte(_, _, _) => 3,
             FourByte(_, _, _, _) => 2,
             FourWide(_, _, _, _) => 2,
         }
@@ -437,43 +437,33 @@ impl DataOperand {
     fn parse_two_byte_one_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
         let reg1 = ops.next()?;
         let reg2 = ops.next()?;
-        match Self::parse_b_big_r(ops)? {
-            DataOperand::ByteBigR(br)
-                => Some(DataOperand::TwoByteOneBig(Self::byte(reg1)?, Self::byte(reg2)?, br)),
-            _ => None,
-        }
+        Some(DataOperand::TwoByteOneBig(Self::byte(reg1)?, Self::byte(reg2)?, Self::byte_or_imm(ops.next()?)?))
     }
     fn parse_two_wide_one_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
         let reg1 = ops.next()?;
         let reg2 = ops.next()?;
-        match Self::parse_w_big_r(ops, lbl_mkr)? {
-            DataOperand::WideBigR(wr)
-                => Some(DataOperand::TwoWideOneBig(Self::wide(reg1)?, Self::wide(reg2)?, wr)),
-            _ => None,
-        }
+        Some(DataOperand::TwoWideOneBig(Self::wide(reg1)?, Self::wide(reg2)?, Self::wide_or_imm(ops.next()?, lbl_mkr)?))
     }
-    fn parse_two_wide_one_byte_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
-        let reg1 = ops.next()?;
-        let reg2 = ops.next()?;
-        match Self::parse_b_big_r(ops)? {
-            DataOperand::ByteBigR(br)
-                => Some(DataOperand::TwoWideOneByteBig(Self::wide(reg1)?, Self::wide(reg2)?, br)),
-            _ => None,
-        }
+    fn parse_wide_big_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+        Some(DataOperand::WideBigByte(
+            Self::wide(ops.next()?)?,
+            Self::wide_or_imm(ops.next()?, lbl_mkr)?,
+            Self::byte(ops.next()?)?,
+        ))
     }
-    fn parse_one_byte_two_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
-        let reg1 = ops.next()?;
-        let reg2 = ops.next()?;
-        let reg3 = ops.next()?;
-        Self::parse_nothing(ops);
-        Some(DataOperand::OneByteTwoWide(Self::byte(reg1)?, Self::wide(reg2)?, Self::wide(reg3)?))
+    fn parse_wide_big_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+        Some(DataOperand::WideBigWide(
+            Self::wide(ops.next()?)?,
+            Self::wide_or_imm(ops.next()?, lbl_mkr)?,
+            Self::wide(ops.next()?)?,
+        ))
     }
-    fn parse_three_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
-        let reg1 = ops.next()?;
-        let reg2 = ops.next()?;
-        let reg3 = ops.next()?;
-        Self::parse_nothing(ops);
-        Some(DataOperand::ThreeWide(Self::wide(reg1)?, Self::wide(reg2)?, Self::wide(reg3)?))
+    fn parse_byte_wide_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+        Some(DataOperand::ByteWideBig(
+            Self::byte(ops.next()?)?,
+            Self::wide(ops.next()?)?,
+            Self::wide_or_imm(ops.next()?, lbl_mkr)?,
+        ))
     }
     fn parse_four_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
         let reg1 = ops.next()?;
