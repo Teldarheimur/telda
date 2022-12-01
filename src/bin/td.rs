@@ -1,15 +1,16 @@
-use std::{fs::File, env::args, io::{BufReader, Read, BufRead}, collections::HashMap, fmt::{Display, self}};
+use std::{fs::File, env::args, io::{BufReader, Read, BufRead}, collections::HashMap, fmt::{Display, self}, path::Path};
 
 use telda2::{mem::{Lazy, Memory}, cpu::{Cpu, Registers, ByteRegister, WideRegister}};
 
 fn main() {
     for arg in args().skip(1) {
+        let p = Path::new(&arg);
         let mut mem = Vec::new();
-        let mut f = File::open(format!("{arg}.bin")).unwrap();
+        let mut f = File::open(p).unwrap();
         f.read_to_end(&mut mem).unwrap();
         let mut labels = HashMap::new();
         let mut pos_to_labels = HashMap::new();
-        let f = File::open(format!("{arg}.symbols")).unwrap();
+        let f = File::open(p.with_extension("tsym")).unwrap();
         for line in BufReader::new(f).lines() {
             let line = line.unwrap();
             let colon = line.find(':').unwrap();

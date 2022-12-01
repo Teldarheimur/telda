@@ -326,6 +326,82 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u
     }
 }
 
+fn big_r_to_byte(br: BBigR) -> u8 {
+    match br {
+        BBigR::Register(r) => r as u8,
+        BBigR::Byte(0) => BReg::Zero as u8,
+        // Since this b is a number from 1 up to 247, we can just add 7 to encode it between 0x08 and 0xff
+        BBigR::Byte(b) => b.checked_add(7).expect("immediate between 1-247"),
+    }
+}
+fn big_r_to_wide(wr: WBigR, id_to_pos: &HashMap<usize, u16>) -> [u8; 2] {
+    match wr {
+        WBigR::Register(r) => r as u16,
+        WBigR::Wide(w) => {
+            let w = parse_wide(w, id_to_pos);
+            if w == 0 {
+                WReg::Zero as u16
+            } else {
+                // Since this w is a number from 1 up to 65527, we can just add 7 to encode it between 0x08 and 0xffff
+                w.checked_add(7).expect("immediate between 1-247")
+            }
+        }
+    }.to_le_bytes()
+}
+
+fn parse_wide(w: Wide, id_to_pos: &HashMap<usize, u16>) -> u16 {
+    match w {
+        Wide::Label(l) => *id_to_pos.get(&l).expect("no such label"),
+        Wide::Number(n) => n,
+    }
+}
+
+pub fn write_data_operand(mem: &mut Vec<u8>, id_to_pos: &HashMap<usize, u16>, dat_op: DataOperand) {
+    use self::DataOperand::*;
+
+    match dat_op {
+        Nothing => (),
+        ByteBigR(br) => mem.push(big_r_to_byte(br)),
+        WideBigR(wr) => mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)),
+        ByteRegister(r) => mem.push((r as u8) << 4),
+        WideRegister(r) => mem.push((r as u8) << 4),
+        ImmediateByte(b) => {
+            mem.push(b);
+        }
+        ImmediateWide(w) => {
+            mem.extend_from_slice(&parse_wide(w, id_to_pos).to_le_bytes());
+        }
+        TwoByteOneBig(r1, r2, br) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.push(big_r_to_byte(br));
+        }
+        WideBigByte(r1, wr, r2) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+        }
+        ByteWideBig(r1, r2, wr) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+        }
+        WideBigWide(r1, wr, r2) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+        }
+        TwoWideOneBig(r1, r2, wr) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+        }
+        FourByte(r1, r2, r3, r4) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.push(((r3 as u8) << 4) | r4 as u8);
+        }
+        FourWide(r1, r2, r3, r4) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.push(((r3 as u8) << 4) | r4 as u8);
+        }
+    }
+}
+
 struct LabelMaker {
     labels: Vec<Box<str>>,
 }
@@ -341,7 +417,6 @@ impl LabelMaker {
         }
     }
 }
-
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Wide {
