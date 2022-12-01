@@ -44,7 +44,7 @@ pub enum SourceLine {
     Label(String),
     Ins(String, Vec<SourceOperand>),
     Comment,
-    DirString(String),
+    DirString(Vec<u8>),
     DirByte(u8),
     DirWide(u16),
 }
@@ -58,6 +58,24 @@ impl<B: BufRead> SourceLines<B> {
         SourceLines {
             lines: r.lines()
         }
+    }
+}
+
+fn parse_bytechar(s: &[u8]) -> (u8, &[u8]) {
+    let mut bs = s.iter();
+    match bs.next().unwrap() {
+        b'\\' => match bs.next().unwrap() {
+            b'r' => (b'\r', &s[2..]),
+            b't' => (b'\t', &s[2..]),
+            b'n' => (b'\n', &s[2..]),
+            b'0' => (b'\0', &s[2..]),
+            b'\\' => (b'\\', &s[2..]),
+            b'\'' => (b'\'', &s[2..]),
+            b'\"' => (b'\"', &s[2..]),
+            b'x' => (u8::from_str_radix(String::from_utf8_lossy(&s[2..4]).as_ref(), 16).expect("invalid escape argument"), &s[4..]),
+            c => panic!("invalid escape character \\{c}"),
+        }
+        &c => (c, &s[1..]),
     }
 }
 
@@ -80,7 +98,16 @@ impl<B: BufRead> Iterator for SourceLines<B> {
                 let i = line.find(' ').unwrap_or(line.len());
                 let arg = &line[i+1..];
                 match &line[..i] {
-                    "string" => break SourceLine::DirString(arg.to_owned()),
+                    "string" => break SourceLine::DirString({
+                        let mut string = Vec::with_capacity(arg.len());
+                        let mut arg = arg.as_bytes();
+                        while !arg.is_empty() {
+                            let (c, rest) = parse_bytechar(arg);
+                            arg = rest;
+                            string.push(c);
+                        }
+                        string
+                    }),
                     "byte" => break SourceLine::DirByte(arg.parse().unwrap()),
                     "wide" | "word" => break SourceLine::DirWide(arg.parse().unwrap()),
                     s => panic!("unknown directive {s}"),
@@ -125,6 +152,8 @@ impl<B: BufRead> Iterator for SourceLines<B> {
                                     .ok()
                                     .or_else(|| arg[..arg.len()-1].parse::<i16>().ok().map(|w| w as u16))
                                     .map(SourceOperand::Wide);
+                            } else if arg.starts_with('\'') && arg.ends_with('\'') {
+                                so = Some(SourceOperand::Byte(parse_bytechar(arg[1..arg.len()-1].as_bytes()).0));
                             } else {
                                 so = arg.parse().ok().map(SourceOperand::Number);
                             }
@@ -179,9 +208,8 @@ pub fn process(lines: impl Iterator<Item=SourceLine>) -> (HashMap<usize, u16>, V
                 data_lines.push(DataLine::Raw(vec![l, h]));
             }
             SourceLine::DirString(s) => {
-                let b = s.into_bytes();
-                cur_offset += b.len() as u16;
-                data_lines.push(DataLine::Raw(b));
+                cur_offset += s.len() as u16;
+                data_lines.push(DataLine::Raw(s));
             }
             SourceLine::Comment => (),
         }
