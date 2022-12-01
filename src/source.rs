@@ -1,4 +1,4 @@
-use std::{collections::HashMap, io::{Lines, BufRead}};
+use std::{collections::HashMap, io::{Lines, BufRead, BufReader}, fs::File};
 
 use crate::isa;
 
@@ -44,6 +44,7 @@ pub enum SourceLine {
     Label(String),
     Ins(String, Vec<SourceOperand>),
     Comment,
+    DirInclude(String),
     DirString(Vec<u8>),
     DirByte(u8),
     DirWide(u16),
@@ -110,6 +111,7 @@ impl<B: BufRead> Iterator for SourceLines<B> {
                     }),
                     "byte" => break SourceLine::DirByte(arg.parse().unwrap()),
                     "wide" | "word" => break SourceLine::DirWide(arg.parse().unwrap()),
+                    "include" => break SourceLine::DirInclude(arg.to_string()),
                     s => panic!("unknown directive {s}"),
                 }
             }
@@ -182,34 +184,52 @@ pub enum DataLine {
 }
 
 pub fn process(lines: impl Iterator<Item=SourceLine>) -> (HashMap<usize, u16>, Vec<Box<str>>, Vec<DataLine>) {
+    inner_process(lines, &mut 0)
+}
+fn inner_process(lines: impl Iterator<Item=SourceLine>, cur_offset: &mut u16) -> (HashMap<usize, u16>, Vec<Box<str>>, Vec<DataLine>) {
     let mut data_lines = Vec::new();
     let mut id_to_pos = HashMap::new();
     let mut label_maker = LabelMaker { labels: Vec::new() };
-    let mut cur_offset = 0;
 
     for line in lines {
         match line {
             SourceLine::Label(s) => {
                 let id = label_maker.get_id(&s);
-                id_to_pos.insert(id, cur_offset);
+                id_to_pos.insert(id, *cur_offset);
             }
             SourceLine::Ins(s, ops) => {
                 let (opcode, dat_op) = parse_ins(s, ops, &mut label_maker);
-                cur_offset += 1 + dat_op.size();
+                *cur_offset += 1 + dat_op.size();
                 data_lines.push(DataLine::Ins(opcode, dat_op));
             }
             SourceLine::DirByte(b) => {
-                cur_offset += 1;
+                *cur_offset += 1;
                 data_lines.push(DataLine::Raw(vec![b]));
             }
             SourceLine::DirWide(w) => {
                 let [l, h] = w.to_le_bytes();
-                cur_offset += 2;
+                *cur_offset += 2;
                 data_lines.push(DataLine::Raw(vec![l, h]));
             }
             SourceLine::DirString(s) => {
-                cur_offset += s.len() as u16;
+                *cur_offset += s.len() as u16;
                 data_lines.push(DataLine::Raw(s));
+            }
+            SourceLine::DirInclude(path) => {
+                let f = File::open(&path).unwrap();
+                let lines = SourceLines::new(BufReader::new(f));
+                let (included_id_to_pos, included_labels, included_data_lines) = inner_process(lines, cur_offset);
+
+                data_lines.extend(included_data_lines);
+                for (i, lbl) in included_labels.into_iter().enumerate() {
+                    let lbl = if lbl.chars().next().unwrap().is_uppercase() {
+                        lbl
+                    } else {
+                        format!("{path}  {lbl}").into_boxed_str()
+                    };
+                    let new_id = label_maker.get_id(&lbl);
+                    id_to_pos.insert(new_id, included_id_to_pos[&i]);
+                }
             }
             SourceLine::Comment => (),
         }

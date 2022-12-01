@@ -1,4 +1,4 @@
-use std::{fmt::{Display, self}, io::{Read, Write}};
+use std::{fmt::{Display, self}, io::{Read, Write}, mem::MaybeUninit};
 
 use crate::{mem::Memory, isa::OP_HANDLERS};
 
@@ -9,11 +9,7 @@ pub struct Cpu {
 impl Cpu {
     pub fn new(pc: u16) -> Self {
         Cpu {
-            registers: Registers {
-                pc,
-                sp: 0x7f_ff,
-                .. Registers::default()
-            }
+            registers: Registers::new(pc)
         }
     }
     pub fn run_instruction(&mut self, mem: &mut dyn Memory) -> Result<(), TrapMode> {
@@ -47,7 +43,7 @@ pub enum TrapMode {
     ZeroDiv = 2,
 }
 
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct Registers {
     pub a: u16,
     pub b: u16,
@@ -57,16 +53,35 @@ pub struct Registers {
     pub z: u16,
 
     pub pc: u16,
-    pub(crate) sp: u16,
-    pub(crate) trap: bool,
-    pub(crate) trap_mode: TrapMode,
-    pub(crate) zero: bool,
-    pub(crate) sign: bool,
-    pub(crate) overflow: bool,
-    pub(crate) carry: bool,
+    pub sp: u16,
+    pub trap: bool,
+    pub trap_mode: TrapMode,
+    pub zero: bool,
+    pub sign: bool,
+    pub overflow: bool,
+    pub carry: bool,
 }
 
 impl Registers {
+    pub fn new(pc: u16) -> Self {
+        #[allow(invalid_value)]
+        Registers {
+            a: unsafe { MaybeUninit::uninit().assume_init() },
+            b: unsafe { MaybeUninit::uninit().assume_init() },
+            c: unsafe { MaybeUninit::uninit().assume_init() },
+            x: unsafe { MaybeUninit::uninit().assume_init() },
+            y: unsafe { MaybeUninit::uninit().assume_init() },
+            z: unsafe { MaybeUninit::uninit().assume_init() },
+            pc,
+            sp: 0x7f_ff,
+            trap: false,
+            trap_mode: TrapMode::default(),
+            zero: false,
+            sign: false,
+            overflow: false,
+            carry: false,
+        }
+    }
     pub fn read_byte(&self, r: ByteRegister) -> u8 {
         match r.0 {
             0 => 0,
