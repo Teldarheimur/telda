@@ -1,56 +1,79 @@
 use std::{fs::File, env::args, io::{BufReader, Write}, collections::HashMap};
 
-use telda2::{source::{SourceLines, process, DataLine, DataOperand, BigR, Reg, Wide}, mem::Lazy, cpu::Cpu};
+use telda2::{source::{SourceLines, process, DataLine, DataOperand, WBigR, BReg, WReg, Wide, BBigR}, mem::Lazy, cpu::Cpu};
 
-fn big_r_to_byte(br: BigR) -> u8 {
+fn big_r_to_byte(br: BBigR) -> u8 {
     match br {
-        BigR::Register(r) => r as u8,
-        BigR::Byte(0) => Reg::Zero as u8,
+        BBigR::Register(r) => r as u8,
+        BBigR::Byte(0) => BReg::Zero as u8,
         // Since this b is a number from 1 up to 247, we can just add 7 to encode it between 0x08 and 0xff
-        BigR::Byte(b) => b.checked_add(7).expect("immediate between 1-247"),
+        BBigR::Byte(b) => b.checked_add(7).expect("immediate between 1-247"),
+    }
+}
+fn big_r_to_wide(wr: WBigR, id_to_pos: &HashMap<usize, u16>) -> [u8; 2] {
+    match wr {
+        WBigR::Register(r) => r as u16,
+        WBigR::Wide(w) => {
+            let w = parse_wide(w, id_to_pos);
+            if w == 0 {
+                WReg::Zero as u16
+            } else {
+                // Since this w is a number from 1 up to 65527, we can just add 7 to encode it between 0x08 and 0xffff
+                w.checked_add(7).expect("immediate between 1-247")
+            }
+        }
+    }.to_le_bytes()
+}
+
+fn parse_wide(w: Wide, id_to_pos: &HashMap<usize, u16>) -> u16 {
+    match w {
+        Wide::Label(l) => *id_to_pos.get(&l).expect("no such label"),
+        Wide::Number(n) => n,
     }
 }
 
-fn write_data_operand(mem: &mut Vec<u8>, labels: &HashMap<String, u16>, dat_op: DataOperand) {
+fn write_data_operand(mem: &mut Vec<u8>, id_to_pos: &HashMap<usize, u16>, dat_op: DataOperand) {
     use self::DataOperand::*;
 
     match dat_op {
         Nothing => (),
-        BigR(br) => mem.push(big_r_to_byte(br)),
-        Register(r) => mem.push((r as u8) << 4),
-        TwoRegistersAndBigR(r1, r2, br) => {
-            mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.push(big_r_to_byte(br));
-        }
+        ByteBigR(br) => mem.push(big_r_to_byte(br)),
+        WideBigR(wr) => mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)),
+        ByteRegister(r) => mem.push((r as u8) << 4),
+        WideRegister(r) => mem.push((r as u8) << 4),
         ImmediateByte(b) => {
             mem.push(b);
         }
         ImmediateWide(w) => {
-            let arr = match w {
-                Wide::Label(l) => *labels.get(&*l).expect("no such label"),
-                Wide::Number(n) => n,
-            }.to_le_bytes();
-            mem.extend_from_slice(&arr);
+            mem.extend_from_slice(&parse_wide(w, id_to_pos).to_le_bytes());
         }
-        Hr(h, r) => {
-            let [low, high] = h.to_le_bytes();
-            mem.extend_from_slice(&[low, (high << 4) | (r as u8)]);
+        TwoWideOneByteBig(r1, r2, br) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.push(big_r_to_byte(br));
         }
-        Rh(r, h) => {
-            let [low, high] = h.to_le_bytes();
-            let high = (low >> 4) | (high << 4);
-            mem.extend_from_slice(&[((r as u8) << 4) | (low & 0x0f), high]);
+        TwoByteOneBig(r1, r2, br) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.push(big_r_to_byte(br));
         }
-        FourRegisters(r1, r2, r3, r4) => {
+        TwoWideOneBig(r1, r2, wr) => {
+            mem.push(((r1 as u8) << 4) | r2 as u8);
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+        }
+        FourByte(r1, r2, r3, r4) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
             mem.push(((r3 as u8) << 4) | r4 as u8);
         }
-        ThreeRegisters(r1, r2, r3) => {
+        FourWide(r1, r2, r3, r4) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.push((r3 as u8) << 4);
+            mem.push(((r3 as u8) << 4) | r4 as u8);
         }
-        BRegisters(r1, r2, r3) => {
-            mem.push(((r1 as u8) << 6) | ((r2 as u8) << 4) | r3 as u8);
+        ThreeWide(r1, r3, r4) => {
+            mem.push(r1 as u8);
+            mem.push(((r3 as u8) << 4) | r4 as u8);
+        }
+        OneByteTwoWide(r1, r3, r4) => {
+            mem.push((r1 as u8) << 4);
+            mem.push(((r3 as u8) << 4) | r4 as u8);
         }
     }
 }
@@ -58,7 +81,7 @@ fn write_data_operand(mem: &mut Vec<u8>, labels: &HashMap<String, u16>, dat_op: 
 fn main() {
     for arg in args().skip(1) {
         let f = File::open(&arg).unwrap();
-        let (labels, data_lines) = process(SourceLines::new(BufReader::new(f)));
+        let (id_to_pos, labels, data_lines) = process(SourceLines::new(BufReader::new(f)));
         let mut mem = Vec::with_capacity(256);
         for data_line in data_lines {
             match data_line {
@@ -68,7 +91,7 @@ fn main() {
                 DataLine::Ins(opcode, dat_op) => {
                     mem.push(opcode);
 
-                    write_data_operand(&mut mem, &labels, dat_op);
+                    write_data_operand(&mut mem, &id_to_pos, dat_op);
                 }
             }
         }
@@ -76,25 +99,28 @@ fn main() {
         let mut f = File::create(format!("{arg}.bin")).unwrap();
         f.write_all(&mem).unwrap();
         let mut f = File::create(format!("{arg}.symbols")).unwrap();
-        for (lbl, &loc) in labels.iter() {
+        for (&id, &loc) in id_to_pos.iter() {
+            let lbl = &labels[id];
             writeln!(f, "{lbl}: 0x{loc:02X}").unwrap();
         }
 
-        let mut cpu = Cpu::new(labels["_start"]);
+        let start_id = labels.iter().position(|l| &**l == "_start").unwrap();
+        let mut cpu = Cpu::new(id_to_pos[&start_id]);
 
         let tm = cpu.run_until_trap(&mut Lazy { mem });
         let pc = cpu.registers.pc;
         let mut diff = u16::MAX;
-        let mut closest = "";
-        for (lbl, &loc) in labels.iter() {
+        let mut closest = start_id; // dummy value
+        for (&id, &loc) in id_to_pos.iter() {
             if pc <= loc {
                 let new_diff = loc - pc;
                 if new_diff < diff {
                     diff = new_diff;
-                    closest = lbl;
+                    closest = id;
                 }
             }
         }
+        let closest = &labels[closest];
         println!("Ended with {tm:?} at <{closest}+{diff:02X}>");
     }
 }

@@ -6,22 +6,37 @@ type Opcode = u8;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
-pub enum Reg {
+pub enum BReg {
     Zero = 0,
     Al = 1,
     Ah = 2,
     Bl = 3,
-    A = 4,
-    B = 5,
-    X = 6,
-    Y = 7,
+    Bh = 4,
+    Cl = 5,
+    Ch = 6,
+    Io = 7,
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+pub enum WReg {
+    Zero = 0,
+    A = 1,
+    B = 2,
+    C = 3,
+    X = 4,
+    Y = 5,
+    Z = 6,
+    S = 7,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceOperand {
+    Byte(u8),
+    Wide(u16),
     Number(i32),
-    Label(Box<str>),
-    Reg(Reg),
+    ByteReg(BReg),
+    WideReg(WReg),
+    Label(String),
 }
 
 #[derive(Debug, Clone)]
@@ -81,19 +96,44 @@ impl<B: BufRead> Iterator for SourceLines<B> {
                 for arg in args.split(',') {
                     let arg = arg.trim();
 
-                    sos.push(if let Ok(n) = arg.parse() {
-                        SourceOperand::Number(n)
-                    } else {
-                        match arg {
-                            "z" | "0" => SourceOperand::Reg(Reg::Zero),
-                            "al" => SourceOperand::Reg(Reg::Al),
-                            "ah" => SourceOperand::Reg(Reg::Ah),
-                            "bl" => SourceOperand::Reg(Reg::Bl),
-                            "a" => SourceOperand::Reg(Reg::A),
-                            "b" => SourceOperand::Reg(Reg::B),
-                            "x" => SourceOperand::Reg(Reg::X),
-                            "y" => SourceOperand::Reg(Reg::Y),
-                            l => SourceOperand::Label(l.to_owned().into_boxed_str()),
+                    sos.push(match arg {
+                        "al" => SourceOperand::ByteReg(BReg::Al),
+                        "ah" => SourceOperand::ByteReg(BReg::Ah),
+                        "bl" => SourceOperand::ByteReg(BReg::Bl),
+                        "bh" => SourceOperand::ByteReg(BReg::Bh),
+                        "cl" => SourceOperand::ByteReg(BReg::Cl),
+                        "ch" => SourceOperand::ByteReg(BReg::Ch),
+                        "io" => SourceOperand::ByteReg(BReg::Io),
+                        "a" => SourceOperand::WideReg(WReg::A),
+                        "b" => SourceOperand::WideReg(WReg::B),
+                        "c" => SourceOperand::WideReg(WReg::C),
+                        "x" => SourceOperand::WideReg(WReg::X),
+                        "y" => SourceOperand::WideReg(WReg::Y),
+                        "z" => SourceOperand::WideReg(WReg::Z),
+                        "s" => SourceOperand::WideReg(WReg::S),
+                        arg => {
+                            let so;
+                            if arg.ends_with("b") {
+                                so = arg[..arg.len()-1]
+                                    .parse()
+                                    .ok()
+                                    .or_else(|| arg[..arg.len()-1].parse::<i8>().ok().map(|b| b as u8))
+                                    .map(SourceOperand::Byte);
+                            } else if arg.ends_with("w") {
+                                so = arg[..arg.len()-1]
+                                    .parse()
+                                    .ok()
+                                    .or_else(|| arg[..arg.len()-1].parse::<i16>().ok().map(|w| w as u16))
+                                    .map(SourceOperand::Wide);
+                            } else {
+                                so = arg.parse().ok().map(SourceOperand::Number);
+                            }
+
+                            if let Some(so) = so {
+                                so
+                            } else {
+                                SourceOperand::Label(arg.to_owned())
+                            }
                         }
                     });
                 }
@@ -112,18 +152,20 @@ pub enum DataLine {
     Raw(Vec<u8>),
 }
 
-pub fn process(lines: impl Iterator<Item=SourceLine>) -> (HashMap<String, u16>, Vec<DataLine>) {
+pub fn process(lines: impl Iterator<Item=SourceLine>) -> (HashMap<usize, u16>, Vec<Box<str>>, Vec<DataLine>) {
     let mut data_lines = Vec::new();
-    let mut labels = HashMap::new();
+    let mut id_to_pos = HashMap::new();
+    let mut label_maker = LabelMaker { labels: Vec::new() };
     let mut cur_offset = 0;
 
     for line in lines {
         match line {
             SourceLine::Label(s) => {
-                labels.insert(s, cur_offset);
+                let id = label_maker.get_id(&s);
+                id_to_pos.insert(id, cur_offset);
             }
             SourceLine::Ins(s, ops) => {
-                let (opcode, dat_op) = parse_ins(s, ops);
+                let (opcode, dat_op) = parse_ins(s, ops, &mut label_maker);
                 cur_offset += 1 + dat_op.size();
                 data_lines.push(DataLine::Ins(opcode, dat_op));
             }
@@ -145,181 +187,348 @@ pub fn process(lines: impl Iterator<Item=SourceLine>) -> (HashMap<String, u16>, 
         }
     }
 
-    (labels, data_lines)
+    (id_to_pos, label_maker.labels, data_lines)
 }
 
-fn parse_ins(s: String, ops: Vec<SourceOperand>) -> (u8, DataOperand) {
+fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u8, DataOperand) {
     use self::isa::*;
     use self::DataOperand as O;
+    let ops = ops.iter();
     match &*s {
         "null" => (NULL, O::parse_nothing(ops).expect("nothing")),
-        "write" => (WRITE, O::parse_big_r(ops).expect("big R")),
         "halt" => (HALT, O::parse_nothing(ops).expect("nothing")),
-        "read" => (READ, O::parse_register(ops).expect("one register")),
         "nop" => (NOP, O::parse_nothing(ops).expect("nothing")),
-        "push" => (PUSH, O::parse_big_r(ops).expect("big R")),
-        "call" => (CALL, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jmp" | "jump" => (JUMP, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "ret" => (RET, O::parse_nothing(ops.clone()).map(|_| DataOperand::ImmediateByte(0)).or_else(|| O::parse_immediate_u8(ops)).expect("either nothing or a byte")),
-        "pop" => (POP, O::parse_register(ops).expect("one register")),
-        "ldstk" => (LDSTK, O::parse_rh(ops).expect("one register and one half number")),
-        "store" => (STORE, O::parse_two_registers_and_big_r(ops).expect("two registers and big r")),
-        "ststk" => (STSTK, O::parse_hr(ops).expect("one half number and one register")),
-        "load" => (LOAD, O::parse_three_registers(ops).expect("three registers")),
-
-        "jez" => (JEZ, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jlt" => (JLT, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jle" => (JLE, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jgt" => (JGT, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jge" => (JGE, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jnz" => (JNZ, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jo" => (JO, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jno" => (JNO, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jb" | "jc" => (JB, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jae" | "jnc" => (JAE, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "ja" => (JA, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-        "jbe" => (JBE, O::parse_immediate_u16(ops).expect("a wide (addr like a label or just a number)")),
-
-        "add" => (ADD, O::parse_two_registers_and_big_r(ops).expect("two regs and big r")),
-        "sub" => (SUB, O::parse_two_registers_and_big_r(ops).expect("two regs and big r")),
-        "and" => (AND, O::parse_two_registers_and_big_r(ops).expect("two regs and big r")),
-        "or" => (OR, O::parse_two_registers_and_big_r(ops).expect("two regs and big r")),
-        "xor" => (XOR, O::parse_two_registers_and_big_r(ops).expect("two regs and big r")),
-        "mul" => {
-            if let Some(dat_op) = O::parse_four_registers(ops.clone()) {
-                (MUL, dat_op)
-            } else if let Some(dat_op) = O::parse_b_registers(ops) {
-                (BMUL, dat_op)
+        "push" => {
+            if let Some(dat_op) = O::parse_b_big_r(ops.clone()) {
+                (PUSH_B, dat_op)
+            } else if let Some(dat_op) = O::parse_w_big_r(ops, lbl_mkr) {
+                (PUSH_W, dat_op)
             } else {
-                panic!("either four registers or (bmul) a register followed by two byte registers")
+                panic!("takes one big");
             }
         }
-        "bmul" => (BMUL, O::parse_b_registers(ops).expect("three regs (reg, byte, byte")),
-        "div" => (DIV, O::parse_four_registers(ops).expect("four regs")),
+        "pop" => {
+            if let Some(dat_op) = O::parse_breg(ops.clone()) {
+                (POP_B, dat_op)
+            } else if let Some(dat_op) = O::parse_wreg(ops) {
+                (POP_W, dat_op)
+            } else {
+                panic!("takes one big");
+            }
+        }
+        "call" => (CALL, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "ret" => (RET, O::parse_nothing(ops.clone()).map(|_| DataOperand::ImmediateByte(0)).or_else(|| O::parse_immediate_u8(ops)).expect("either nothing or a byte")),
+        "store" => {
+            if let Some(dat_op) = O::parse_two_wide_one_byte_big(ops.clone()) {
+                (STORE_B, dat_op)
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+                (STORE_W, dat_op)
+            } else {
+                panic!("two registers and big r");
+            }
+        }
+        "load" => {
+             if let Some(dat_op) = O::parse_one_byte_two_wide(ops.clone()) {
+                (LOAD_B, dat_op)
+            } else if let Some(dat_op) = O::parse_three_wide(ops) {
+                (LOAD_W, dat_op)
+            } else {
+                panic!("three registers");
+            }
+        }
+        "jmp" | "jump" => {
+             if let Some(dat_op) = O::parse_immediate_u16(ops.clone(), lbl_mkr) {
+                (JUMP, dat_op)
+            } else if let Some(dat_op) = O::parse_wreg(ops) {
+                (JUMP_REG, dat_op)
+            } else {
+                panic!("address or wide register");
+            }
+        }
+
+        "jez" => (JEZ, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jlt" => (JLT, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jle" => (JLE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jgt" => (JGT, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jge" => (JGE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jnz" => (JNZ, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jo" => (JO, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jno" => (JNO, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jb" | "jc" => (JB, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jae" | "jnc" => (JAE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "ja" => (JA, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jbe" => (JBE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+
+        "add" => {
+            if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
+                (ADD_B, dat_op)
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+                (ADD_W, dat_op)
+            } else {
+                panic!("two regs and one big");
+            }
+        }
+        "sub" => {
+            if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
+                (SUB_B, dat_op)
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+                (SUB_W, dat_op)
+            } else {
+                panic!("two regs and one big");
+            }
+        }
+        "and" => {
+            if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
+                (AND_B, dat_op)
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+                (AND_W, dat_op)
+            } else {
+                panic!("two regs and one big");
+            }
+        }
+        "or" => {
+            if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
+                (OR_B, dat_op)
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+                (OR_W, dat_op)
+            } else {
+                panic!("two regs and one big");
+            }
+        }
+        "xor" => {
+            if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
+                (XOR_B, dat_op)
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+                (XOR_W, dat_op)
+            } else {
+                panic!("two regs and one big");
+            }
+        }
+        "mul" => {
+            if let Some(dat_op) = O::parse_four_byte(ops.clone()) {
+                (MUL_B, dat_op)
+            } else if let Some(dat_op) = O::parse_four_wide(ops) {
+                (MUL_W, dat_op)
+            } else {
+                panic!("four registers")
+            }
+        }
+        "div" => {
+            if let Some(dat_op) = O::parse_four_byte(ops.clone()) {
+                (DIV_B, dat_op)
+            } else if let Some(dat_op) = O::parse_four_wide(ops) {
+                (DIV_W, dat_op)
+            } else {
+                panic!("four registers")
+            }
+        }
         _ => panic!("unknown instruction {s}"),
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+struct LabelMaker {
+    labels: Vec<Box<str>>,
+}
+
+impl LabelMaker {
+    fn get_id(&mut self, lbl: &str) -> usize {
+        if let Some(i) = self.labels.iter().position(|l| &**l == lbl) {
+            i
+        } else {
+            let i = self.labels.len();
+            self.labels.push(lbl.to_owned().into_boxed_str());
+            i
+        }
+    }
+}
+
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Wide {
     Number(u16),
-    Label(Box<str>),
+    Label(usize),
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub enum BigR {
-    Register(Reg),
+pub enum BBigR {
+    Register(BReg),
     Byte(u8),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub enum WBigR {
+    Register(WReg),
+    Wide(Wide),
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum DataOperand {
     Nothing,
-    BigR(BigR),
-    Register(Reg),
-    TwoRegistersAndBigR(Reg, Reg, BigR),
+    ByteBigR(BBigR),
+    WideBigR(WBigR),
+    ByteRegister(BReg),
+    WideRegister(WReg),
     ImmediateByte(u8),
     ImmediateWide(Wide),
-    Hr(u16, Reg),
-    Rh(Reg, u16),
-    FourRegisters(Reg, Reg, Reg, Reg),
-    ThreeRegisters(Reg, Reg, Reg),
-    BRegisters(Reg, Reg, Reg),
+    TwoWideOneByteBig(WReg, WReg, BBigR),
+    ThreeWide(WReg, WReg, WReg),
+    OneByteTwoWide(BReg, WReg, WReg),
+    TwoByteOneBig(BReg, BReg, BBigR),
+    TwoWideOneBig(WReg, WReg, WBigR),
+    FourByte(BReg, BReg, BReg, BReg),
+    FourWide(WReg, WReg, WReg, WReg),
 }
 
 impl DataOperand {
     fn size(&self) -> u16 {
+        use self::DataOperand::*;
         match self {
-            DataOperand::Nothing => 0,
-            DataOperand::BigR(_) => 1,
-            DataOperand::Register(_) => 1,
-            DataOperand::TwoRegistersAndBigR(_, _, _) => 2,
-            DataOperand::ImmediateByte(_) => 1,
-            DataOperand::ImmediateWide(_) => 2,
-            DataOperand::Hr(_, _) => 2,
-            DataOperand::Rh(_, _) => 2,
-            DataOperand::FourRegisters(_, _, _, _) => 2,
-            DataOperand::ThreeRegisters(_, _, _) => 2,
-            DataOperand::BRegisters(_, _, _) => 1,
+            Nothing => 0,
+            ByteBigR(_) => 1,
+            WideBigR(_) => 2,
+            ByteRegister(_) => 1,
+            WideRegister(_) => 1,
+            ImmediateByte(_) => 1,
+            ImmediateWide(_) => 2,
+            TwoWideOneByteBig(_, _, _) => 2,
+            OneByteTwoWide(_, _, _) => 2,
+            ThreeWide(_, _, _) => 2,
+            TwoByteOneBig(_, _, _) => 2,
+            TwoWideOneBig(_, _, _) => 3,
+            FourByte(_, _, _, _) => 2,
+            FourWide(_, _, _, _) => 2,
         }
     }
-    fn parse_nothing(ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        if ops.is_empty() {
+    fn parse_nothing<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        if ops.next().is_none() {
             Some(DataOperand::Nothing)
         } else { None }
     }
-    fn parse_register(ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        match &*ops {
-            &[SourceOperand::Reg(r)] => Some(DataOperand::Register(r)),
-            _ => None
-        }
+    fn parse_breg<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let breg = Self::byte(ops.next()?)?;
+        Self::parse_nothing(ops)?;
+        Some(DataOperand::ByteRegister(breg))
     }
-    fn parse_big_r(mut ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        if ops.len() != 1 { return None }
-        match ops.pop().unwrap() {
-            SourceOperand::Label(_) => None,
-            SourceOperand::Number(n) => Some(DataOperand::BigR(BigR::Byte(n as u8))),
-            SourceOperand::Reg(r) => Some(DataOperand::BigR(BigR::Register(r))),
-        }
+    fn parse_wreg<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let wreg = Self::wide(ops.next()?)?;
+        Self::parse_nothing(ops)?;
+        Some(DataOperand::WideRegister(wreg))
     }
-    fn parse_two_registers_and_big_r(mut ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        let mut regs = ops.drain(..2);
-        let reg1 = regs.next()?;
-        let reg2 = regs.next()?;
-        drop(regs);
-        match (reg1, reg2, Self::parse_big_r(ops)?) {
-            (SourceOperand::Reg(r1), SourceOperand::Reg(r2), DataOperand::BigR(br)) => Some(DataOperand::TwoRegistersAndBigR(r1, r2, br)),
+    fn parse_immediate_u8<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let ret = Some(DataOperand::ImmediateByte(Self::imm_byte(ops.next()?)?));
+        Self::parse_nothing(ops)?;
+        ret
+    }
+    fn parse_immediate_u16<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+        let ret = Some(DataOperand::ImmediateWide(Self::imm_wide(ops.next()?, lbl_mkr)?));
+        Self::parse_nothing(ops)?;
+        ret
+    }
+    fn parse_b_big_r<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let ret = Some(DataOperand::ByteBigR(Self::byte_or_imm(ops.next()?)?));
+        Self::parse_nothing(ops)?;
+        ret
+    }
+    fn parse_w_big_r<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+        let ret = Some(DataOperand::WideBigR(Self::wide_or_imm(ops.next()?, lbl_mkr)?));
+        Self::parse_nothing(ops)?;
+        ret
+    }
+    fn parse_two_byte_one_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let reg1 = ops.next()?;
+        let reg2 = ops.next()?;
+        match Self::parse_b_big_r(ops)? {
+            DataOperand::ByteBigR(br)
+                => Some(DataOperand::TwoByteOneBig(Self::byte(reg1)?, Self::byte(reg2)?, br)),
             _ => None,
         }
     }
-    fn parse_immediate_u8(mut ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        if ops.len() != 1 { return None }
-        match ops.pop().unwrap() {
-            SourceOperand::Number(n) => Some(DataOperand::ImmediateByte(n as u8)),
+    fn parse_two_wide_one_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+        let reg1 = ops.next()?;
+        let reg2 = ops.next()?;
+        match Self::parse_w_big_r(ops, lbl_mkr)? {
+            DataOperand::WideBigR(wr)
+                => Some(DataOperand::TwoWideOneBig(Self::wide(reg1)?, Self::wide(reg2)?, wr)),
             _ => None,
         }
     }
-    fn parse_immediate_u16(mut ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        if ops.len() != 1 { return None }
-        Some(DataOperand::ImmediateWide(match ops.pop().unwrap() {
-            SourceOperand::Number(n) => Wide::Number(n as u16),
-            SourceOperand::Label(lbl) => Wide::Label(lbl),
-            _ => return None,
-        }))
-    }
-    fn parse_hr(ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        match &*ops {
-            &[SourceOperand::Number(h), SourceOperand::Reg(r)]
-                => Some(DataOperand::Hr(h as u16, r)),
-            _ => None
+    fn parse_two_wide_one_byte_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let reg1 = ops.next()?;
+        let reg2 = ops.next()?;
+        match Self::parse_b_big_r(ops)? {
+            DataOperand::ByteBigR(br)
+                => Some(DataOperand::TwoWideOneByteBig(Self::wide(reg1)?, Self::wide(reg2)?, br)),
+            _ => None,
         }
     }
-    fn parse_rh(ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        match &*ops {
-            &[SourceOperand::Reg(r), SourceOperand::Number(h)]
-                => Some(DataOperand::Rh(r, h as u16)),
-            _ => None
+    fn parse_one_byte_two_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let reg1 = ops.next()?;
+        let reg2 = ops.next()?;
+        let reg3 = ops.next()?;
+        Self::parse_nothing(ops);
+        Some(DataOperand::OneByteTwoWide(Self::byte(reg1)?, Self::wide(reg2)?, Self::wide(reg3)?))
+    }
+    fn parse_three_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let reg1 = ops.next()?;
+        let reg2 = ops.next()?;
+        let reg3 = ops.next()?;
+        Self::parse_nothing(ops);
+        Some(DataOperand::ThreeWide(Self::wide(reg1)?, Self::wide(reg2)?, Self::wide(reg3)?))
+    }
+    fn parse_four_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let reg1 = ops.next()?;
+        let reg2 = ops.next()?;
+        let reg3 = ops.next()?;
+        let reg4 = ops.next()?;
+        Self::parse_nothing(ops);
+        Some(DataOperand::FourByte(Self::byte(reg1)?, Self::byte(reg2)?, Self::byte(reg3)?, Self::byte(reg4)?))
+    }
+    fn parse_four_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
+        let reg1 = ops.next()?;
+        let reg2 = ops.next()?;
+        let reg3 = ops.next()?;
+        let reg4 = ops.next()?;
+        Self::parse_nothing(ops);
+        Some(DataOperand::FourWide(Self::wide(reg1)?, Self::wide(reg2)?, Self::wide(reg3)?, Self::wide(reg4)?))
+    }
+
+    fn byte(op: &SourceOperand) -> Option<BReg> {
+        match op {
+            SourceOperand::Number(0) => Some(BReg::Zero),
+            &SourceOperand::ByteReg(r) => Some(r),
+            _ => None,
         }
     }
-    fn parse_four_registers(ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        match &*ops {
-            &[SourceOperand::Reg(r1), SourceOperand::Reg(r2), SourceOperand::Reg(r3), SourceOperand::Reg(r4)]
-                => Some(DataOperand::FourRegisters(r1, r2, r3, r4)),
-            _ => None
+    fn wide(op: &SourceOperand) -> Option<WReg> {
+        match op {
+            SourceOperand::Number(0) => Some(WReg::Zero),
+            &SourceOperand::WideReg(r) => Some(r),
+            _ => None,
         }
     }
-    fn parse_three_registers(ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        match &*ops {
-            &[SourceOperand::Reg(r1), SourceOperand::Reg(r2), SourceOperand::Reg(r3)]
-                => Some(DataOperand::ThreeRegisters(r1, r2, r3)),
-            _ => None
+    fn imm_byte(op: &SourceOperand) -> Option<u8> {
+        match op {
+            &SourceOperand::Number(n) => Some(n as u8),
+            &SourceOperand::Byte(n) => Some(n),
+            _ => None,
         }
     }
-    fn parse_b_registers(ops: Vec<SourceOperand>) -> Option<DataOperand> {
-        match &*ops {
-            &[SourceOperand::Reg(r1), SourceOperand::Reg(r2), SourceOperand::Reg(r3)]
-                => Some(DataOperand::BRegisters(r1, r2, r3)),
-            _ => None
+    fn imm_wide(op: &SourceOperand, lbl_mkr: &mut LabelMaker) -> Option<Wide> {
+        match op {
+            &SourceOperand::Number(n) => Some(Wide::Number(n as u16)),
+            &SourceOperand::Wide(n) => Some(Wide::Number(n)),
+            SourceOperand::Label(lbl) => Some(Wide::Label(lbl_mkr.get_id(lbl))),
+            _ => None,
         }
+    }
+    fn byte_or_imm(op: &SourceOperand) -> Option<BBigR> {
+        Self::byte(op)
+            .map(BBigR::Register)
+            .or_else(|| Self::imm_byte(op).map(BBigR::Byte))
+    }
+    fn wide_or_imm(op: &SourceOperand, lbl_mkr: &mut LabelMaker) -> Option<WBigR> {
+        Self::wide(op)
+            .map(WBigR::Register)
+            .or_else(|| Self::imm_wide(op, lbl_mkr).map(WBigR::Wide))
     }
 }

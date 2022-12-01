@@ -1,156 +1,191 @@
-use std::io::{Write, Read};
-
-use crate::{cpu::{Registers, TrapMode, Register}, mem::Memory};
+use crate::{cpu::{Registers, TrapMode, ByteRegister as Br, WideRegister as Wr}, mem::Memory};
 
 #[inline]
-pub fn read_big_r(r: &mut Registers, m: &dyn Memory) -> u16 {
+pub fn arg_byte_big_r(r: &mut Registers, m: &dyn Memory) -> u8 {
     let operand = m.read(r.pc);
     r.pc += 1;
     if operand >= 8 {
-        operand as u16 - 7
+        operand - 7
     } else {
-        r.read(Register::new(operand))
+        r.read_byte(Br::new(operand))
     }
 }
 #[inline]
-pub fn read_registers(r: &mut Registers, m: &dyn Memory) -> (Register, Register) {
+pub fn arg_wide_big_r(r: &mut Registers, m: &dyn Memory) -> u16 {
+    let operand = m.read_wide(r.pc);
+    r.pc += 2;
+    if operand >= 8 {
+        operand - 7
+    } else {
+        r.read_wide(Wr::new(operand as u8))
+    }
+}
+#[inline]
+pub fn arg_byte_registers(r: &mut Registers, m: &dyn Memory) -> (Br, Br) {
     let operand = m.read(r.pc);
     r.pc += 1;
-    (Register::new(operand >> 4), Register::new(operand & 0xf))
+    (Br::new(operand >> 4), Br::new(operand & 0xf))
 }
 #[inline]
-pub fn b_read_registers(r: &mut Registers, m: &dyn Memory) -> (Register, Register, Register) {
+pub fn arg_wide_registers(r: &mut Registers, m: &dyn Memory) -> (Wr, Wr) {
     let operand = m.read(r.pc);
     r.pc += 1;
-    (Register::new((operand & 0b1111_0000) >> 4), Register::new((operand & 0b0000_1100) >> 2), Register::new((operand & 0b0000_0011) >> 0))
+    (Wr::new(operand >> 4), Wr::new(operand & 0xf))
+}
+
+#[inline]
+pub fn arg_imm_byte(r: &mut Registers, m: &dyn Memory) -> u8 {
+    let val = m.read(r.pc);
+    r.pc += 1;
+    val
 }
 #[inline]
-pub fn read_rh(r: &mut Registers, m: &dyn Memory) -> (Register, u16) {
-    let low = m.read(r.pc);
-    let high = m.read(r.pc+1);
-    r.pc += 2;
-    let r = Register::new(low >> 4);
-    (r, u16::from_le_bytes([low & 0x0f, high]))
-}
-#[inline]
-pub fn read_hr(r: &mut Registers, m: &dyn Memory) -> (u16, Register) {
-    let low = m.read(r.pc);
-    let high = m.read(r.pc+1);
-    r.pc += 2;
-    let r = Register::new(high & 0x0f);
-    (((low as u16) << 4) | (high as u16 >> 4), r)
-}
-#[inline]
-pub fn read_wide(r: &mut Registers, m: &dyn Memory) -> u16 {
+pub fn arg_imm_wide(r: &mut Registers, m: &dyn Memory) -> u16 {
     let val = m.read_wide(r.pc);
     r.pc += 2;
     val
 }
 
 pub static OP_HANDLERS: [OpHandler; 256] = [
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, write, halt, read, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    nop, push, call, jmp, ret, pop, ldstk, store, ststk, load, jez, jlt, jle, jgt, jge, jnz,
-    jo, jno, jb, jae, ja, jbe, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, add, sub, and, or, xor, mul, bmul, div, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
-    invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid, invalid,
+    n, n, n, n, n, n, n, n, n, n, halt, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    nop, push_b, push_w, pop_b, pop_w, call, ret, store_b, store_w, load_b, load_w, jmp, jmp_reg, jez, jlt, jle,
+    jgt, jge, jnz, jo, jno, jb, jae, ja, jbe, n, n, n, n, n, n, n,
+    n, add_b, add_w, sub_b, sub_w, and_b, and_w, or_b, or_w, xor_b, xor_w, mul_b, mul_w, mul_wb, n, div_b,
+    div_w, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
+    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
 ];
 
 pub type OpHandler = fn(&mut Registers, &mut dyn Memory);
 
-fn invalid(r: &mut Registers, _: &mut dyn Memory) {
+fn n(r: &mut Registers, _: &mut dyn Memory) {
     r.trap(TrapMode::Invalid);
 }
 fn halt(r: &mut Registers, _: &mut dyn Memory) {
     r.trap(TrapMode::Halt);
 }
-fn write(r: &mut Registers, m: &mut dyn Memory) {
-    let big_r = read_big_r(r, m) as u8;
-    std::io::stdout().write_all(&[big_r]).unwrap()
-}
-fn read(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, _) = read_registers(r, m);
-    let mut buf = [0];
-    std::io::stdin().read(&mut buf).unwrap();
-    r.write(r1, buf[0] as u16);
-}
 
 #[inline]
-fn binop(r: &mut Registers, m: &mut dyn Memory, binop: fn(u16, u16) -> (u16, bool), ibinop: fn(i16, i16) -> (i16, bool)) {
-    let (r1, r2) = read_registers(r, m);
-    let big_r = read_big_r(r, m);
-    let operand1 = r.read(r2);
+fn binop_b(r: &mut Registers, m: &mut dyn Memory, binop: fn(u8, u8) -> (u8, bool), ibinop: fn(i8, i8) -> (i8, bool)) {
+    let (r1, r2) = arg_byte_registers(r, m);
+    let operand1 = r.read_byte(r2);
+    let operand2 = arg_byte_big_r(r, m);
 
-    let (res, carry) = binop(operand1, big_r);
-    let (ires, overflowing) = ibinop(operand1 as i16, big_r as i16);
+    let (res, carry) = binop(operand1, operand2);
+    let (ires, overflowing) = ibinop(operand1 as i8, operand2 as i8);
     r.carry = carry;
     r.overflow = overflowing;
     r.sign = ires.is_negative();
     r.zero = res == 0;
 
-    r.write(r1, res);
+    r.write_byte(r1, res);
+}
+#[inline]
+fn binop_w(r: &mut Registers, m: &mut dyn Memory, binop: fn(u16, u16) -> (u16, bool), ibinop: fn(i16, i16) -> (i16, bool)) {
+    let (r1, r2) = arg_wide_registers(r, m);
+    let operand1 = r.read_wide(r2);
+    let operand2 = arg_wide_big_r(r, m);
+
+    let (res, carry) = binop(operand1, operand2);
+    let (ires, overflowing) = ibinop(operand1 as i16, operand2 as i16);
+    r.carry = carry;
+    r.overflow = overflowing;
+    r.sign = ires.is_negative();
+    r.zero = res == 0;
+
+    r.write_wide(r1, res);
 }
 
-fn add(r: &mut Registers, m: &mut dyn Memory) {
-    binop(r, m, u16::overflowing_add, i16::overflowing_add);
+fn add_b(r: &mut Registers, m: &mut dyn Memory) {
+    binop_b(r, m, u8::overflowing_add, i8::overflowing_add);
 }
-fn sub(r: &mut Registers, m: &mut dyn Memory) {
-    binop(r, m, u16::overflowing_sub, i16::overflowing_sub);
+fn add_w(r: &mut Registers, m: &mut dyn Memory) {
+    binop_w(r, m, u16::overflowing_add, i16::overflowing_add);
 }
-fn and(r: &mut Registers, m: &mut dyn Memory) {
-    binop(r, m, |x, y| (x & y, false), |x, y| (x & y, false));
+fn sub_b(r: &mut Registers, m: &mut dyn Memory) {
+    binop_b(r, m, u8::overflowing_sub, i8::overflowing_sub);
 }
-fn or(r: &mut Registers, m: &mut dyn Memory) {
-    binop(r, m, |x, y| (x | y, false), |x, y| (x | y, false));
+fn sub_w(r: &mut Registers, m: &mut dyn Memory) {
+    binop_w(r, m, u16::overflowing_sub, i16::overflowing_sub);
 }
-fn xor(r: &mut Registers, m: &mut dyn Memory) {
-    binop(r, m, |x, y| (x ^ y, false), |x, y| (x ^ y, false));
+fn and_b(r: &mut Registers, m: &mut dyn Memory) {
+    binop_b(r, m, |x, y| (x & y, false), |x, y| (x & y, false));
 }
-fn mul(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, r2) = read_registers(r, m);
-    let (r3, r4) = read_registers(r, m);
+fn and_w(r: &mut Registers, m: &mut dyn Memory) {
+    binop_w(r, m, |x, y| (x & y, false), |x, y| (x & y, false));
+}
+fn or_b(r: &mut Registers, m: &mut dyn Memory) {
+    binop_b(r, m, |x, y| (x | y, false), |x, y| (x | y, false));
+}
+fn or_w(r: &mut Registers, m: &mut dyn Memory) {
+    binop_w(r, m, |x, y| (x | y, false), |x, y| (x | y, false));
+}
+fn xor_b(r: &mut Registers, m: &mut dyn Memory) {
+    binop_b(r, m, |x, y| (x ^ y, false), |x, y| (x ^ y, false));
+}
+fn xor_w(r: &mut Registers, m: &mut dyn Memory) {
+    binop_w(r, m, |x, y| (x ^ y, false), |x, y| (x ^ y, false));
+}
+fn mul_b(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, r2) = arg_byte_registers(r, m);
+    let (r3, r4) = arg_byte_registers(r, m);
 
-    let res = r.read(r3) as u32 * r.read(r4) as u32;
-    let upper = (res >> 16) as u16;
-    let lower = (res & 0xffff) as u16;
+    let res = r.read_byte(r3) as u16 * r.read_byte(r4) as u16;
+    let [lower, upper] = res.to_le_bytes();
 
     r.carry = upper != 0;
     r.overflow = r.carry;
     r.zero = lower == 0;
     r.sign = (lower as i8).is_negative();
 
-    r.write(r2, upper);
-    r.write(r1, lower);
+    r.write_byte(r2, upper);
+    r.write_byte(r1, lower);
 }
-fn bmul(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, r2, r3) = b_read_registers(r, m);
+fn mul_w(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, r2) = arg_wide_registers(r, m);
+    let (r3, r4) = arg_wide_registers(r, m);
 
-    let (res, overflowing) = r.read(r2).overflowing_mul(r.read(r3));
+    let res = r.read_wide(r3) as u32 * r.read_wide(r4) as u32;
+    let [lower1, lower2, upper1, upper2] = res.to_le_bytes();
+    let lower = u16::from_le_bytes([lower1, lower2]);
+    let upper = u16::from_le_bytes([upper1, upper2]);
 
-    // TODO: check this
-    r.carry = overflowing;
-    r.overflow = overflowing;
-    r.zero = res == 0;
-    r.sign = (res as i8).is_negative();
+    r.carry = upper != 0;
+    r.overflow = r.carry;
+    r.zero = lower == 0;
+    r.sign = (lower as i16).is_negative();
 
-    r.write(r1, res);
+    r.write_wide(r2, upper);
+    r.write_wide(r1, lower);
 }
-fn div(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, r2) = read_registers(r, m);
-    let (r3, r4) = read_registers(r, m);
+fn mul_wb(r: &mut Registers, m: &mut dyn Memory) {
+    let (wr1, _wr2) = arg_wide_registers(r, m);
+    let (r2, r3) = arg_byte_registers(r, m);
 
-    let n1 = r.read(r3);
-    let n2 = r.read(r4);
+    let res = r.read_byte(r2) as u16 * r.read_byte(r3) as u16;
+
+    r.carry = res > 0xff;
+    r.overflow = r.carry;
+    r.zero = (res & 0xff) == 0;
+    r.sign = (res as i16).is_negative();
+
+    r.write_wide(wr1, res);
+}
+fn div_b(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, r2) = arg_byte_registers(r, m);
+    let (r3, r4) = arg_byte_registers(r, m);
+
+    let n1 = r.read_byte(r3);
+    let n2 = r.read_byte(r4);
     if n2 == 0 {
         r.trap(TrapMode::ZeroDiv);
         return;
@@ -158,80 +193,102 @@ fn div(r: &mut Registers, m: &mut dyn Memory) {
     let upper = n1 / n2;
     let lower = n1 % n2;
 
-    r.write(r2, upper);
-    r.write(r1, lower);
+    r.write_byte(r2, upper);
+    r.write_byte(r1, lower);
+}
+fn div_w(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, r2) = arg_wide_registers(r, m);
+    let (r3, r4) = arg_wide_registers(r, m);
+
+    let n1 = r.read_wide(r3);
+    let n2 = r.read_wide(r4);
+    if n2 == 0 {
+        r.trap(TrapMode::ZeroDiv);
+        return;
+    }
+    let upper = n1 / n2;
+    let lower = n1 % n2;
+
+    r.write_wide(r2, upper);
+    r.write_wide(r1, lower);
 }
 
 fn nop(_: &mut Registers, _: &mut dyn Memory) {}
-fn push(r: &mut Registers, m: &mut dyn Memory) {
-    let w = read_big_r(r, m);
+fn push_b(r: &mut Registers, m: &mut dyn Memory) {
+    let b = arg_byte_big_r(r, m);
+    r.sp -= 1;
+    m.write(r.sp, b);
+}
+fn push_w(r: &mut Registers, m: &mut dyn Memory) {
+    let w = arg_wide_big_r(r, m);
     r.sp -= 2;
     m.write_wide(r.sp, w);
 }
+fn pop_b(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, _) = arg_byte_registers(r, m);
+
+    let n = m.read(r.sp);
+    r.sp += 1;
+
+    r.write_byte(r1, n);
+}
+fn pop_w(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, _) = arg_wide_registers(r, m);
+
+    let n = m.read_wide(r.sp);
+    r.sp += 2;
+
+    r.write_wide(r1, n);
+}
 fn call(r: &mut Registers, m: &mut dyn Memory) {
-    let w = read_wide(r, m);
+    let w = arg_imm_wide(r, m);
     let ret_addr = r.pc;
     r.pc = w;
     r.sp -= 2;
     m.write_wide(r.sp, ret_addr);
 }
-fn jmp(r: &mut Registers, m: &mut dyn Memory) {
-    let w = read_wide(r, m);
-    r.pc = w;
-}
 fn ret(r: &mut Registers, m: &mut dyn Memory) {
-    let b = m.read(r.pc);
-    r.pc += 1; // NOTE: not necessary
+    let b = arg_imm_byte(r, m);
     r.sp += b as u16;
     let ret_addr = m.read_wide(r.sp);
     r.sp += 2;
     r.pc = ret_addr;
 }
-fn pop(r: &mut Registers, m: &mut dyn Memory) {
-    let (reg, _) = read_registers(r, m);
+fn store_b(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, r2) = arg_wide_registers(r, m);
+    let big_r = arg_byte_big_r(r, m);
 
-    let n = m.read_wide(r.sp);
-    r.sp += 2;
-
-    r.write(reg, n);
+    let addr = r.read_wide(r1) + r.read_wide(r2);
+    m.write(addr, big_r);
 }
-fn ldstk(r: &mut Registers, m: &mut dyn Memory) {
-    let (reg, h) = read_rh(r, m);
+fn store_w(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, r2) = arg_wide_registers(r, m);
+    let big_r = arg_wide_big_r(r, m);
 
-    if reg.is_wide() {
-        r.write(reg, m.read_wide(r.sp + h));
-    } else if reg.is_byte() {
-        r.write(reg, m.read(r.sp + h) as u16);
-    }
-}
-fn store(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, r2) = read_registers(r, m);
-    let big_r = read_big_r(r, m);
-
-    let addr = r.read(r1) + r.read(r2);
+    let addr = r.read_wide(r1) + r.read_wide(r2);
     m.write_wide(addr, big_r);
 }
-fn ststk(r: &mut Registers, m: &mut dyn Memory) {
-    let (h, reg) = read_hr(r, m);
+fn load_b(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, _r2) = arg_byte_registers(r, m);
+    let (r3, r4) = arg_wide_registers(r, m);
 
-    let val = r.read(reg);
-
-    if reg.is_wide() {
-        m.write_wide(r.sp + h, val);
-    } else {
-        m.write(r.sp + h, val as u8);
-    }
+    let addr = r.read_wide(r3) + r.read_wide(r4);
+    r.write_byte(r1, m.read(addr));
 }
-fn load(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, r2) = read_registers(r, m);
-    let (r3, _) = read_registers(r, m);
+fn load_w(r: &mut Registers, m: &mut dyn Memory) {
+    let (r1, _r2) = arg_wide_registers(r, m);
+    let (r3, r4) = arg_wide_registers(r, m);
 
-    let addr = r.read(r2) + r.read(r3);
-    if r1.is_wide() {
-        r.write(r1, m.read_wide(addr));
-    } else {
-        r.write(r1, m.read(addr) as u16);
-    }
+    let addr = r.read_wide(r3) + r.read_wide(r4);
+    r.write_wide(r1, m.read_wide(addr));
+}
+fn jmp(r: &mut Registers, m: &mut dyn Memory) {
+    let w = arg_imm_wide(r, m);
+    r.pc = w;
+}
+fn jmp_reg(r: &mut Registers, m: &mut dyn Memory) {
+    let (rw, _) = arg_wide_registers(r, m);
+    r.pc = r.read_wide(rw);
 }
 
 fn jez(r: &mut Registers, m: &mut dyn Memory) {

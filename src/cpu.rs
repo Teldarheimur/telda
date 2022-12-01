@@ -1,4 +1,4 @@
-use std::fmt::{Display, self};
+use std::{fmt::{Display, self}, io::{Read, Write}};
 
 use crate::{mem::Memory, isa::OP_HANDLERS};
 
@@ -51,8 +51,10 @@ pub enum TrapMode {
 pub struct Registers {
     pub a: u16,
     pub b: u16,
+    pub c: u16,
     pub x: u16,
     pub y: u16,
+    pub z: u16,
 
     pub pc: u16,
     pub(crate) sp: u16,
@@ -65,59 +67,79 @@ pub struct Registers {
 }
 
 impl Registers {
-    fn read_a(&self) -> [u8; 2] {
-        self.a.to_le_bytes()
-    }
-    fn read_b(&self) -> [u8; 2] {
-        self.b.to_le_bytes()
-    }
-    pub fn read_al(&self) -> u8 {
-        let [l, _h] = self.read_a();
-        l
-    }
-    pub fn read_ah(&self) -> u8 {
-        let [_l, h] = self.read_a();
-        h
-    }
-    pub fn read_bl(&self) -> u8 {
-        let [l, _h] = self.read_b();
-        l
-    }
-    pub fn write_al(&mut self, val: u8) {
-        let [_l, h] = self.read_a();
-        self.a = u16::from_le_bytes([val, h])
-    }
-    pub fn write_ah(&mut self, val: u8) {
-        let [l, _h] = self.read_a();
-        self.a = u16::from_le_bytes([l, val])
-    }
-    pub fn write_bl(&mut self, val: u8) {
-        let [_l, h] = self.read_b();
-        self.b = u16::from_le_bytes([val, h])
-    }
-    pub fn read(&self, r: Register) -> u16 {
+    pub fn read_byte(&self, r: ByteRegister) -> u8 {
         match r.0 {
             0 => 0,
-            1 => self.read_al() as u16,
-            2 => self.read_ah() as u16,
-            3 => self.read_bl() as u16,
-            4 => self.a,
-            5 => self.b,
-            6 => self.x,
-            7 => self.y,
+            1 => self.a.to_le_bytes()[0],
+            2 => self.a.to_le_bytes()[1],
+            3 => self.b.to_le_bytes()[0],
+            4 => self.b.to_le_bytes()[1],
+            5 => self.c.to_le_bytes()[0],
+            6 => self.c.to_le_bytes()[1],
+            7 => {
+                let mut buf = [0];
+                std::io::stdin().read(&mut buf).unwrap();
+                buf[0]
+            }
             _ => unimplemented!("no such register"),
         }
     }
-    pub fn write(&mut self, r: Register, val: u16) {
+    pub fn write_byte(&mut self, r: ByteRegister, val: u8) {
         match r.0 {
             0 => (),
-            1 => self.write_al(val as u8),
-            2 => self.write_ah(val as u8),
-            3 => self.write_bl(val as u8),
-            4 => self.a = val,
-            5 => self.b = val,
-            6 => self.x = val,
-            7 => self.y = val,
+            1 => {
+                let [_low, high] = self.a.to_le_bytes();
+                self.a = u16::from_le_bytes([val, high]);
+            },
+            2 => {
+                let [low, _high] = self.a.to_le_bytes();
+                self.a = u16::from_le_bytes([low, val]);
+            },
+            3 => {
+                let [_low, high] = self.b.to_le_bytes();
+                self.b = u16::from_le_bytes([val, high]);
+            },
+            4 => {
+                let [low, _high] = self.b.to_le_bytes();
+                self.b = u16::from_le_bytes([low, val]);
+            },
+            5 => {
+                let [_low, high] = self.c.to_le_bytes();
+                self.c = u16::from_le_bytes([val, high]);
+            },
+            6 => {
+                let [low, _high] = self.c.to_le_bytes();
+                self.c = u16::from_le_bytes([low, val]);
+            },
+            7 => {
+                std::io::stdout().write_all(&[val]).unwrap();
+            }
+            _ => unimplemented!("no such register"),
+        }
+    }
+    pub fn read_wide(&self, r: WideRegister) -> u16 {
+        match r.0 {
+            0 => 0,
+            1 => self.a,
+            2 => self.b,
+            3 => self.c,
+            4 => self.x,
+            5 => self.y,
+            6 => self.z,
+            7 => self.sp,
+            _ => unimplemented!("no such register"),
+        }
+    }
+    pub fn write_wide(&mut self, r: WideRegister, val: u16) {
+        match r.0 {
+            0 => (),
+            1 => self.a = val,
+            2 => self.b = val,
+            3 => self.c = val,
+            4 => self.x = val,
+            5 => self.y = val,
+            6 => self.z = val,
+            7 => self.sp = val,
             _ => unimplemented!("no such register"),
         }
     }
@@ -128,38 +150,50 @@ impl Registers {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
-pub struct Register(u8);
+pub struct ByteRegister(u8);
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+pub struct WideRegister(u8);
 
-impl Register {
+impl ByteRegister {
     pub const fn new(r: u8) -> Self {
         debug_assert!(r < 8);
-        Register(r)
-    }
-    #[inline(always)]
-    pub const fn is_byte(self) -> bool {
-        self.0 < 4
-    }
-    #[inline(always)]
-    pub const fn is_wide(self) -> bool {
-        self.0 == 0 || self.0 >= 4
-    }
-    #[inline(always)]
-    pub const fn is_zero(self) -> bool {
-        self.0 == 0
+        Self(r)
     }
 }
 
-impl Display for Register {
+impl WideRegister {
+    pub const fn new(r: u8) -> Self {
+        debug_assert!(r < 8);
+        Self(r)
+    }
+}
+
+impl Display for ByteRegister {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self.0 {
-            0 => write!(f, "z"),
+            0 => write!(f, "rb0"),
             1 => write!(f, "al"),
             2 => write!(f, "ah"),
             3 => write!(f, "bl"),
-            4 => write!(f, "a"),
-            5 => write!(f, "b"),
-            6 => write!(f, "x"),
-            7 => write!(f, "y"),
+            4 => write!(f, "bh"),
+            5 => write!(f, "cl"),
+            6 => write!(f, "ch"),
+            7 => write!(f, "io"),
+            _ => unimplemented!("no such register")
+        }
+    }
+}
+impl Display for WideRegister {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.0 {
+            0 => write!(f, "r0"),
+            1 => write!(f, "a"),
+            2 => write!(f, "b"),
+            3 => write!(f, "c"),
+            4 => write!(f, "x"),
+            5 => write!(f, "y"),
+            6 => write!(f, "z"),
+            7 => write!(f, "s"),
             _ => unimplemented!("no such register")
         }
     }

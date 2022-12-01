@@ -1,56 +1,74 @@
-REGS:
-0 zero (both sizes)
-1 al   (byte)
-2 ah   (byte)
-3 bl   (byte)
-4 a    (wide)
-5 b    (wide)
-6 x    (wide)
-7 y    (wide)
+BYTE_REGS:
+0 zero
+1 al
+2 ah
+3 bl
+4 bh
+5 cl
+6 ch
+7 io   the io port, maps to stdin and stdout for now
+
+WIDE_REGS:
+0 zero
+1 a    al | ah
+2 b    bl | bh
+3 c    cl | ch
+4 x    16-bit only
+5 y    16-bit only
+6 z    16-bit only
+7 s    stack pointer
 
 OPERAND | SIZE | PURPOSE
-r       | 4 b  | a register, (can be followed by another r)
-R       | 8 b  | a register or an immediate number from 1 up to and including 247 (encoded as 0x08 to 0xff)
-br      | 2 b  | a byte register (zero, al, ar, bl)
+br      | 4 b  | a byte register, (can be followed by another r)
+wr      | 4 b  | a wide register, (can be followed by another r)
+bR      | 8 b  | a register or an immediate number from 1 up to and including 247 (encoded as 0x08 to 0xff)
+wR      | 16 b | a register or an immediate number from 1 up to and including 65527 (encoded as 0x08 to 0xffff)
 w       | 16 b | a wide immediate
-h       | 12 b | a 12-bit immediate (0-4095 or -2048 to 2047)
 b       | 8 b  | a byte immediate
 
-INSTRUCION         | OPCODE | DESCRIPTION
-null               | 00     | invalid instruction, triggers invalid opcode fault (so do all opcodes not mentioned here)
-...                | 01-08  | ...
-write R            | 09     | write to out port (used for simple I/O)
-halt               | 0a     | halts processor, triggers halt fault
-read r             | 0b     | read from in port (used for simple I/O)
-...                | 0c-1f  | ...
-nop                | 20     |
-push R             | 21     |
-call w             | 22     |
-jmp w              | 23     |
-ret b              | 24     |
-pop r              | 25     |
-ldstk r, h         | 26     | Load into r values at stack pointer offset of h
-store r1, r2, R    | 27     | Write value of R to memory at location [r1 + r2]
-ststk h, r         | 28     | Write value of r to stack offset h
-load r1, r2, r3    | 29     | Load into r1 the value at location in memory [r2 + r3]
-jez w              | 2a     |
-jlt w              | 2b     |
-jle w              | 2c     |
-jgt w              | 2d     |
-jge w              | 2e     |
-jnz w              | 2f     |
-jo  w              | 30     |
-jno w              | 31     |
-jb,jc w            | 32     |
-jae,jnc w          | 33     |
-ja  w              | 34     |
-jbe w              | 35     |
-...                | 36..40 | funny stuff
-add r1, r2, R      | 41     | r1 = r2 + R
-sub r1, r2, R      | 42     | r1 = r2 - R
-and r1, r2, R      | 43     | r1 = r2 & R
-or  r1, r2, R      | 44     | r1 = r2 | R
-xor r1, r2, R      | 45     | r1 = r2 ^ R
-mul r1, r2, r3, r4 | 46     | r2, r1 = r3 * r4 (r2 has the upper bytes)
-bmul r1, br2, br3  | 47     | r1(wide) = br2(byte) * br3(byte)
-div r1, r2, r3, r4 | 48     | r1 = r3 / r4; r2 = r3 % r4
+INSTRUCION             | OPCODE | DESCRIPTION
+null                   | 00     | invalid instruction, triggers invalid opcode fault (so do all opcodes not mentioned here)
+...                    | 01-09  | ...
+halt                   | 0a     | halts processor, triggers halt fault
+...                    | 0b-1f  | ...
+nop                    | 20     |
+push bR                | 21     |
+push wR                | 22     |
+pop br                 | 23     |
+pop wr                 | 24     |
+call w                 | 25     |
+ret b                  | 26     |
+store wr1, wr2, bR     | 27     | Write value of R to memory at location [r1 + r2]
+store wr1, wr2, wR     | 28     | Write value of R to memory at location [r1 + r2]
+load br1, wr3, wr4     | 29     | Load into r1 the value at location in memory [r2 + r3]
+load wr1, wr3, wr4     | 2a     | Load into r1 the value at location in memory [r2 + r3]
+jmp w                  | 2b     |
+jmp wr                 | 2c     |
+jez w                  | 2d     |
+jlt w                  | 2e     |
+jle w                  | 2f     |
+jgt w                  | 30     |
+jge w                  | 31     |
+jnz w                  | 32     |
+jo  w                  | 33     |
+jno w                  | 34     |
+jb,jc w                | 35     |
+jae,jnc w              | 36     |
+ja  w                  | 37     |
+jbe w                  | 38     |
+...                    | 39..40 | funny stuff
+add br1, br2, bR       | 41     | r1 = r2 + R
+add wr1, wr2, wR       | 42     | r1 = r2 + R
+sub br1, br2, bR       | 43     | r1 = r2 - R
+sub wr1, wr2, wR       | 44     | r1 = r2 - R
+and br1, br2, bR       | 45     | r1 = r2 & R
+and wr1, wr2, wR       | 46     | r1 = r2 & R
+or  br1, br2, bR       | 47     | r1 = r2 | R
+or  wr1, wr2, wR       | 48     | r1 = r2 | R
+xor br1, br2, bR       | 49     | r1 = r2 ^ R
+xor wr1, wr2, wR       | 4a     | r1 = r2 ^ R
+mul br1, br2, br3, br4 | 4b     | r2, r1 = r3 * r4 (r2 has the upper bytes)
+mul wr1, wr2, wr3, wr4 | 4c     | r2, r1 = r3 * r4 (r2 has the upper bytes)
+//mul wr1, br2, br3      | 4d     | r1(wide) = br2(byte) * br3(byte); (encoded as wr, wr, br, br with second wr being ignored)
+div br1, br2, br3, br4 | 4f     | r1 = r3 / r4; r2 = r3 % r4
+div wr1, wr2, wr3, wr4 | 50     | r1 = r3 / r4; r2 = r3 % r4

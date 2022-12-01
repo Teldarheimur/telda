@@ -1,6 +1,6 @@
 use std::{fs::File, env::args, io::{BufReader, Read, BufRead}, collections::HashMap, fmt::{Display, self}};
 
-use telda2::{mem::{Lazy, Memory}, cpu::{Cpu, Registers, Register}};
+use telda2::{mem::{Lazy, Memory}, cpu::{Cpu, Registers, ByteRegister, WideRegister}};
 
 fn main() {
     for arg in args().skip(1) {
@@ -62,7 +62,7 @@ fn main() {
 }
 
 fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<&'a str>, labels: &'a HashMap<u16, String>) -> bool {
-    use telda2::isa::{ADD, AND, CALL, HALT, JEZ, JGE, JGT, JLE, JLT, JNZ, JUMP, LDSTK, LOAD, NOP, NULL, OR, POP, PUSH, READ, RET, STORE, STSTK, SUB, WRITE, XOR, read_hr, read_registers, read_rh, read_wide};
+    use telda2::isa::*;
     let addr = r.pc;
     let opcode = m.read(addr);
     r.pc += 1;
@@ -76,25 +76,29 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
             print!("null");
             ret = false;
         }
-        WRITE => {
-            let big_r = read_big_r(r, m);
-            print!("write {big_r}");
-        }
-        READ => {
-            let (r1, _r2) = read_registers(r, m);
-            print!("read {r1}");
-        }
         HALT => {
             print!("halt");
             ret = false;
         }
         NOP => print!("nop"),
-        PUSH => {
-            let big_r = read_big_r(r, m);
+        PUSH_B => {
+            let big_r = byte_big_r(r, m);
             print!("push {big_r}");
         }
+        PUSH_W => {
+            let big_r = wide_big_r(r, m);
+            print!("push {big_r}");
+        }
+        POP_B => {
+            let (r1, _r2) = arg_byte_registers(r, m);
+            print!("pop {r1}");
+        }
+        POP_W => {
+            let (r1, _r2) = arg_wide_registers(r, m);
+            print!("pop {r1}");
+        }
         CALL => {
-            let w = read_wide(r, m);
+            let w = arg_imm_wide(r, m);
             if let Some(lbl) = labels.get(&w) {
                 print!("call {lbl}");
                 new_labels.push(lbl);
@@ -102,8 +106,33 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
                 print!("call 0x{w:02x}");
             }
         }
+        RET => {
+            let b = arg_imm_byte(r, m);
+            print!("ret {b}");
+            ret = false;
+        }
+        STORE_B => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let big_r = byte_big_r(r, m);
+            print!("store {r1}, {r2}, {big_r}");
+        }
+        STORE_W => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let big_r = wide_big_r(r, m);
+            print!("store {r1}, {r2}, {big_r}");
+        }
+        LOAD_B => {
+            let (r1, _) = arg_byte_registers(r, m);
+            let (r3, r4) = arg_wide_registers(r, m);
+            print!("load {r1}, {r3}, {r4}");
+        }
+        LOAD_W => {
+            let (r1, _) = arg_wide_registers(r, m);
+            let (r3, r4) = arg_wide_registers(r, m);
+            print!("load {r1}, {r3}, {r4}");
+        }
         JUMP => {
-            let w = read_wide(r, m);
+            let w = arg_imm_wide(r, m);
             if let Some(lbl) = labels.get(&w) {
                 print!("jmp {lbl}");
                 new_labels.push(lbl);
@@ -114,36 +143,13 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
                 r.pc = w;
             }
         }
-        RET => {
-            let b = m.read(r.pc);
-            r.pc += 1;
-            print!("ret {b}");
+        JUMP_REG => {
+            let (wr, _) = arg_wide_registers(r, m);
+            print!("jmp {wr}");
             ret = false;
         }
-        POP => {
-            let (r1, _r2) = read_registers(r, m);
-            print!("pop {r1}");
-        }
-        LDSTK => {
-            let (r1, h) = read_rh(r, m);
-            print!("ldstk {r1}, {h}");
-        }
-        STORE => {
-            let (r1, r2) = read_registers(r, m);
-            let big_r = read_big_r(r, m);
-            print!("store {r1}, {r2}, {big_r}");
-        }
-        STSTK => {
-            let (h, r1) = read_hr(r, m);
-            print!("ststk {h}, {r1}");
-        }
-        LOAD => {
-            let (r1, r2) = read_registers(r, m);
-            let (r3, _r4) = read_registers(r, m);
-            print!("load {r1}, {r2}, {r3}");
-        }
         JEZ => {
-            let w = read_wide(r, m);
+            let w = arg_imm_wide(r, m);
             if let Some(lbl) = labels.get(&w) {
                 print!("jez {lbl}");
                 new_labels.push(lbl);
@@ -152,7 +158,7 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
             }
         }
         JLT => {
-            let w = read_wide(r, m);
+            let w = arg_imm_wide(r, m);
             if let Some(lbl) = labels.get(&w) {
                 print!("JLT {lbl}");
                 new_labels.push(lbl);
@@ -161,7 +167,7 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
             }
         }
         JLE => {
-            let w = read_wide(r, m);
+            let w = arg_imm_wide(r, m);
             if let Some(lbl) = labels.get(&w) {
                 print!("JLE {lbl}");
                 new_labels.push(lbl);
@@ -170,7 +176,7 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
             }
         }
         JGT => {
-            let w = read_wide(r, m);
+            let w = arg_imm_wide(r, m);
             if let Some(lbl) = labels.get(&w) {
                 print!("JGT {lbl}");
                 new_labels.push(lbl);
@@ -179,7 +185,7 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
             }
         }
         JGE => {
-            let w = read_wide(r, m);
+            let w = arg_imm_wide(r, m);
             if let Some(lbl) = labels.get(&w) {
                 print!("JGE {lbl}");
                 new_labels.push(lbl);
@@ -188,7 +194,7 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
             }
         }
         JNZ => {
-            let w = read_wide(r, m);
+            let w = arg_imm_wide(r, m);
             if let Some(lbl) = labels.get(&w) {
                 print!("JNZ {lbl}");
                 new_labels.push(lbl);
@@ -196,30 +202,75 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
                 print!("JNZ 0x{w:02x}");
             }
         }
-        ADD => {
-            let (r1, r2) = read_registers(r, m);
-            let big_r = read_big_r(r, m);
+        ADD_B => {
+            let (r1, r2) = arg_byte_registers(r, m);
+            let big_r = byte_big_r(r, m);
             print!("add {r1}, {r2}, {big_r}");
         }
-        SUB => {
-            let (r1, r2) = read_registers(r, m);
-            let big_r = read_big_r(r, m);
+        ADD_W => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let big_r = wide_big_r(r, m);
+            print!("add {r1}, {r2}, {big_r}");
+        }
+        SUB_B => {
+            let (r1, r2) = arg_byte_registers(r, m);
+            let big_r = byte_big_r(r, m);
             print!("sub {r1}, {r2}, {big_r}");
         }
-        AND => {
-            let (r1, r2) = read_registers(r, m);
-            let big_r = read_big_r(r, m);
+        SUB_W => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let big_r = wide_big_r(r, m);
+            print!("sub {r1}, {r2}, {big_r}");
+        }
+        AND_B => {
+            let (r1, r2) = arg_byte_registers(r, m);
+            let big_r = byte_big_r(r, m);
             print!("and {r1}, {r2}, {big_r}");
         }
-        OR => {
-            let (r1, r2) = read_registers(r, m);
-            let big_r = read_big_r(r, m);
+        AND_W => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let big_r = wide_big_r(r, m);
+            print!("and {r1}, {r2}, {big_r}");
+        }
+        OR_B => {
+            let (r1, r2) = arg_byte_registers(r, m);
+            let big_r = byte_big_r(r, m);
             print!("or {r1}, {r2}, {big_r}");
         }
-        XOR => {
-            let (r1, r2) = read_registers(r, m);
-            let big_r = read_big_r(r, m);
+        OR_W => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let big_r = wide_big_r(r, m);
+            print!("or {r1}, {r2}, {big_r}");
+        }
+        XOR_B => {
+            let (r1, r2) = arg_byte_registers(r, m);
+            let big_r = byte_big_r(r, m);
             print!("xor {r1}, {r2}, {big_r}");
+        }
+        XOR_W => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let big_r = wide_big_r(r, m);
+            print!("xor {r1}, {r2}, {big_r}");
+        }
+        MUL_B => {
+            let (r1, r2) = arg_byte_registers(r, m);
+            let (r3, r4) = arg_byte_registers(r, m);
+            print!("mul {r1}, {r2}, {r3}, {r4}")
+        }
+        MUL_W => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let (r3, r4) = arg_wide_registers(r, m);
+            print!("mul {r1}, {r2}, {r3}, {r4}")
+        }
+        DIV_B => {
+            let (r1, r2) = arg_byte_registers(r, m);
+            let (r3, r4) = arg_byte_registers(r, m);
+            print!("div {r1}, {r2}, {r3}, {r4}")
+        }
+        DIV_W => {
+            let (r1, r2) = arg_wide_registers(r, m);
+            let (r3, r4) = arg_wide_registers(r, m);
+            print!("div {r1}, {r2}, {r3}, {r4}")
         }
         b => {
             print!("0x{b:02x}");
@@ -234,16 +285,29 @@ fn read_instruction<'a>(r: &mut Registers, m: &dyn Memory, new_labels: &mut Vec<
 
 enum BigR {
     Byte(u8),
-    Reg(Register)
+    Wide(u16),
+    BReg(ByteRegister),
+    WReg(WideRegister),
 }
 
-fn read_big_r(r: &mut Registers, m: &dyn Memory) -> BigR {
+#[inline]
+fn byte_big_r(r: &mut Registers, m: &dyn Memory) -> BigR {
     let operand = m.read(r.pc);
     r.pc += 1;
     if operand >= 8 {
         BigR::Byte(operand - 7)
     } else {
-        BigR::Reg(Register::new(operand))
+        BigR::BReg(ByteRegister::new(operand))
+    }
+}
+#[inline]
+fn wide_big_r(r: &mut Registers, m: &dyn Memory) -> BigR {
+    let operand = m.read_wide(r.pc);
+    r.pc += 2;
+    if operand >= 8 {
+        BigR::Wide(operand - 7)
+    } else {
+        BigR::WReg(WideRegister::new(operand as u8))
     }
 }
 
@@ -251,7 +315,9 @@ impl Display for BigR {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             BigR::Byte(b) => write!(f, "0x{b:02x}"),
-            BigR::Reg(r) => r.fmt(f),
+            BigR::Wide(w) => write!(f, "0x{w:03x}"),
+            BigR::BReg(r) => r.fmt(f),
+            BigR::WReg(r) => r.fmt(f),
         }
     }
 }
