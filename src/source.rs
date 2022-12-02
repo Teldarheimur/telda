@@ -184,12 +184,14 @@ pub enum DataLine {
 }
 
 pub fn process(lines: impl Iterator<Item=SourceLine>) -> (HashMap<usize, u16>, Vec<Box<str>>, Vec<DataLine>) {
-    inner_process(lines, &mut 0)
-}
-fn inner_process(lines: impl Iterator<Item=SourceLine>, cur_offset: &mut u16) -> (HashMap<usize, u16>, Vec<Box<str>>, Vec<DataLine>) {
-    let mut data_lines = Vec::new();
     let mut id_to_pos = HashMap::new();
     let mut label_maker = LabelMaker { labels: Vec::new() };
+
+    let data_lines = inner_process(lines, &mut 0, &mut label_maker, &mut id_to_pos);
+    (id_to_pos, label_maker.labels, data_lines)
+}
+fn inner_process(lines: impl Iterator<Item=SourceLine>, cur_offset: &mut u16, label_maker: &mut LabelMaker, id_to_pos: &mut HashMap<usize, u16>) -> Vec<DataLine> {
+    let mut data_lines = Vec::new();
 
     for line in lines {
         match line {
@@ -198,7 +200,7 @@ fn inner_process(lines: impl Iterator<Item=SourceLine>, cur_offset: &mut u16) ->
                 id_to_pos.insert(id, *cur_offset);
             }
             SourceLine::Ins(s, ops) => {
-                let (opcode, dat_op) = parse_ins(s, ops, &mut label_maker);
+                let (opcode, dat_op) = parse_ins(s, ops, label_maker);
                 *cur_offset += 1 + dat_op.size();
                 data_lines.push(DataLine::Ins(opcode, dat_op));
             }
@@ -218,24 +220,22 @@ fn inner_process(lines: impl Iterator<Item=SourceLine>, cur_offset: &mut u16) ->
             SourceLine::DirInclude(path) => {
                 let f = File::open(&path).unwrap();
                 let lines = SourceLines::new(BufReader::new(f));
-                let (included_id_to_pos, included_labels, included_data_lines) = inner_process(lines, cur_offset);
+                let old_label_marker = label_maker.labels.len();
+                let included_data_lines = inner_process(lines, cur_offset, label_maker, id_to_pos);
 
                 data_lines.extend(included_data_lines);
-                for (i, lbl) in included_labels.into_iter().enumerate() {
-                    let lbl = if lbl.chars().next().unwrap().is_uppercase() {
-                        lbl
-                    } else {
-                        format!("{path}  {lbl}").into_boxed_str()
+                for lbl in label_maker.labels.iter_mut().skip(old_label_marker) {
+                    // mangle non-global symbols (currently meaning ones with capital letters)
+                    if !lbl.chars().next().unwrap().is_uppercase() {
+                        *lbl = format!("{path}  {lbl}").into_boxed_str();
                     };
-                    let new_id = label_maker.get_id(&lbl);
-                    id_to_pos.insert(new_id, included_id_to_pos[&i]);
                 }
             }
             SourceLine::Comment => (),
         }
     }
 
-    (id_to_pos, label_maker.labels, data_lines)
+    data_lines
 }
 
 fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u8, DataOperand) {
@@ -299,7 +299,7 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u
         "jle" => (JLE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
         "jgt" => (JGT, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
         "jge" => (JGE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jnz" => (JNZ, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jnz" | "jne" => (JNZ, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
         "jo" => (JO, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
         "jno" => (JNO, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
         "jb" | "jc" => (JB, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
