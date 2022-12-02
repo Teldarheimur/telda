@@ -111,60 +111,18 @@ pub fn disassemble_instruction<'a>(location: u16, binary_code: &[u8], labels_dis
             write!(f, "jmp {wr}").unwrap();
             does_not_end_function = false;
         }
-        JEZ => {
-            let w = arg_imm_wide(r, m);
-            if let Some(lbl) = labels.get(&w) {
-                write!(f, "jez {lbl}").unwrap();
-                labels_discored.push(lbl);
-            } else {
-                write!(f, "jez 0x{w:02x}").unwrap();
-            }
-        }
-        JLT => {
-            let w = arg_imm_wide(r, m);
-            if let Some(lbl) = labels.get(&w) {
-                write!(f, "JLT {lbl}").unwrap();
-                labels_discored.push(lbl);
-            } else {
-                write!(f, "JLT 0x{w:02x}").unwrap();
-            }
-        }
-        JLE => {
-            let w = arg_imm_wide(r, m);
-            if let Some(lbl) = labels.get(&w) {
-                write!(f, "JLE {lbl}").unwrap();
-                labels_discored.push(lbl);
-            } else {
-                write!(f, "JLE 0x{w:02x}").unwrap();
-            }
-        }
-        JGT => {
-            let w = arg_imm_wide(r, m);
-            if let Some(lbl) = labels.get(&w) {
-                write!(f, "JGT {lbl}").unwrap();
-                labels_discored.push(lbl);
-            } else {
-                write!(f, "JGT 0x{w:02x}").unwrap();
-            }
-        }
-        JGE => {
-            let w = arg_imm_wide(r, m);
-            if let Some(lbl) = labels.get(&w) {
-                write!(f, "JGE {lbl}").unwrap();
-                labels_discored.push(lbl);
-            } else {
-                write!(f, "JGE 0x{w:02x}").unwrap();
-            }
-        }
-        JNZ => {
-            let w = arg_imm_wide(r, m);
-            if let Some(lbl) = labels.get(&w) {
-                write!(f, "JNZ {lbl}").unwrap();
-                labels_discored.push(lbl);
-            } else {
-                write!(f, "JNZ 0x{w:02x}").unwrap();
-            }
-        }
+        JEZ => cjmp("jez", r, m, labels, labels_discored, f),
+        JLT => cjmp("jlt", r, m, labels, labels_discored, f),
+        JLE => cjmp("jle", r, m, labels, labels_discored, f),
+        JGT => cjmp("jgt", r, m, labels, labels_discored, f),
+        JGE => cjmp("jge", r, m, labels, labels_discored, f),
+        JNZ => cjmp("jnz", r, m, labels, labels_discored, f),
+        JO => cjmp("jo", r, m, labels, labels_discored, f),
+        JNO => cjmp("jno", r, m, labels, labels_discored, f),
+        JB => cjmp("jb", r, m, labels, labels_discored, f),
+        JAE => cjmp("jae", r, m, labels, labels_discored, f),
+        JA => cjmp("ja", r, m, labels, labels_discored, f),
+        JBE => cjmp("jbe", r, m, labels, labels_discored, f),
         ADD_B => {
             let (r1, r2) = arg_byte_registers(r, m);
             let big_r = byte_big_r(r, m);
@@ -261,6 +219,15 @@ pub fn disassemble_instruction<'a>(location: u16, binary_code: &[u8], labels_dis
     }
 }
 
+fn cjmp<'a>(name: &str, r: &mut Registers, m: &dyn Memory, labels: &'a HashMap<u16, String>, labels_discored: &mut Vec<&'a str>, f: &mut String) {
+    let w = crate::isa::arg_imm_wide(r, m);
+    if let Some(lbl) = labels.get(&w) {
+        write!(f, "{name} {lbl}").unwrap();
+        labels_discored.push(lbl);
+    } else {
+        write!(f, "{name} 0x{w:02x}").unwrap();
+    }
+}
 
 enum BigR {
     Byte(u8),

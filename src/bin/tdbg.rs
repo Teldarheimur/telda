@@ -1,4 +1,4 @@
-use std::{fs::File, env::args, io::{BufReader, Read, BufRead, stdin}, collections::HashMap, path::Path};
+use std::{fs::File, env::args, io::{BufReader, Read, BufRead, stdin, stdout, Write}, collections::HashMap, path::Path};
 
 use telda2::{mem::{Lazy, Memory}, cpu::{Cpu, ByteRegister, Registers}, disassemble::disassemble_instruction};
 
@@ -49,6 +49,9 @@ fn main() {
 
         'command_loop: loop {
             if continuing { break }
+
+            print!("+tdgb> ");
+            stdout().flush().unwrap();
 
             input.clear();
             stdin.read_line(&mut input).unwrap();
