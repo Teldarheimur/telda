@@ -1,4 +1,4 @@
-use std::{fmt::{Display, self}, io::{Read, Write}, mem::MaybeUninit};
+use std::{fmt::{Display, self}, io::{Read, Write}};
 
 use crate::{mem::Memory, isa::OP_HANDLERS};
 
@@ -64,14 +64,15 @@ pub struct Registers {
 
 impl Registers {
     pub fn new(pc: u16) -> Self {
-        #[allow(invalid_value)]
+        let seed = (pc << 8) | (!pc);
+        // Pseudo-randomise starting registers so that they cannot be relied on
         Registers {
-            a: unsafe { MaybeUninit::uninit().assume_init() },
-            b: unsafe { MaybeUninit::uninit().assume_init() },
-            c: unsafe { MaybeUninit::uninit().assume_init() },
-            x: unsafe { MaybeUninit::uninit().assume_init() },
-            y: unsafe { MaybeUninit::uninit().assume_init() },
-            z: unsafe { MaybeUninit::uninit().assume_init() },
+            a: seed ^ 0x47f4,
+            b: seed ^ 0xe657,
+            c: seed ^ 0x3933,
+            x: seed ^ 0xa2be,
+            y: seed ^ 0x2caf,
+            z: seed ^ 0x5661,
             pc,
             sp: 0x7f_ff,
             trap: false,
