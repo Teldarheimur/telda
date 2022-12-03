@@ -24,25 +24,25 @@ pub fn arg_wide_big_r(r: &mut Registers, m: &dyn Memory) -> u16 {
 pub fn arg_byte_registers(r: &mut Registers, m: &dyn Memory) -> (Br, Br) {
     let operand = m.read(r.pc);
     r.pc += 1;
-    (Br::new(operand >> 4), Br::new(operand & 0xf))
+    (Br::new((operand >> 4) & 0x7), Br::new(operand & 0x7))
 }
 #[inline]
 pub fn arg_wide_registers(r: &mut Registers, m: &dyn Memory) -> (Wr, Wr) {
     let operand = m.read(r.pc);
     r.pc += 1;
-    (Wr::new(operand >> 4), Wr::new(operand & 0xf))
+    (Wr::new((operand >> 4) & 0x7), Wr::new(operand & 0x7))
 }
 #[inline]
 pub fn arg_byte_wide_registers(r: &mut Registers, m: &dyn Memory) -> (Br, Wr) {
     let operand = m.read(r.pc);
     r.pc += 1;
-    (Br::new(operand >> 4), Wr::new(operand & 0xf))
+    (Br::new((operand >> 4) & 0x7), Wr::new(operand & 0x7))
 }
 #[inline]
 pub fn arg_wide_byte_registers(r: &mut Registers, m: &dyn Memory) -> (Wr, Br) {
     let operand = m.read(r.pc);
     r.pc += 1;
-    (Wr::new(operand >> 4), Br::new(operand & 0xf))
+    (Wr::new((operand >> 4) & 0x7), Br::new(operand & 0x7))
 }
 
 #[inline]
@@ -58,26 +58,58 @@ pub fn arg_imm_wide(r: &mut Registers, m: &dyn Memory) -> u16 {
     val
 }
 
-pub static OP_HANDLERS: [OpHandler; 256] = [
-    n, n, n, n, n, n, n, n, n, n, halt, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    nop, push_b, push_w, pop_b, pop_w, call, ret, store_b, store_w, load_b, load_w, jmp, jmp_reg, jez, jlt, jle,
-    jgt, jge, jnz, jo, jno, jb, jae, ja, jbe, n, n, n, n, n, n, n,
-    n, add_b, add_w, sub_b, sub_w, and_b, and_w, or_b, or_w, xor_b, xor_w, mul_b, mul_w, mul_wb, n, div_b,
-    div_w, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-    n, n, n, n, n, n, n, n, n, n, n, n, n, n, n, n,
-];
-
 pub type OpHandler = fn(&mut Registers, &mut dyn Memory);
+
+pub static OP_HANDLERS: [OpHandler; 256] = {
+    let mut handlers: [OpHandler; 256] = [n; 256];
+
+    use super::*;
+
+    handlers[NULL as usize] = n;
+    handlers[HALT as usize] = halt;
+    handlers[NOP as usize] = nop;
+    handlers[PUSH_B as usize] = push_b;
+    handlers[PUSH_W as usize] = push_w;
+    handlers[POP_B as usize] = pop_b;
+    handlers[POP_W as usize] = pop_w;
+    handlers[CALL as usize] = call;
+    handlers[RET as usize] = ret;
+    handlers[STORE_B as usize] = store_b;
+    handlers[STORE_W as usize] = store_w;
+    handlers[LOAD_B as usize] = load_b;
+    handlers[LOAD_W as usize] = load_w;
+    handlers[JUMP as usize] = jmp;
+    handlers[JUMP_REG as usize] = jmp_reg;
+    handlers[JEZ as usize] = jez;
+    handlers[JLT as usize] = jlt;
+    handlers[JLE as usize] = jle;
+    handlers[JGT as usize] = jgt;
+    handlers[JGE as usize] = jge;
+    handlers[JNZ as usize] = jnz;
+    handlers[JO as usize] = jo;
+    handlers[JNO as usize] = jno;
+    handlers[JB as usize] = jb;
+    handlers[JAE as usize] = jae;
+    handlers[JA as usize] = ja;
+    handlers[JBE as usize] = jbe;
+    handlers[ADD_B as usize] = add_b;
+    handlers[ADD_W as usize] = add_w;
+    handlers[SUB_B as usize] = sub_b;
+    handlers[SUB_W as usize] = sub_w;
+    handlers[AND_B as usize] = and_b;
+    handlers[AND_W as usize] = and_w;
+    handlers[OR_B as usize] = or_b;
+    handlers[OR_W as usize] = or_w;
+    handlers[XOR_B as usize] = xor_b;
+    handlers[XOR_W as usize] = xor_w;
+    handlers[MUL_B as usize] = mul_b;
+    handlers[MUL_W as usize] = mul_w;
+    handlers[MUL_WB as usize] = mul_wb;
+    handlers[DIV_B as usize] = div_b;
+    handlers[DIV_W as usize] = div_w;
+
+    handlers
+};
 
 fn n(r: &mut Registers, _: &mut dyn Memory) {
     r.trap(TrapMode::Invalid);
@@ -261,9 +293,8 @@ fn call(r: &mut Registers, m: &mut dyn Memory) {
 }
 fn ret(r: &mut Registers, m: &mut dyn Memory) {
     let b = arg_imm_byte(r, m);
-    r.sp += b as u16;
     let ret_addr = m.read_wide(r.sp);
-    r.sp += 2;
+    r.sp += 2 + b as u16;
     r.pc = ret_addr;
 }
 fn store_b(r: &mut Registers, m: &mut dyn Memory) {
