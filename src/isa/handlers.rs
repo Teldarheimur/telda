@@ -159,8 +159,8 @@ fn mul_b(r: &mut Registers, m: &mut dyn Memory) {
     r.zero = lower == 0;
     r.sign = (lower as i8).is_negative();
 
-    r.write_byte(r2, upper);
-    r.write_byte(r1, lower);
+    r.write_byte(r1, upper);
+    r.write_byte(r2, lower);
 }
 fn mul_w(r: &mut Registers, m: &mut dyn Memory) {
     let (r1, r2) = arg_wide_registers(r, m);
@@ -176,8 +176,8 @@ fn mul_w(r: &mut Registers, m: &mut dyn Memory) {
     r.zero = lower == 0;
     r.sign = (lower as i16).is_negative();
 
-    r.write_wide(r2, upper);
-    r.write_wide(r1, lower);
+    r.write_wide(r1, upper);
+    r.write_wide(r2, lower);
 }
 fn mul_wb(r: &mut Registers, m: &mut dyn Memory) {
     let (wr1, _wr2) = arg_wide_registers(r, m);
@@ -205,8 +205,8 @@ fn div_b(r: &mut Registers, m: &mut dyn Memory) {
     let upper = n1 / n2;
     let lower = n1 % n2;
 
-    r.write_byte(r2, upper);
-    r.write_byte(r1, lower);
+    r.write_byte(r1, upper);
+    r.write_byte(r2, lower);
 }
 fn div_w(r: &mut Registers, m: &mut dyn Memory) {
     let (r1, r2) = arg_wide_registers(r, m);
@@ -221,8 +221,8 @@ fn div_w(r: &mut Registers, m: &mut dyn Memory) {
     let upper = n1 / n2;
     let lower = n1 % n2;
 
-    r.write_wide(r2, upper);
-    r.write_wide(r1, lower);
+    r.write_wide(r1, upper);
+    r.write_wide(r2, lower);
 }
 
 fn nop(_: &mut Registers, _: &mut dyn Memory) {}
