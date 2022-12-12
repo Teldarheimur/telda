@@ -6,6 +6,7 @@ mod err;
 pub use self::err::*;
 mod symbols;
 use self::symbols::*;
+pub use self::symbols::{Format, LabelRead};
 
 type Opcode = u8;
 
@@ -229,9 +230,9 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<(Vec<(Box<str>, bool
 
     let data_lines = inner_process(lines, &mut 0, &mut symbols)?;
 
-    let mut labels = Vec::with_capacity(symbols.labels.len());
+    let mut labels = Vec::with_capacity(symbols.size());
 
-    for (l, (g, r)) in symbols.labels.into_iter().zip(symbols.globals.into_iter().chain(std::iter::repeat(false)).zip(symbols.id_to_pos)) {
+    for (l, g, r) in symbols.into_iter() {
         match r {
             Ok(pos) => labels.push((l, g, pos)),
             Err(e) => {
@@ -292,19 +293,14 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, symbol
                     };
 
                 let lines = SourceLines::new(path)?;
-                let old_label_marker = symbols.labels.len();
+                let old_symbols = symbols.marker();
                 let included_data_lines = inner_process(lines, cur_offset, symbols)?;
 
                 data_lines.extend(included_data_lines);
-                for (id, lbl) in symbols.labels.iter_mut().enumerate().skip(old_label_marker) {
-                    // mangle non-global symbols
-                    if !symbols.globals.get(id).unwrap_or(&false) {
-                        *lbl = format!("{}  {lbl}", path.display()).into_boxed_str();
-                    };
-                }
+                symbols.mangle_non_global(path.display(), old_symbols);
             }
             SourceLine::DirGlobal(l) => {
-                let id = symbols.read_label(&l, SourceLocation::new(&src, ln));
+                let id = symbols.get_label(&l, SourceLocation::new(&src, ln));
                 symbols.set_global(id);
             }
             SourceLine::Comment => (),
@@ -459,11 +455,11 @@ fn big_r_to_byte(br: BBigR) -> StdResult<u8, &'static str> {
         BBigR::Byte(b) => b.checked_add(7).ok_or("immediate between 1-247")?,
     })
 }
-fn big_r_to_wide<F: FnOnce(usize) -> u16>(wr: WBigR, id_to_pos: F) -> StdResult<[u8; 2], &'static str> {
+fn big_r_to_wide<F: FnOnce(usize, LabelRead) -> u16>(wr: WBigR, read_label: F, position: u16) -> StdResult<[u8; 2], &'static str> {
     Ok(match wr {
         WBigR::Register(r) => r as u16,
         WBigR::Wide(w) => {
-            let w = parse_wide(w, id_to_pos);
+            let w = parse_wide(w, read_label, position, Format::Big);
             if w == 0 {
                 WReg::Zero as u16
             } else {
@@ -474,27 +470,33 @@ fn big_r_to_wide<F: FnOnce(usize) -> u16>(wr: WBigR, id_to_pos: F) -> StdResult<
     }.to_le_bytes())
 }
 
-fn parse_wide<F: FnOnce(usize) -> u16>(w: Wide, id_to_pos: F) -> u16 {
+fn parse_wide<F: FnOnce(usize, LabelRead) -> u16>(w: Wide, read_label: F, position: u16, format: Format) -> u16 {
     match w {
-        Wide::Label(l) => id_to_pos(l),
+        Wide::Label(l) => read_label(l, LabelRead { position, format }),
         Wide::Number(n) => n,
     }
 }
 
-pub fn write_data_operand<F: FnOnce(usize) -> u16>(mem: &mut Vec<u8>, id_to_pos: F, dat_op: DataOperand) -> StdResult<(), &'static str> {
+fn parse_wide_abs<F: FnOnce(usize, LabelRead) -> u16>(w: Wide, read_label: F, position: u16) -> u16 {
+    parse_wide(w, read_label, position, Format::Absolute)
+}
+
+pub fn write_data_operand<F: FnOnce(usize, LabelRead) -> u16>(mem: &mut Vec<u8>, read_label: F, dat_op: DataOperand) -> StdResult<(), &'static str> {
     use self::DataOperand::*;
+
+    let position = mem.len() as u16;
 
     match dat_op {
         Nothing => (),
         ByteBigR(br) => mem.push(big_r_to_byte(br)?),
-        WideBigR(wr) => mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?),
+        WideBigR(wr) => mem.extend_from_slice(&big_r_to_wide(wr, read_label, position)?),
         ByteRegister(r) => mem.push((r as u8) << 4),
         WideRegister(r) => mem.push((r as u8) << 4),
         ImmediateByte(b) => {
             mem.push(b);
         }
         ImmediateWide(w) => {
-            mem.extend_from_slice(&parse_wide(w, id_to_pos).to_le_bytes());
+            mem.extend_from_slice(&parse_wide_abs(w, read_label, position).to_le_bytes());
         }
         TwoByteOneBig(r1, r2, br) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
@@ -502,19 +504,19 @@ pub fn write_data_operand<F: FnOnce(usize) -> u16>(mem: &mut Vec<u8>, id_to_pos:
         }
         WideBigByte(r1, wr, r2) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?);
+            mem.extend_from_slice(&big_r_to_wide(wr, read_label, position+1)?);
         }
         ByteWideBig(r1, r2, wr) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?);
+            mem.extend_from_slice(&big_r_to_wide(wr, read_label, position+1)?);
         }
         WideBigWide(r1, wr, r2) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?);
+            mem.extend_from_slice(&big_r_to_wide(wr, read_label, position+1)?);
         }
         TwoWideOneBig(r1, r2, wr) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?);
+            mem.extend_from_slice(&big_r_to_wide(wr, read_label, position+1)?);
         }
         FourByte(r1, r2, r3, r4) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
@@ -693,7 +695,7 @@ impl DataOperand {
         match op {
             &SourceOperand::Number(n) => Some(Wide::Number(n as u16)),
             &SourceOperand::Wide(n) => Some(Wide::Number(n)),
-            SourceOperand::Label(lbl) => Some(Wide::Label(sym.read_label(lbl, sl))),
+            SourceOperand::Label(lbl) => Some(Wide::Label(sym.get_label(lbl, sl))),
             _ => None,
         }
     }
