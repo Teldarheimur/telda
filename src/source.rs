@@ -1,6 +1,9 @@
-use std::{collections::HashMap, io::{Lines, BufRead, BufReader}, fs::File};
+use std::{io::{Lines, BufRead, BufReader}, fs::File, path::Path};
 
 use crate::isa;
+
+mod err;
+pub use self::err::*;
 
 type Opcode = u8;
 
@@ -48,58 +51,54 @@ pub enum SourceLine {
     DirString(Vec<u8>),
     DirByte(u8),
     DirWide(u16),
+    DirGlobal(String),
 }
 
 pub struct SourceLines<B> {
     lines: Lines<B>,
+    ln: LineNumber,
+    source: Box<str>,
+}
+
+impl SourceLines<BufReader<File>> {
+    pub fn new<P: AsRef<Path>>(path: P) -> Result<Self> {
+        let source = format!("{}", path.as_ref().display()).into_boxed_str();
+        let f = File::open(path).map_err(|e| Error::new(source.clone(), 0, ErrorType::IoError(e)))?;
+        let br = BufReader::new(f);
+        Ok(SourceLines {
+            lines: br.lines(),
+            ln: 0,
+            source
+        })
+    }
 }
 
 impl<B: BufRead> SourceLines<B> {
-    pub fn new(r: B) -> Self {
+    pub fn from_reader(r: B) -> Self {
         SourceLines {
-            lines: r.lines()
+            lines: r.lines(),
+            ln: 0,
+            source: "<input>".into(),
         }
     }
-}
-
-fn parse_bytechar(s: &[u8]) -> (u8, &[u8]) {
-    let mut bs = s.iter();
-    match bs.next().unwrap() {
-        b'\\' => match bs.next().unwrap() {
-            b'r' => (b'\r', &s[2..]),
-            b't' => (b'\t', &s[2..]),
-            b'n' => (b'\n', &s[2..]),
-            b'0' => (b'\0', &s[2..]),
-            b'\\' => (b'\\', &s[2..]),
-            b'\'' => (b'\'', &s[2..]),
-            b'\"' => (b'\"', &s[2..]),
-            b'x' => (u8::from_str_radix(String::from_utf8_lossy(&s[2..4]).as_ref(), 16).expect("invalid escape argument"), &s[4..]),
-            c => panic!("invalid escape character \\{c}"),
-        }
-        &c => (c, &s[1..]),
-    }
-}
-
-impl<B: BufRead> Iterator for SourceLines<B> {
-    type Item = SourceLine;
-    fn next(&mut self) -> Option<Self::Item> {
-        Some(loop {
-            let line = self.lines.next()?;
-            let line = line.unwrap();
+    fn parse_line(&mut self, line: StdResult<String, IoError>) -> Result<SourceLine> {
+        Ok({
+            self.ln += 1;
+            let line = line?;
             let line = line.trim();
 
             if line.is_empty() {
-                continue;
-            }
+                SourceLine::Comment
+            } else
             if line.starts_with(";") || line.starts_with("//") {
-                break SourceLine::Comment;
-            }
+                SourceLine::Comment
+            } else
             if line.starts_with(".") {
                 let line = &line[1..];
                 let i = line.find(' ').unwrap_or(line.len());
                 let arg = &line[i+1..];
                 match &line[..i] {
-                    "string" => break SourceLine::DirString({
+                    "string" => SourceLine::DirString({
                         let mut string = Vec::with_capacity(arg.len());
                         let mut arg = arg.as_bytes();
                         while !arg.is_empty() {
@@ -109,15 +108,16 @@ impl<B: BufRead> Iterator for SourceLines<B> {
                         }
                         string
                     }),
-                    "byte" => break SourceLine::DirByte(arg.parse().unwrap()),
-                    "wide" | "word" => break SourceLine::DirWide(arg.parse().unwrap()),
-                    "include" => break SourceLine::DirInclude(arg.to_string()),
-                    s => panic!("unknown directive {s}"),
+                    "byte" => SourceLine::DirByte(arg.parse().map_err(|_| Error::new(self.source.clone(), self.ln, ErrorType::Other(format!("invalid byte literal \'{arg}\'").into_boxed_str())))?),
+                    "wide" | "word" => SourceLine::DirWide(arg.parse().map_err(|_| Error::new(self.source.clone(), self.ln, ErrorType::Other(format!("invalid wide literal \'{arg}\'").into_boxed_str())))?),
+                    "include" => SourceLine::DirInclude(arg.to_string()),
+                    "global" => SourceLine::DirGlobal(arg.to_string()),
+                    s => return Err(Error::new(self.source.clone(), self.ln, ErrorType::UnknownDirective(s.into()))),
                 }
-            }
+            } else 
             if line.ends_with(":") {
-                break SourceLine::Label((line[..line.len()-1]).to_owned())
-            }
+                SourceLine::Label((line[..line.len()-1]).to_owned())
+            } else 
             if let Some(i) = line.find(' ') {
                 let (ins, args) = line.split_at(i);
                 let mut sos = Vec::new();
@@ -169,11 +169,50 @@ impl<B: BufRead> Iterator for SourceLines<B> {
                     });
                 }
 
-                break SourceLine::Ins(ins.to_owned(), sos);
+                SourceLine::Ins(ins.to_owned(), sos)
             } else {
-                break SourceLine::Ins(line.to_owned(), Vec::new());
+                SourceLine::Ins(line.to_owned(), Vec::new())
             }
         })
+    }
+}
+
+fn parse_bytechar(s: &[u8]) -> (u8, &[u8]) {
+    let mut bs = s.iter();
+    match bs.next().unwrap() {
+        b'\\' => match bs.next().unwrap() {
+            b'r' => (b'\r', &s[2..]),
+            b't' => (b'\t', &s[2..]),
+            b'n' => (b'\n', &s[2..]),
+            b'0' => (b'\0', &s[2..]),
+            b'\\' => (b'\\', &s[2..]),
+            b'\'' => (b'\'', &s[2..]),
+            b'\"' => (b'\"', &s[2..]),
+            b'x' => (u8::from_str_radix(String::from_utf8_lossy(&s[2..4]).as_ref(), 16).expect("invalid escape argument"), &s[4..]),
+            c => panic!("invalid escape character \\{c}"),
+        }
+        &c => (c, &s[1..]),
+    }
+}
+
+impl<B: BufRead> Iterator for SourceLines<B> {
+    type Item = Result<(LineNumber, SourceLine)>;
+    fn next(&mut self) -> Option<Self::Item> {
+        Some({
+            let line = self.lines.next()?;
+            self.parse_line(line).map(|l| (self.ln, l))
+        })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct SourceLocation {
+    source: Box<str>,
+    line_number: LineNumber,
+}
+impl SourceLocation {
+    fn new(src: &str, ln: u32) -> SourceLocation {
+        SourceLocation { source: src.into(), line_number: ln }
     }
 }
 
@@ -183,24 +222,46 @@ pub enum DataLine {
     Raw(Vec<u8>),
 }
 
-pub fn process(lines: impl Iterator<Item=SourceLine>) -> (HashMap<usize, u16>, Vec<Box<str>>, Vec<DataLine>) {
-    let mut id_to_pos = HashMap::new();
-    let mut label_maker = LabelMaker { labels: Vec::new() };
+pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<(Vec<(Box<str>, bool, u16)>, Vec<DataLine>)> {
+    let mut label_maker = LabelMaker { labels: Vec::new(), globals: Vec::new(), id_to_pos: Vec::new() };
 
-    let data_lines = inner_process(lines, &mut 0, &mut label_maker, &mut id_to_pos);
-    (id_to_pos, label_maker.labels, data_lines)
+    let data_lines = inner_process(lines, &mut 0, &mut label_maker)?;
+
+    let mut labels = Vec::with_capacity(label_maker.labels.len());
+
+    for (l, (g, r)) in label_maker.labels.into_iter().zip(label_maker.globals.into_iter().chain(std::iter::repeat(false)).zip(label_maker.id_to_pos)) {
+        match r {
+            Ok(pos) => labels.push((l, g, pos)),
+            Err(e) => {
+                let e = e
+                    .into_iter()
+                    .map(|SourceLocation { source, line_number }| Error::new(source, line_number, ErrorType::Other(
+                            format!("label {l} was never defined, but used here").into_boxed_str()
+                        )))
+                    // Reversed order to make it faster (since it's a linked list)
+                    .reduce(|accum, item| item.chain(accum))
+                    .expect("ghost label, expected at least one use location")
+                    ;
+                return Err(e);
+            }
+        }
+    }
+
+    Ok((labels, data_lines))
 }
-fn inner_process(lines: impl Iterator<Item=SourceLine>, cur_offset: &mut u16, label_maker: &mut LabelMaker, id_to_pos: &mut HashMap<usize, u16>) -> Vec<DataLine> {
+fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, label_maker: &mut LabelMaker) -> Result<Vec<DataLine>> {
     let mut data_lines = Vec::new();
 
+    let src = lines.source.clone();
+
     for line in lines {
+        let (ln, line) = line?;
         match line {
             SourceLine::Label(s) => {
-                let id = label_maker.get_id(&s);
-                id_to_pos.insert(id, *cur_offset);
+                label_maker.set_label(&s, *cur_offset, SourceLocation::new(&src, ln))?;
             }
             SourceLine::Ins(s, ops) => {
-                let (opcode, dat_op) = parse_ins(s, ops, label_maker);
+                let (opcode, dat_op) = parse_ins(s, ops, label_maker, SourceLocation::new(&src, ln)).map_err(|e| Error::new(src.clone(), ln, ErrorType::Other(e.into())))?;
                 *cur_offset += 1 + dat_op.size();
                 data_lines.push(DataLine::Ins(opcode, dat_op));
             }
@@ -218,41 +279,54 @@ fn inner_process(lines: impl Iterator<Item=SourceLine>, cur_offset: &mut u16, la
                 data_lines.push(DataLine::Raw(s));
             }
             SourceLine::DirInclude(path) => {
-                let f = File::open(&path).unwrap();
-                let lines = SourceLines::new(BufReader::new(f));
+                let pth_buf;
+
+                let path = 
+                    if path.starts_with("/") {
+                        Path::new(&path[1..])
+                    } else {
+                        pth_buf = Path::new(&*src).with_file_name("").join(&path);
+                        &pth_buf
+                    };
+
+                let lines = SourceLines::new(path)?;
                 let old_label_marker = label_maker.labels.len();
-                let included_data_lines = inner_process(lines, cur_offset, label_maker, id_to_pos);
+                let included_data_lines = inner_process(lines, cur_offset, label_maker)?;
 
                 data_lines.extend(included_data_lines);
-                for lbl in label_maker.labels.iter_mut().skip(old_label_marker) {
-                    // mangle non-global symbols (currently meaning ones with capital letters)
-                    if !lbl.chars().next().unwrap().is_uppercase() {
-                        *lbl = format!("{path}  {lbl}").into_boxed_str();
+                for (id, lbl) in label_maker.labels.iter_mut().enumerate().skip(old_label_marker) {
+                    // mangle non-global symbols
+                    if !label_maker.globals.get(id).unwrap_or(&false) {
+                        *lbl = format!("{}  {lbl}", path.display()).into_boxed_str();
                     };
                 }
+            }
+            SourceLine::DirGlobal(l) => {
+                let id = label_maker.read_label(&l, SourceLocation::new(&src, ln));
+                label_maker.set_global(id);
             }
             SourceLine::Comment => (),
         }
     }
 
-    data_lines
+    Ok(data_lines)
 }
 
-fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u8, DataOperand) {
+fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> StdResult<(u8, DataOperand), &'static str> {
     use self::isa::*;
     use self::DataOperand as O;
     let ops = ops.iter();
-    match &*s {
-        "null" => (NULL, O::parse_nothing(ops).expect("nothing")),
-        "halt" => (HALT, O::parse_nothing(ops).expect("nothing")),
-        "nop" => (NOP, O::parse_nothing(ops).expect("nothing")),
+    Ok(match &*s {
+        "null" => (NULL, O::parse_nothing(ops).ok_or("nothing")?),
+        "halt" => (HALT, O::parse_nothing(ops).ok_or("nothing")?),
+        "nop" => (NOP, O::parse_nothing(ops).ok_or("nothing")?),
         "push" => {
             if let Some(dat_op) = O::parse_b_big_r(ops.clone()) {
                 (PUSH_B, dat_op)
-            } else if let Some(dat_op) = O::parse_w_big_r(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_w_big_r(ops, lbl_mkr, sl) {
                 (PUSH_W, dat_op)
             } else {
-                panic!("takes one big");
+                return Err("takes one big");
             }
         }
         "pop" => {
@@ -261,95 +335,95 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u
             } else if let Some(dat_op) = O::parse_wreg(ops) {
                 (POP_W, dat_op)
             } else {
-                panic!("takes one big");
+                return Err("takes one big");
             }
         }
-        "call" => (CALL, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "ret" => (RET, O::parse_nothing(ops.clone()).map(|_| DataOperand::ImmediateByte(0)).or_else(|| O::parse_immediate_u8(ops)).expect("either nothing or a byte")),
+        "call" => (CALL, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "ret" => (RET, O::parse_nothing(ops.clone()).map(|_| DataOperand::ImmediateByte(0)).or_else(|| O::parse_immediate_u8(ops)).ok_or("either nothing or a byte")?),
         "store" => {
-            if let Some(dat_op) = O::parse_wide_big_byte(ops.clone(), lbl_mkr) {
+            if let Some(dat_op) = O::parse_wide_big_byte(ops.clone(), lbl_mkr, sl.clone()) {
                 (STORE_B, dat_op)
-            } else if let Some(dat_op) = O::parse_wide_big_wide(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_wide_big_wide(ops, lbl_mkr, sl) {
                 (STORE_W, dat_op)
             } else {
-                panic!("a wide and a big for destination and a source register (any size)");
+                return Err("a wide and a big for destination and a source register (any size)");
             }
         }
         "load" => {
-             if let Some(dat_op) = O::parse_byte_wide_big(ops.clone(), lbl_mkr) {
+             if let Some(dat_op) = O::parse_byte_wide_big(ops.clone(), lbl_mkr, sl.clone()) {
                 (LOAD_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops.clone(), lbl_mkr, sl) {
                 (LOAD_W, dat_op)
             } else {
-                panic!("a destination register (any size) and then a wide and a big");
+                return Err("a destination register (any size) and then a wide and a big");
             }
         }
         "jmp" | "jump" => {
-             if let Some(dat_op) = O::parse_immediate_u16(ops.clone(), lbl_mkr) {
+             if let Some(dat_op) = O::parse_immediate_u16(ops.clone(), lbl_mkr, sl) {
                 (JUMP, dat_op)
             } else if let Some(dat_op) = O::parse_wreg(ops) {
                 (JUMP_REG, dat_op)
             } else {
-                panic!("address or wide register");
+                return Err("address or wide register");
             }
         }
 
-        "jez" => (JEZ, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jlt" => (JLT, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jle" => (JLE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jgt" => (JGT, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jge" => (JGE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jnz" | "jne" => (JNZ, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jo" => (JO, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jno" => (JNO, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jb" | "jc" => (JB, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jae" | "jnc" => (JAE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "ja" => (JA, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
-        "jbe" => (JBE, O::parse_immediate_u16(ops, lbl_mkr).expect("a wide (addr like a label or just a number)")),
+        "jez" => (JEZ, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jlt" => (JLT, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jle" => (JLE, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jgt" => (JGT, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jge" => (JGE, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jnz" | "jne" => (JNZ, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jo" => (JO, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jno" => (JNO, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jb" | "jc" => (JB, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jae" | "jnc" => (JAE, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "ja" => (JA, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jbe" => (JBE, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
 
         "add" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (ADD_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
                 (ADD_W, dat_op)
             } else {
-                panic!("two regs and one big");
+                return Err("two regs and one big");
             }
         }
         "sub" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (SUB_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
                 (SUB_W, dat_op)
             } else {
-                panic!("two regs and one big");
+                return Err("two regs and one big");
             }
         }
         "and" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (AND_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
                 (AND_W, dat_op)
             } else {
-                panic!("two regs and one big");
+                return Err("two regs and one big");
             }
         }
         "or" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (OR_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
                 (OR_W, dat_op)
             } else {
-                panic!("two regs and one big");
+                return Err("two regs and one big");
             }
         }
         "xor" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (XOR_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
                 (XOR_W, dat_op)
             } else {
-                panic!("two regs and one big");
+                return Err("two regs and one big");
             }
         }
         "mul" => {
@@ -358,7 +432,7 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u
             } else if let Some(dat_op) = O::parse_four_wide(ops) {
                 (MUL_W, dat_op)
             } else {
-                panic!("four registers")
+                return Err("four registers")
             }
         }
         "div" => {
@@ -367,23 +441,24 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker) -> (u
             } else if let Some(dat_op) = O::parse_four_wide(ops) {
                 (DIV_W, dat_op)
             } else {
-                panic!("four registers")
+                return Err("four registers");
             }
         }
-        _ => panic!("unknown instruction {s}"),
-    }
+        // TODO: BAD
+        _ => return Err(Box::leak(format!("unknown instruction {s}").into_boxed_str()))
+    })
 }
 
-fn big_r_to_byte(br: BBigR) -> u8 {
-    match br {
+fn big_r_to_byte(br: BBigR) -> StdResult<u8, &'static str> {
+    Ok(match br {
         BBigR::Register(r) => r as u8,
         BBigR::Byte(0) => BReg::Zero as u8,
         // Since this b is a number from 1 up to 247, we can just add 7 to encode it between 0x08 and 0xff
-        BBigR::Byte(b) => b.checked_add(7).expect("immediate between 1-247"),
-    }
+        BBigR::Byte(b) => b.checked_add(7).ok_or("immediate between 1-247")?,
+    })
 }
-fn big_r_to_wide(wr: WBigR, id_to_pos: &HashMap<usize, u16>) -> [u8; 2] {
-    match wr {
+fn big_r_to_wide<F: FnOnce(usize) -> u16>(wr: WBigR, id_to_pos: F) -> StdResult<[u8; 2], &'static str> {
+    Ok(match wr {
         WBigR::Register(r) => r as u16,
         WBigR::Wide(w) => {
             let w = parse_wide(w, id_to_pos);
@@ -391,26 +466,26 @@ fn big_r_to_wide(wr: WBigR, id_to_pos: &HashMap<usize, u16>) -> [u8; 2] {
                 WReg::Zero as u16
             } else {
                 // Since this w is a number from 1 up to 65527, we can just add 7 to encode it between 0x08 and 0xffff
-                w.checked_add(7).expect("immediate between 1-247")
+                w.checked_add(7).ok_or("immediate between 1-247")?
             }
         }
-    }.to_le_bytes()
+    }.to_le_bytes())
 }
 
-fn parse_wide(w: Wide, id_to_pos: &HashMap<usize, u16>) -> u16 {
+fn parse_wide<F: FnOnce(usize) -> u16>(w: Wide, id_to_pos: F) -> u16 {
     match w {
-        Wide::Label(l) => *id_to_pos.get(&l).expect("no such label"),
+        Wide::Label(l) => id_to_pos(l),
         Wide::Number(n) => n,
     }
 }
 
-pub fn write_data_operand(mem: &mut Vec<u8>, id_to_pos: &HashMap<usize, u16>, dat_op: DataOperand) {
+pub fn write_data_operand<F: FnOnce(usize) -> u16>(mem: &mut Vec<u8>, id_to_pos: F, dat_op: DataOperand) -> StdResult<(), &'static str> {
     use self::DataOperand::*;
 
     match dat_op {
         Nothing => (),
-        ByteBigR(br) => mem.push(big_r_to_byte(br)),
-        WideBigR(wr) => mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)),
+        ByteBigR(br) => mem.push(big_r_to_byte(br)?),
+        WideBigR(wr) => mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?),
         ByteRegister(r) => mem.push((r as u8) << 4),
         WideRegister(r) => mem.push((r as u8) << 4),
         ImmediateByte(b) => {
@@ -421,23 +496,23 @@ pub fn write_data_operand(mem: &mut Vec<u8>, id_to_pos: &HashMap<usize, u16>, da
         }
         TwoByteOneBig(r1, r2, br) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.push(big_r_to_byte(br));
+            mem.push(big_r_to_byte(br)?);
         }
         WideBigByte(r1, wr, r2) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?);
         }
         ByteWideBig(r1, r2, wr) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?);
         }
         WideBigWide(r1, wr, r2) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?);
         }
         TwoWideOneBig(r1, r2, wr) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
-            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos));
+            mem.extend_from_slice(&big_r_to_wide(wr, id_to_pos)?);
         }
         FourByte(r1, r2, r3, r4) => {
             mem.push(((r1 as u8) << 4) | r2 as u8);
@@ -448,22 +523,58 @@ pub fn write_data_operand(mem: &mut Vec<u8>, id_to_pos: &HashMap<usize, u16>, da
             mem.push(((r3 as u8) << 4) | r4 as u8);
         }
     }
+
+    Ok(())
 }
 
 struct LabelMaker {
     labels: Vec<Box<str>>,
+    id_to_pos: Vec<StdResult<u16, Vec<SourceLocation>>>,
+    globals: Vec<bool>,
 }
 
 impl LabelMaker {
-    fn get_id(&mut self, lbl: &str) -> usize {
+    fn find_id(&mut self, lbl: &str) -> usize {
         if let Some(i) = self.labels.iter().position(|l| &**l == lbl) {
             i
         } else {
             let i = self.labels.len();
             self.labels.push(lbl.to_owned().into_boxed_str());
+            self.id_to_pos.push(Err(Vec::with_capacity(1)));
             i
         }
     }
+    fn set_label(&mut self, lbl: &str, pos: u16, loc: SourceLocation) -> Result<()> {
+        let id = self.find_id(lbl);
+        match &mut self.id_to_pos[id] {
+            &mut Ok(p) => {
+                return Err(Error::new(loc.source, loc.line_number, ErrorType::Other(
+                    format!("Label {lbl} already had pos {p:03x} but is now being set to {pos:03x}").into_boxed_str()
+                )));
+            }
+            e @ Err(_) => *e = Ok(pos),
+        }
+        Ok(())
+    }
+    fn read_label(&mut self, lbl: &str, loc: SourceLocation) -> usize {
+        let id = self.find_id(lbl);
+        match &mut self.id_to_pos[id] {
+            Ok(_) => (),
+            Err(v) => v.push(loc),
+        }
+
+        id
+    }
+    fn set_global(&mut self, id: usize) {
+        if id >= self.globals.len() {
+            self.globals.resize(id+1, false);
+        }
+        self.globals[id] = true;
+    }
+    // fn is_global(&self, id: usize) -> bool {
+    //     self.globals.get(id).copied().unwrap_or(false)
+    // }
+    
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
@@ -542,8 +653,8 @@ impl DataOperand {
         Self::parse_nothing(ops)?;
         ret
     }
-    fn parse_immediate_u16<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
-        let ret = Some(DataOperand::ImmediateWide(Self::imm_wide(ops.next()?, lbl_mkr)?));
+    fn parse_immediate_u16<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
+        let ret = Some(DataOperand::ImmediateWide(Self::imm_wide(ops.next()?, lbl_mkr, sl)?));
         Self::parse_nothing(ops)?;
         ret
     }
@@ -552,8 +663,8 @@ impl DataOperand {
         Self::parse_nothing(ops)?;
         ret
     }
-    fn parse_w_big_r<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
-        let ret = Some(DataOperand::WideBigR(Self::wide_or_imm(ops.next()?, lbl_mkr)?));
+    fn parse_w_big_r<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
+        let ret = Some(DataOperand::WideBigR(Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?));
         Self::parse_nothing(ops)?;
         ret
     }
@@ -562,30 +673,30 @@ impl DataOperand {
         let reg2 = ops.next()?;
         Some(DataOperand::TwoByteOneBig(Self::byte(reg1)?, Self::byte(reg2)?, Self::byte_or_imm(ops.next()?)?))
     }
-    fn parse_two_wide_one_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+    fn parse_two_wide_one_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
         let reg1 = ops.next()?;
         let reg2 = ops.next()?;
-        Some(DataOperand::TwoWideOneBig(Self::wide(reg1)?, Self::wide(reg2)?, Self::wide_or_imm(ops.next()?, lbl_mkr)?))
+        Some(DataOperand::TwoWideOneBig(Self::wide(reg1)?, Self::wide(reg2)?, Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?))
     }
-    fn parse_wide_big_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+    fn parse_wide_big_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
         Some(DataOperand::WideBigByte(
             Self::wide(ops.next()?)?,
-            Self::wide_or_imm(ops.next()?, lbl_mkr)?,
+            Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?,
             Self::byte(ops.next()?)?,
         ))
     }
-    fn parse_wide_big_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+    fn parse_wide_big_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
         Some(DataOperand::WideBigWide(
             Self::wide(ops.next()?)?,
-            Self::wide_or_imm(ops.next()?, lbl_mkr)?,
+            Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?,
             Self::wide(ops.next()?)?,
         ))
     }
-    fn parse_byte_wide_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker) -> Option<DataOperand> {
+    fn parse_byte_wide_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
         Some(DataOperand::ByteWideBig(
             Self::byte(ops.next()?)?,
             Self::wide(ops.next()?)?,
-            Self::wide_or_imm(ops.next()?, lbl_mkr)?,
+            Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?,
         ))
     }
     fn parse_four_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
@@ -626,11 +737,11 @@ impl DataOperand {
             _ => None,
         }
     }
-    fn imm_wide(op: &SourceOperand, lbl_mkr: &mut LabelMaker) -> Option<Wide> {
+    fn imm_wide(op: &SourceOperand, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<Wide> {
         match op {
             &SourceOperand::Number(n) => Some(Wide::Number(n as u16)),
             &SourceOperand::Wide(n) => Some(Wide::Number(n)),
-            SourceOperand::Label(lbl) => Some(Wide::Label(lbl_mkr.get_id(lbl))),
+            SourceOperand::Label(lbl) => Some(Wide::Label(lbl_mkr.read_label(lbl, sl))),
             _ => None,
         }
     }
@@ -639,9 +750,9 @@ impl DataOperand {
             .map(BBigR::Register)
             .or_else(|| Self::imm_byte(op).map(BBigR::Byte))
     }
-    fn wide_or_imm(op: &SourceOperand, lbl_mkr: &mut LabelMaker) -> Option<WBigR> {
+    fn wide_or_imm(op: &SourceOperand, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<WBigR> {
         Self::wide(op)
             .map(WBigR::Register)
-            .or_else(|| Self::imm_wide(op, lbl_mkr).map(WBigR::Wide))
+            .or_else(|| Self::imm_wide(op, lbl_mkr, sl).map(WBigR::Wide))
     }
 }
