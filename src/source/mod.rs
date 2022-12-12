@@ -6,7 +6,7 @@ mod err;
 pub use self::err::*;
 mod symbols;
 use self::symbols::*;
-pub use self::symbols::{Format, LabelRead};
+pub use self::symbols::{Format, LabelRead, SymbolType};
 
 type Opcode = u8;
 
@@ -55,6 +55,7 @@ pub enum SourceLine {
     DirByte(u8),
     DirWide(u16),
     DirGlobal(String),
+    DirReference(String),
 }
 
 pub struct SourceLines<B> {
@@ -114,7 +115,8 @@ impl<B: BufRead> SourceLines<B> {
                     "byte" => SourceLine::DirByte(arg.parse().map_err(|_| Error::new(self.source.clone(), self.ln, ErrorType::Other(format!("invalid byte literal \'{arg}\'").into_boxed_str())))?),
                     "wide" | "word" => SourceLine::DirWide(arg.parse().map_err(|_| Error::new(self.source.clone(), self.ln, ErrorType::Other(format!("invalid wide literal \'{arg}\'").into_boxed_str())))?),
                     "include" => SourceLine::DirInclude(arg.to_string()),
-                    "global" => SourceLine::DirGlobal(arg.to_string()),
+                    "global" | "globl" => SourceLine::DirGlobal(arg.to_string()),
+                    "ref" | "reference" => SourceLine::DirReference(arg.to_string()),
                     s => return Err(Error::new(self.source.clone(), self.ln, ErrorType::UnknownDirective(s.into()))),
                 }
             } else 
@@ -225,29 +227,49 @@ pub enum DataLine {
     Raw(Vec<u8>),
 }
 
-pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<(Vec<(Box<str>, bool, u16)>, Vec<DataLine>)> {
+pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<(Vec<(Box<str>, SymbolType, u16)>, Vec<DataLine>)> {
     let mut symbols = Symbols::new();
 
     let data_lines = inner_process(lines, &mut 0, &mut symbols)?;
 
     let mut labels = Vec::with_capacity(symbols.size());
 
-    for (l, g, r) in symbols.into_iter() {
+    for (l, st, r) in symbols.into_iter() {
+        let element;
+        use self::SymbolType::*;
+
         match r {
-            Ok(pos) => labels.push((l, g, pos)),
+            Ok(pos) => {
+                let st = match st {
+                    Internal | Global => st,
+                    Reference => return Err(Error::new(<Box<str>>::from("<src>"), 0, ErrorType::Other(format!("Symbol {l} is declared as reference but defined at 0x{pos:02x}").into_boxed_str()))),
+                };
+
+                element = (l, st, pos)
+            }
             Err(e) => {
-                let e = e
-                    .into_iter()
-                    .map(|SourceLocation { source, line_number }| Error::new(source, line_number, ErrorType::Other(
-                            format!("label {l} was never defined, but used here").into_boxed_str()
-                        )))
-                    // Reversed order to make it faster (since it's a linked list)
-                    .reduce(|accum, item| item.chain(accum))
-                    .expect("ghost label, expected at least one use location")
-                    ;
-                return Err(e);
+                match st {
+                    Internal => {
+                        let e = e
+                            .into_iter()
+                            .map(|SourceLocation { source, line_number }| Error::new(source, line_number, ErrorType::Other(
+                                    format!("non-global label {l} was never defined, but used here").into_boxed_str()
+                                )))
+                            // Reversed order to make it faster (since it's a linked list)
+                            .reduce(|accum, item| item.chain(accum))
+                            .expect("ghost label, expected at least one use location")
+                            ;
+                        return Err(e);
+                    },
+                    Reference | Global => {
+                        element = (l, Reference, 0xffaf);
+                    }
+                    
+                }
             }
         }
+
+        labels.push(element);
     }
 
     Ok((labels, data_lines))
@@ -282,6 +304,7 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, symbol
                 data_lines.push(DataLine::Raw(s));
             }
             SourceLine::DirInclude(path) => {
+                eprintln!("warning: {src}:{ln}: use of deprecated include directive");
                 let pth_buf;
 
                 let path = 
@@ -297,11 +320,15 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, symbol
                 let included_data_lines = inner_process(lines, cur_offset, symbols)?;
 
                 data_lines.extend(included_data_lines);
-                symbols.mangle_non_global(path.display(), old_symbols);
+                symbols.mangle_interal(path.display(), old_symbols);
             }
             SourceLine::DirGlobal(l) => {
                 let id = symbols.get_label(&l, SourceLocation::new(&src, ln));
                 symbols.set_global(id);
+            }
+            SourceLine::DirReference(l) => {
+                let id = symbols.get_label(&l, SourceLocation::new(&src, ln));
+                symbols.set_reference(id);
             }
             SourceLine::Comment => (),
         }

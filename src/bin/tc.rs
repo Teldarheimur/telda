@@ -1,6 +1,6 @@
 use std::{fs::File, env::args, path::Path, io::Write, process::ExitCode};
 
-use telda2::{source::{SourceLines, process, DataLine, write_data_operand, LabelRead}, ext_files::{BINARY_EXT, SYMBOL_FILE_EXT, NON_GLOBAL_SYMBOL_FILE_EXT, write_symbol_references, SYMBOL_REFERENCE_EXT}};
+use telda2::{source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType}, ext_files::{BINARY_EXT, SYMBOL_FILE_EXT, NON_GLOBAL_SYMBOL_FILE_EXT, write_symbol_references, SYMBOL_REFERENCE_EXT}};
 
 fn main() -> ExitCode {
     let mut ret = ExitCode::SUCCESS;
@@ -49,11 +49,11 @@ fn main() -> ExitCode {
             let lsym_path = p.with_extension(NON_GLOBAL_SYMBOL_FILE_EXT);
             let mut global_symbol_f = File::create(&gsym_path).unwrap();
             let mut local_symbol_f = File::create(&lsym_path).unwrap();
-            for (lbl, global, loc) in labels.iter() {
-                if *global {
-                    writeln!(global_symbol_f, "{lbl}: 0x{loc:02X}").unwrap();
-                } else {
-                    writeln!(local_symbol_f, "{lbl}: 0x{loc:02X}").unwrap();
+            for (lbl, st, loc) in labels.iter() {
+                match st {
+                    SymbolType::Global => writeln!(global_symbol_f, "{lbl}: 0x{loc:02X}").unwrap(),
+                    SymbolType::Internal => writeln!(local_symbol_f, "{lbl}: 0x{loc:02X}").unwrap(),
+                    SymbolType::Reference => eprintln!("references {lbl}"),
                 }
             }
             println!("Wrote symbols to {} and {}", gsym_path.display(), lsym_path.display());

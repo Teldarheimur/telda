@@ -13,15 +13,42 @@ pub struct LabelRead {
     pub(crate) format: Format,
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+#[repr(u8)]
+pub enum SymbolType {
+    #[default]
+    Internal,
+    Global,
+    Reference,
+}
+impl SymbolType {
+    fn set_global(&mut self) {
+        use self::SymbolType::*;
+        match *self {
+            Internal => *self = Global,
+            Reference => (),
+            Global => (),
+        }
+    }
+    fn set_reference(&mut self) {
+        use self::SymbolType::*;
+        match *self {
+            Internal => *self = Reference,
+            Global => *self = Reference,
+            Reference => (),
+        }
+    }
+}
+
 pub struct Symbols {
     labels: Vec<Box<str>>,
     id_to_pos: Vec<Result<u16, Vec<SourceLocation>>>,
-    globals: Vec<bool>,
+    symbol_types: Vec<SymbolType>,
 }
 
 impl Symbols {
     pub fn new() -> Self {
-        Self { labels: Vec::new(), globals: Vec::new(), id_to_pos: Vec::new() }
+        Self { labels: Vec::new(), symbol_types: Vec::new(), id_to_pos: Vec::new() }
     }
     fn find_id(&mut self, lbl: &str) -> usize {
         if let Some(i) = self.labels.iter().position(|l| &**l == lbl) {
@@ -54,29 +81,35 @@ impl Symbols {
         id
     }
     pub fn set_global(&mut self, id: usize) {
-        if id >= self.globals.len() {
-            self.globals.resize(id+1, false);
+        if id >= self.symbol_types.len() {
+            self.symbol_types.resize(id+1, SymbolType::default());
         }
-        self.globals[id] = true;
+        self.symbol_types[id].set_global();
+    }
+    pub fn set_reference(&mut self, id: usize) {
+        if id >= self.symbol_types.len() {
+            self.symbol_types.resize(id+1, SymbolType::default());
+        }
+        self.symbol_types[id].set_reference();
     }
     pub fn size(&self) -> usize {
         self.labels.len()
     }
-    pub fn into_iter(self) -> impl Iterator<Item=(Box<str>, bool, Result<u16, Vec<SourceLocation>>)> {
-        self.labels.into_iter().zip(self.globals.into_iter().chain(iter::repeat(false)).zip(self.id_to_pos))
+    pub fn into_iter(self) -> impl Iterator<Item=(Box<str>, SymbolType, Result<u16, Vec<SourceLocation>>)> {
+        self.labels.into_iter().zip(self.symbol_types.into_iter().chain(iter::repeat(SymbolType::default())).zip(self.id_to_pos))
             .map(|(a, (b, c))| (a, b, c))
     }
 
-    /// Marker that indicates the state of `self` used for `mangle_non_global` to mangle
+    /// Marker that indicates the state of `self` used for `mangle_interal` to mangle
     /// non-global symbols that have been since this marker
     pub fn marker(&self) -> Marker {
         Marker { size: self.size() }
     }
 
-    pub fn mangle_non_global(&mut self, src: impl Display, old_label_marker: Marker) {
+    pub fn mangle_interal(&mut self, src: impl Display, old_label_marker: Marker) {
         for (id, lbl) in self.labels.iter_mut().enumerate().skip(old_label_marker.size) {
-            // mangle non-global symbols
-            if !self.globals.get(id).unwrap_or(&false) {
+            // mangle interal symbols
+            if let SymbolType::Internal = self.symbol_types.get(id).unwrap_or(&SymbolType::default()) {
                 *lbl = format!("{src}  {lbl}").into_boxed_str();
             };
         }
