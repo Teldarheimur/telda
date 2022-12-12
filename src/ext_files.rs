@@ -2,12 +2,9 @@ use std::{fs::File, io::{Write, BufReader, BufRead, self}, path::Path, collectio
 
 use crate::source::{LabelRead, Format};
 
-pub const SYMBOL_FILE_EXT: &str = "tsym";
-pub const NON_GLOBAL_SYMBOL_FILE_EXT: &str = "local.tsym";
-pub const BINARY_EXT: &str = "tbin";
-pub const SOURCE_EXT: &str = "telda";
-pub const SYMBOL_REFERENCE_EXT: &str = "tsr";
+pub const AALV_OBJECT_EXT: &str = "to";
 
+#[deprecated]
 pub fn read_symbol_file<T: SymbolCollector<String, u16>, U: SymbolCollector<u16, String>, P: AsRef<Path>>(path: P, labels: &mut T, pos_to_labels: &mut U) -> io::Result<()> {
     let f = File::open(path)?;
 
@@ -45,6 +42,7 @@ impl<K, V> SymbolCollector<K, V> for () {
     fn insert(&mut self, _k: K, _v: V) {}
 }
 
+#[deprecated]
 pub fn read_symbol_references<P: AsRef<Path>>(path: P) -> io::Result<Vec<(Format, Box<str>, u16)>> {
     let mut v = Vec::new();
     let f = File::open(path)?;
@@ -70,6 +68,7 @@ pub fn read_symbol_references<P: AsRef<Path>>(path: P) -> io::Result<Vec<(Format
     Ok(v)
 }
 
+#[deprecated]
 pub fn write_symbol_references<'a, P: AsRef<Path>, I: 'a + Iterator<Item=(&'a str, &'a [LabelRead])>>(path: P, iter: I) -> io::Result<()> {
     let mut f = File::create(path)?;
 

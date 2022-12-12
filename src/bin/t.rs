@@ -1,7 +1,7 @@
-use std::{path::PathBuf, process::ExitCode, fs::{self, File}, io::{BufReader, BufRead, Read}};
+use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use telda2::{cpu::{Cpu, TrapMode}, mem::Lazy};
+use telda2::{cpu::{Cpu, TrapMode}, aalv::obj::Object};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -12,6 +12,10 @@ struct Cli {
     /// Whether there is a shebang header to skip
     #[arg(short, long)]
     skip_shebang: bool,
+
+    /// Whether there is a shebang header to skip
+    #[arg(short, long)]
+    termination_point: bool,
     
     /// Sets the entry-point for this execution
     #[arg(short, long)]
@@ -19,7 +23,7 @@ struct Cli {
 }
 
 pub fn main() -> ExitCode {
-    let Cli { binary, skip_shebang, entry } = Cli::parse();
+    let Cli { binary, skip_shebang, entry, termination_point } = Cli::parse();
 
     let start_addr;
     loop {
@@ -35,26 +39,45 @@ pub fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    let mut mem = Vec::new();
-    {
+    let (mut lazy, symbols) = {
+        let obj;
         if skip_shebang {
-            let f = File::open(binary).unwrap();
-            let mut br = BufReader::new(f);
-            let mut s = String::new();
-            br.read_line(&mut s).unwrap();
-            drop(s);
-
-            br.read_to_end(&mut mem).unwrap();
+            let (_, o) = Object::from_file_ignoring_shebang(binary).unwrap();
+            obj = o;
         } else {
-            mem = fs::read(binary).unwrap();
+            obj = Object::from_file(binary).unwrap();
         }
-    }
+
+        let iter = obj.global_symbols
+            .map(|is| is.0.into_iter())
+            .into_iter()
+            .flatten()
+            .chain(obj.internal_symbols.map(|is| is.0.into_iter()).into_iter().flatten());
+
+        (obj.mem.unwrap(), iter)
+    };
 
     let mut cpu = Cpu::new(start_addr);
-    let tm = cpu.run_until_trap(&mut Lazy { mem });
+    let tm = cpu.run_until_trap(&mut lazy);
 
-    if tm != TrapMode::Halt {
-        eprintln!("trapped with {tm:?}")
+    if termination_point {
+        let pc = cpu.registers.pc;
+        let mut diff = pc;
+        let mut closest = "".into();
+        for (lbl, loc) in symbols {
+            if pc >= loc {
+                let new_diff = pc - loc;
+                if new_diff < diff {
+                    diff = new_diff;
+                    closest = lbl;
+                }
+            }
+        }
+        println!("Ended with {tm:?} at <{closest}+{diff:02X}>");
+    } else {
+        if tm != TrapMode::Halt {
+            eprintln!("trapped with {tm:?}")
+        }
     }
 
     ExitCode::SUCCESS

@@ -4,3 +4,4 @@ pub mod mem;
 pub mod source;
 pub mod disassemble;
 pub mod ext_files;
+pub mod aalv;

@@ -1,6 +1,10 @@
-use std::{fs::File, env::args, path::Path, io::Write, process::ExitCode};
+use std::{env::args, path::Path, process::ExitCode};
 
-use telda2::{source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType}, ext_files::{BINARY_EXT, SYMBOL_FILE_EXT, NON_GLOBAL_SYMBOL_FILE_EXT, write_symbol_references, SYMBOL_REFERENCE_EXT}};
+use telda2::{
+    source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType},
+    aalv::obj::{AALV_OBJECT_EXT, Object, GlobalSymbols, InternalSymbols, SymbolReferenceTable},
+    mem::Lazy,
+};
 
 fn main() -> ExitCode {
     let mut ret = ExitCode::SUCCESS;
@@ -37,42 +41,44 @@ fn main() -> ExitCode {
             }
         }
 
-        {
-            let bin_path = p.with_extension(BINARY_EXT);
-            let mut f = File::create(&bin_path).unwrap();
-            f.write_all(&mem).unwrap();
-            println!("Wrote binary to {}", bin_path.display());
-        }
+        let mut aalvur = Object::default();
+        aalvur.mem = Some(Lazy { mem });
+
+        let (global_symbols, internal_symbols);
 
         {
-            let gsym_path = p.with_extension(SYMBOL_FILE_EXT);
-            let lsym_path = p.with_extension(NON_GLOBAL_SYMBOL_FILE_EXT);
-            let mut global_symbol_f = File::create(&gsym_path).unwrap();
-            let mut local_symbol_f = File::create(&lsym_path).unwrap();
+            let mut gs = Vec::new();
+            let mut is = Vec::new();
+
             for (lbl, st, loc) in labels.iter() {
                 match st {
-                    SymbolType::Global => writeln!(global_symbol_f, "{lbl}: 0x{loc:02X}").unwrap(),
-                    SymbolType::Internal => writeln!(local_symbol_f, "{lbl}: 0x{loc:02X}").unwrap(),
+                    SymbolType::Global => gs.push((lbl.clone(), *loc)),
+                    SymbolType::Internal => is.push((lbl.clone(), *loc)),
                     SymbolType::Reference => eprintln!("references {lbl}"),
                 }
             }
-            println!("Wrote symbols to {} and {}", gsym_path.display(), lsym_path.display());
-    
-            if labels.iter().all(|(s, _, _)| &**s != "_start") {
-                eprintln!("Warning: no _start symbol");
-            }
+
+            global_symbols = GlobalSymbols(gs);
+            internal_symbols = InternalSymbols(is);
         }
 
+        aalvur.global_symbols = Some(global_symbols);
+        aalvur.internal_symbols = Some(internal_symbols);
+
+        let symbol_reference_table;
         {
-            let p = p.with_extension(SYMBOL_REFERENCE_EXT);
-            let iter = label_reads
-                .iter()
-                .zip(&labels)
-                .map(|(a, (l, _, _))| (&**l, &**a));
-
-            write_symbol_references(p.with_extension(SYMBOL_REFERENCE_EXT), iter).unwrap();
-            println!("Wrote symbol references to {}", p.display());
+            let mut srt = Vec::new();
+            for (i, label_reads) in label_reads.into_iter().enumerate() {
+                let lbl = &labels[i].0;
+                for LabelRead{position, format} in label_reads {
+                    srt.push((format, lbl.clone(), position));
+                }
+            }
+            symbol_reference_table = SymbolReferenceTable(srt);
         }
+        aalvur.symbol_reference_table = Some(symbol_reference_table);
+
+        aalvur.write_to_file(p.with_extension(AALV_OBJECT_EXT)).unwrap();
     }
     ret
 }

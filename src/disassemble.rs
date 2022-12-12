@@ -21,7 +21,7 @@ pub struct DisassembledInstruction {
     pub next_instruction_location: u16,
 }
 
-pub fn disassemble_instruction<'a>(location: u16, binary_code: &[u8], labels_discored: &mut Vec<&'a str>, labels: &'a HashMap<u16, String>) -> DisassembledInstruction {
+pub fn disassemble_instruction<'a>(location: u16, binary_code: &[u8], labels_discored: &mut Vec<&'a str>, labels: &'a HashMap<u16, Box<str>>) -> DisassembledInstruction {
     use crate::isa::*;
     let r = &mut Registers::new(location);
     let m = &mut StrictMemory { slice: binary_code } as &mut dyn Memory;
@@ -219,7 +219,7 @@ pub fn disassemble_instruction<'a>(location: u16, binary_code: &[u8], labels_dis
     }
 }
 
-fn cjmp<'a>(name: &str, r: &mut Registers, m: &dyn Memory, labels: &'a HashMap<u16, String>, labels_discored: &mut Vec<&'a str>, f: &mut String) {
+fn cjmp<'a>(name: &str, r: &mut Registers, m: &dyn Memory, labels: &'a HashMap<u16, Box<str>>, labels_discored: &mut Vec<&'a str>, f: &mut String) {
     let w = crate::isa::arg_imm_wide(r, m);
     if let Some(lbl) = labels.get(&w) {
         write!(f, "{name} {lbl}").unwrap();

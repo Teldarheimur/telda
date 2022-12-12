@@ -9,8 +9,8 @@ pub enum Format {
 }
 
 pub struct LabelRead {
-    pub(crate) position: u16,
-    pub(crate) format: Format,
+    pub position: u16,
+    pub format: Format,
 }
 
 #[derive(Debug, Clone, Copy, Default)]

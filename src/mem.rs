@@ -16,6 +16,7 @@ pub trait Memory {
     }
 }
 
+#[derive(Debug, Clone)]
 pub struct Lazy {
     pub mem: Vec<u8>,
 }

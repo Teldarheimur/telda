@@ -1,18 +1,29 @@
-use std::{fs::File, env::args, io::Read, collections::HashMap, path::Path};
+use std::{env::args, collections::HashMap, path::Path};
 
-use telda2::{disassemble::{disassemble_instruction, DisassembledInstruction}, ext_files::{read_symbol_file, NON_GLOBAL_SYMBOL_FILE_EXT, SYMBOL_FILE_EXT}};
+use telda2::{disassemble::{disassemble_instruction, DisassembledInstruction}, aalv::{obj::ShebangAgnosticObject}};
 
 fn main() {
     for arg in args().skip(1) {
         let p = Path::new(&arg);
-        let mut binary_code = Vec::new();
-        let mut f = File::open(p).unwrap();
-        f.read_to_end(&mut binary_code).unwrap();
-
+        
+        let binary_code;
         let mut labels = HashMap::new();
         let mut pos_to_labels = HashMap::new();
-        read_symbol_file(p.with_extension(NON_GLOBAL_SYMBOL_FILE_EXT), &mut labels, &mut pos_to_labels).unwrap();
-        read_symbol_file(p.with_extension(SYMBOL_FILE_EXT), &mut labels, &mut pos_to_labels).unwrap();
+        {
+            let obj = ShebangAgnosticObject::from_file(p).unwrap().into_object();
+            binary_code = obj.mem.unwrap().mem;
+
+            let iter = obj.internal_symbols
+                .map(|is| is.0.into_iter())
+                .into_iter()
+                .flatten()
+                .chain(obj.global_symbols.map(|is| is.0.into_iter()).into_iter().flatten());
+
+            for (label, position) in iter {
+                labels.insert(label.clone(), position);
+                pos_to_labels.insert(position, label);
+            }
+        }
 
         let mut printed_labels = vec!["_start"];
         let mut found_labels = vec!["_start"];

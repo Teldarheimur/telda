@@ -1,7 +1,7 @@
-use std::{path::PathBuf, collections::HashMap, io::Write, process::ExitCode, fs::{self, File}, os::unix::prelude::PermissionsExt};
+use std::{path::PathBuf, collections::HashMap, process::ExitCode, fs::{self}, os::unix::prelude::PermissionsExt};
 
 use clap::Parser;
-use telda2::{ext_files::{read_symbol_file, read_symbol_references, SYMBOL_FILE_EXT, NON_GLOBAL_SYMBOL_FILE_EXT, SYMBOL_REFERENCE_EXT}, source::Format};
+use telda2::{source::Format, aalv::obj::{Object, GlobalSymbols, InternalSymbols}, mem::Lazy};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -16,15 +16,10 @@ struct Cli {
     /// Defines an entry-point and makes this output an executable binary
     #[arg(short, long)]
     entry: Option<String>,
-
-    /// If defined, write the global symbols to this file
-    #[arg(short, long, value_name = "FILE")]
-    global_symbol_output: Option<PathBuf>,
-    /// If defined, write the local symbols to this file
-    ///
-    /// Overlap can occur in this file, and they are not mangled
-    #[arg(short, long, value_name = "FILE")]
-    local_symbol_output: Option<PathBuf>,
+    
+    /// Includes internal symbols and potentially other debug info to the object
+    #[arg(short = 'g', long)]
+    debug: bool,
 }
 
 
@@ -33,11 +28,10 @@ fn main() -> ExitCode {
         input_files,
         out,
         entry,
-        global_symbol_output,
-        local_symbol_output,
+        debug
     } = Cli::parse();
 
-    let out = out.unwrap_or_else(|| PathBuf::from("a.out"));
+    let out = out.unwrap_or_else(|| PathBuf::from("a.to"));
 
     let mut mem_out = Vec::new();
     let mut global_refs = Vec::new();
@@ -47,16 +41,22 @@ fn main() -> ExitCode {
     
     for input_file in input_files {
         let offset = mem_out.len() as u16;
-        let mut mem_file = fs::read(&input_file).unwrap();
-        
-        let mut global_labels: HashMap<String, u16> = HashMap::new();
-        let mut local_labels: HashMap<String, u16> = HashMap::new();
-        read_symbol_file(input_file.with_extension(SYMBOL_FILE_EXT), &mut global_labels, &mut ()).unwrap();
-        read_symbol_file(input_file.with_extension(NON_GLOBAL_SYMBOL_FILE_EXT), &mut local_labels, &mut ()).unwrap();
 
-        let refs = read_symbol_references(input_file.with_extension(SYMBOL_REFERENCE_EXT)).unwrap();
+        let mut mem_file;
+        let global_labels: HashMap<_, _>;
+        let internal_labels: HashMap<_, _>;
+        let refs;
+        {
+            let obj = Object::from_file(&input_file).unwrap();
+            mem_file = obj.mem.unwrap().mem;
+
+            internal_labels = obj.internal_symbols.map(|is| is.0.into_iter()).into_iter().flatten().collect();
+            global_labels = obj.global_symbols.map(|is| is.0.into_iter()).into_iter().flatten().collect();
+            refs = obj.symbol_reference_table.map(|srt| srt.0).unwrap_or(Vec::new());
+        }
+
         for (f, lbl, pos_in_file) in refs {
-            let Some(&pos) = local_labels.get(&*lbl) else {
+            let Some(&pos) = internal_labels.get(&*lbl) else {
                 global_refs.push((f, lbl, pos_in_file+offset));
                 continue;
             };
@@ -73,7 +73,7 @@ fn main() -> ExitCode {
             }
         }
 
-        for (lbl, pos_in_file) in local_labels {
+        for (lbl, pos_in_file) in internal_labels {
             local_symbols.push((lbl, pos_in_file));
         }
 
@@ -96,54 +96,45 @@ fn main() -> ExitCode {
         return ExitCode::FAILURE;
     }
 
-    {
-        let mut out_file = File::create(&out).unwrap();
-        let executable = entry.is_some();
-        if let Some(entry) = entry {
-            let addr;
+    let start_addr = match entry {
+        Some(entry) => Some({
             if entry.starts_with("0x") {
-                addr = u16::from_str_radix(&entry[2..], 16).unwrap();
+                u16::from_str_radix(&entry[2..], 16).unwrap()
             } else {
-                if let Some(&pos) = global_symbols.get(&entry) {
-                    addr = pos;
+                if let Some(&pos) = global_symbols.get(&*entry) {
+                    pos
                 } else {
                     eprintln!("Start symbol {entry} was not found. Perhaps it is not global?");
                     eprintln!("Aborting linking");
                     return ExitCode::FAILURE;
                 }
             }
+        }),
+        None => None,
+    };
 
-            println!("Writing executable binary telda file");
+    let obj = {
+        let mut obj = Object::default();
 
-            writeln!(out_file, "#!/bin/env -S t -s -e 0x{addr:02x}").unwrap();
-        } else {
-            println!("Writing un-relocatable binary file");
+        obj.mem = Some(Lazy { mem: mem_out });
+        obj.global_symbols = Some(GlobalSymbols(global_symbols.into_iter().collect()));
+        if debug {
+            obj.internal_symbols = Some(InternalSymbols(local_symbols));
         }
-        out_file.write_all(&mut mem_out).unwrap();
-        println!("Wrote to binary {}", out.display());
-        drop(mem_out);
+        obj
+    };
 
-        if executable {
-            let mut perms = out_file.metadata().unwrap().permissions();
-            perms.set_mode(perms.mode() | 0o111);
-            out_file.set_permissions(perms).unwrap();
-        }
-    }
+    if let Some(addr) = start_addr {
+        println!("Writing executable binary telda file");
 
-    if let Some(path) = global_symbol_output {
-        let mut f = File::create(&path).unwrap();
-        for (lbl, loc) in global_symbols {
-            writeln!(f, "{lbl}: 0x{loc:02X}").unwrap();
-        }
-        println!("Wrote global symbols to {}", path.display());
-    }
+        obj.write_to_file_with_shebang(&out, format!("#!/bin/env -S t -s -e 0x{addr:02x}")).unwrap();
 
-    if let Some(path) = local_symbol_output {
-        let mut f = File::create(&path).unwrap();
-        for (lbl, loc) in local_symbols {
-            writeln!(f, "{lbl}: 0x{loc:02X}").unwrap();
-        }
-        println!("Wrote local symbols to {}", path.display());
+        let mut perms = fs::metadata(&out).unwrap().permissions();
+        perms.set_mode(perms.mode() | 0o111);
+        fs::set_permissions(out, perms).unwrap();
+    } else {
+        println!("Writing non-executable binary telda file");
+        obj.write_to_file(out).unwrap();
     }
 
     ExitCode::SUCCESS
