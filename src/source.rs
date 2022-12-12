@@ -90,7 +90,7 @@ impl<B: BufRead> SourceLines<B> {
             if line.is_empty() {
                 SourceLine::Comment
             } else
-            if line.starts_with(";") || line.starts_with("//") {
+            if line.starts_with(";") || line.starts_with("//") || line.starts_with("#") {
                 SourceLine::Comment
             } else
             if line.starts_with(".") {
