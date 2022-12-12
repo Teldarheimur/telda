@@ -4,6 +4,8 @@ use crate::isa;
 
 mod err;
 pub use self::err::*;
+mod symbols;
+use self::symbols::*;
 
 type Opcode = u8;
 
@@ -223,13 +225,13 @@ pub enum DataLine {
 }
 
 pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<(Vec<(Box<str>, bool, u16)>, Vec<DataLine>)> {
-    let mut label_maker = LabelMaker { labels: Vec::new(), globals: Vec::new(), id_to_pos: Vec::new() };
+    let mut symbols = Symbols::new();
 
-    let data_lines = inner_process(lines, &mut 0, &mut label_maker)?;
+    let data_lines = inner_process(lines, &mut 0, &mut symbols)?;
 
-    let mut labels = Vec::with_capacity(label_maker.labels.len());
+    let mut labels = Vec::with_capacity(symbols.labels.len());
 
-    for (l, (g, r)) in label_maker.labels.into_iter().zip(label_maker.globals.into_iter().chain(std::iter::repeat(false)).zip(label_maker.id_to_pos)) {
+    for (l, (g, r)) in symbols.labels.into_iter().zip(symbols.globals.into_iter().chain(std::iter::repeat(false)).zip(symbols.id_to_pos)) {
         match r {
             Ok(pos) => labels.push((l, g, pos)),
             Err(e) => {
@@ -249,7 +251,7 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<(Vec<(Box<str>, bool
 
     Ok((labels, data_lines))
 }
-fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, label_maker: &mut LabelMaker) -> Result<Vec<DataLine>> {
+fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, symbols: &mut Symbols) -> Result<Vec<DataLine>> {
     let mut data_lines = Vec::new();
 
     let src = lines.source.clone();
@@ -258,10 +260,10 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, label_
         let (ln, line) = line?;
         match line {
             SourceLine::Label(s) => {
-                label_maker.set_label(&s, *cur_offset, SourceLocation::new(&src, ln))?;
+                symbols.set_label(&s, *cur_offset, SourceLocation::new(&src, ln))?;
             }
             SourceLine::Ins(s, ops) => {
-                let (opcode, dat_op) = parse_ins(s, ops, label_maker, SourceLocation::new(&src, ln)).map_err(|e| Error::new(src.clone(), ln, ErrorType::Other(e.into())))?;
+                let (opcode, dat_op) = parse_ins(s, ops, symbols, SourceLocation::new(&src, ln)).map_err(|e| Error::new(src.clone(), ln, ErrorType::Other(e.into())))?;
                 *cur_offset += 1 + dat_op.size();
                 data_lines.push(DataLine::Ins(opcode, dat_op));
             }
@@ -290,20 +292,20 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, label_
                     };
 
                 let lines = SourceLines::new(path)?;
-                let old_label_marker = label_maker.labels.len();
-                let included_data_lines = inner_process(lines, cur_offset, label_maker)?;
+                let old_label_marker = symbols.labels.len();
+                let included_data_lines = inner_process(lines, cur_offset, symbols)?;
 
                 data_lines.extend(included_data_lines);
-                for (id, lbl) in label_maker.labels.iter_mut().enumerate().skip(old_label_marker) {
+                for (id, lbl) in symbols.labels.iter_mut().enumerate().skip(old_label_marker) {
                     // mangle non-global symbols
-                    if !label_maker.globals.get(id).unwrap_or(&false) {
+                    if !symbols.globals.get(id).unwrap_or(&false) {
                         *lbl = format!("{}  {lbl}", path.display()).into_boxed_str();
                     };
                 }
             }
             SourceLine::DirGlobal(l) => {
-                let id = label_maker.read_label(&l, SourceLocation::new(&src, ln));
-                label_maker.set_global(id);
+                let id = symbols.read_label(&l, SourceLocation::new(&src, ln));
+                symbols.set_global(id);
             }
             SourceLine::Comment => (),
         }
@@ -312,7 +314,7 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, label_
     Ok(data_lines)
 }
 
-fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> StdResult<(u8, DataOperand), &'static str> {
+fn parse_ins(s: String, ops: Vec<SourceOperand>, sym: &mut Symbols, sl: SourceLocation) -> StdResult<(u8, DataOperand), &'static str> {
     use self::isa::*;
     use self::DataOperand as O;
     let ops = ops.iter();
@@ -323,7 +325,7 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: S
         "push" => {
             if let Some(dat_op) = O::parse_b_big_r(ops.clone()) {
                 (PUSH_B, dat_op)
-            } else if let Some(dat_op) = O::parse_w_big_r(ops, lbl_mkr, sl) {
+            } else if let Some(dat_op) = O::parse_w_big_r(ops, sym, sl) {
                 (PUSH_W, dat_op)
             } else {
                 return Err("takes one big");
@@ -338,28 +340,28 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: S
                 return Err("takes one big");
             }
         }
-        "call" => (CALL, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "call" => (CALL, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
         "ret" => (RET, O::parse_nothing(ops.clone()).map(|_| DataOperand::ImmediateByte(0)).or_else(|| O::parse_immediate_u8(ops)).ok_or("either nothing or a byte")?),
         "store" => {
-            if let Some(dat_op) = O::parse_wide_big_byte(ops.clone(), lbl_mkr, sl.clone()) {
+            if let Some(dat_op) = O::parse_wide_big_byte(ops.clone(), sym, sl.clone()) {
                 (STORE_B, dat_op)
-            } else if let Some(dat_op) = O::parse_wide_big_wide(ops, lbl_mkr, sl) {
+            } else if let Some(dat_op) = O::parse_wide_big_wide(ops, sym, sl) {
                 (STORE_W, dat_op)
             } else {
                 return Err("a wide and a big for destination and a source register (any size)");
             }
         }
         "load" => {
-             if let Some(dat_op) = O::parse_byte_wide_big(ops.clone(), lbl_mkr, sl.clone()) {
+             if let Some(dat_op) = O::parse_byte_wide_big(ops.clone(), sym, sl.clone()) {
                 (LOAD_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops.clone(), lbl_mkr, sl) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops.clone(), sym, sl) {
                 (LOAD_W, dat_op)
             } else {
                 return Err("a destination register (any size) and then a wide and a big");
             }
         }
         "jmp" | "jump" => {
-             if let Some(dat_op) = O::parse_immediate_u16(ops.clone(), lbl_mkr, sl) {
+             if let Some(dat_op) = O::parse_immediate_u16(ops.clone(), sym, sl) {
                 (JUMP, dat_op)
             } else if let Some(dat_op) = O::parse_wreg(ops) {
                 (JUMP_REG, dat_op)
@@ -368,23 +370,23 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: S
             }
         }
 
-        "jez" => (JEZ, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jlt" => (JLT, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jle" => (JLE, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jgt" => (JGT, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jge" => (JGE, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jnz" | "jne" => (JNZ, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jo" => (JO, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jno" => (JNO, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jb" | "jc" => (JB, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jae" | "jnc" => (JAE, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "ja" => (JA, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
-        "jbe" => (JBE, O::parse_immediate_u16(ops, lbl_mkr, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jez" => (JEZ, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jlt" => (JLT, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jle" => (JLE, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jgt" => (JGT, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jge" => (JGE, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jnz" | "jne" => (JNZ, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jo" => (JO, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jno" => (JNO, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jb" | "jc" => (JB, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jae" | "jnc" => (JAE, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "ja" => (JA, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
+        "jbe" => (JBE, O::parse_immediate_u16(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?),
 
         "add" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (ADD_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, sym, sl) {
                 (ADD_W, dat_op)
             } else {
                 return Err("two regs and one big");
@@ -393,7 +395,7 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: S
         "sub" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (SUB_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, sym, sl) {
                 (SUB_W, dat_op)
             } else {
                 return Err("two regs and one big");
@@ -402,7 +404,7 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: S
         "and" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (AND_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, sym, sl) {
                 (AND_W, dat_op)
             } else {
                 return Err("two regs and one big");
@@ -411,7 +413,7 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: S
         "or" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (OR_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, sym, sl) {
                 (OR_W, dat_op)
             } else {
                 return Err("two regs and one big");
@@ -420,7 +422,7 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, lbl_mkr: &mut LabelMaker, sl: S
         "xor" => {
             if let Some(dat_op) = O::parse_two_byte_one_big(ops.clone()) {
                 (XOR_B, dat_op)
-            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, lbl_mkr, sl) {
+            } else if let Some(dat_op) = O::parse_two_wide_one_big(ops, sym, sl) {
                 (XOR_W, dat_op)
             } else {
                 return Err("two regs and one big");
@@ -527,56 +529,6 @@ pub fn write_data_operand<F: FnOnce(usize) -> u16>(mem: &mut Vec<u8>, id_to_pos:
     Ok(())
 }
 
-struct LabelMaker {
-    labels: Vec<Box<str>>,
-    id_to_pos: Vec<StdResult<u16, Vec<SourceLocation>>>,
-    globals: Vec<bool>,
-}
-
-impl LabelMaker {
-    fn find_id(&mut self, lbl: &str) -> usize {
-        if let Some(i) = self.labels.iter().position(|l| &**l == lbl) {
-            i
-        } else {
-            let i = self.labels.len();
-            self.labels.push(lbl.to_owned().into_boxed_str());
-            self.id_to_pos.push(Err(Vec::with_capacity(1)));
-            i
-        }
-    }
-    fn set_label(&mut self, lbl: &str, pos: u16, loc: SourceLocation) -> Result<()> {
-        let id = self.find_id(lbl);
-        match &mut self.id_to_pos[id] {
-            &mut Ok(p) => {
-                return Err(Error::new(loc.source, loc.line_number, ErrorType::Other(
-                    format!("Label {lbl} already had pos {p:03x} but is now being set to {pos:03x}").into_boxed_str()
-                )));
-            }
-            e @ Err(_) => *e = Ok(pos),
-        }
-        Ok(())
-    }
-    fn read_label(&mut self, lbl: &str, loc: SourceLocation) -> usize {
-        let id = self.find_id(lbl);
-        match &mut self.id_to_pos[id] {
-            Ok(_) => (),
-            Err(v) => v.push(loc),
-        }
-
-        id
-    }
-    fn set_global(&mut self, id: usize) {
-        if id >= self.globals.len() {
-            self.globals.resize(id+1, false);
-        }
-        self.globals[id] = true;
-    }
-    // fn is_global(&self, id: usize) -> bool {
-    //     self.globals.get(id).copied().unwrap_or(false)
-    // }
-    
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum Wide {
     Number(u16),
@@ -653,8 +605,8 @@ impl DataOperand {
         Self::parse_nothing(ops)?;
         ret
     }
-    fn parse_immediate_u16<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
-        let ret = Some(DataOperand::ImmediateWide(Self::imm_wide(ops.next()?, lbl_mkr, sl)?));
+    fn parse_immediate_u16<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, sym: &mut Symbols, sl: SourceLocation) -> Option<DataOperand> {
+        let ret = Some(DataOperand::ImmediateWide(Self::imm_wide(ops.next()?, sym, sl)?));
         Self::parse_nothing(ops)?;
         ret
     }
@@ -663,8 +615,8 @@ impl DataOperand {
         Self::parse_nothing(ops)?;
         ret
     }
-    fn parse_w_big_r<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
-        let ret = Some(DataOperand::WideBigR(Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?));
+    fn parse_w_big_r<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, sym: &mut Symbols, sl: SourceLocation) -> Option<DataOperand> {
+        let ret = Some(DataOperand::WideBigR(Self::wide_or_imm(ops.next()?, sym, sl)?));
         Self::parse_nothing(ops)?;
         ret
     }
@@ -673,30 +625,30 @@ impl DataOperand {
         let reg2 = ops.next()?;
         Some(DataOperand::TwoByteOneBig(Self::byte(reg1)?, Self::byte(reg2)?, Self::byte_or_imm(ops.next()?)?))
     }
-    fn parse_two_wide_one_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
+    fn parse_two_wide_one_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, sym: &mut Symbols, sl: SourceLocation) -> Option<DataOperand> {
         let reg1 = ops.next()?;
         let reg2 = ops.next()?;
-        Some(DataOperand::TwoWideOneBig(Self::wide(reg1)?, Self::wide(reg2)?, Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?))
+        Some(DataOperand::TwoWideOneBig(Self::wide(reg1)?, Self::wide(reg2)?, Self::wide_or_imm(ops.next()?, sym, sl)?))
     }
-    fn parse_wide_big_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
+    fn parse_wide_big_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, sym: &mut Symbols, sl: SourceLocation) -> Option<DataOperand> {
         Some(DataOperand::WideBigByte(
             Self::wide(ops.next()?)?,
-            Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?,
+            Self::wide_or_imm(ops.next()?, sym, sl)?,
             Self::byte(ops.next()?)?,
         ))
     }
-    fn parse_wide_big_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
+    fn parse_wide_big_wide<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, sym: &mut Symbols, sl: SourceLocation) -> Option<DataOperand> {
         Some(DataOperand::WideBigWide(
             Self::wide(ops.next()?)?,
-            Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?,
+            Self::wide_or_imm(ops.next()?, sym, sl)?,
             Self::wide(ops.next()?)?,
         ))
     }
-    fn parse_byte_wide_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<DataOperand> {
+    fn parse_byte_wide_big<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>, sym: &mut Symbols, sl: SourceLocation) -> Option<DataOperand> {
         Some(DataOperand::ByteWideBig(
             Self::byte(ops.next()?)?,
             Self::wide(ops.next()?)?,
-            Self::wide_or_imm(ops.next()?, lbl_mkr, sl)?,
+            Self::wide_or_imm(ops.next()?, sym, sl)?,
         ))
     }
     fn parse_four_byte<'a>(mut ops: impl Iterator<Item=&'a SourceOperand>) -> Option<DataOperand> {
@@ -737,11 +689,11 @@ impl DataOperand {
             _ => None,
         }
     }
-    fn imm_wide(op: &SourceOperand, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<Wide> {
+    fn imm_wide(op: &SourceOperand, sym: &mut Symbols, sl: SourceLocation) -> Option<Wide> {
         match op {
             &SourceOperand::Number(n) => Some(Wide::Number(n as u16)),
             &SourceOperand::Wide(n) => Some(Wide::Number(n)),
-            SourceOperand::Label(lbl) => Some(Wide::Label(lbl_mkr.read_label(lbl, sl))),
+            SourceOperand::Label(lbl) => Some(Wide::Label(sym.read_label(lbl, sl))),
             _ => None,
         }
     }
@@ -750,9 +702,9 @@ impl DataOperand {
             .map(BBigR::Register)
             .or_else(|| Self::imm_byte(op).map(BBigR::Byte))
     }
-    fn wide_or_imm(op: &SourceOperand, lbl_mkr: &mut LabelMaker, sl: SourceLocation) -> Option<WBigR> {
+    fn wide_or_imm(op: &SourceOperand, sym: &mut Symbols, sl: SourceLocation) -> Option<WBigR> {
         Self::wide(op)
             .map(WBigR::Register)
-            .or_else(|| Self::imm_wide(op, lbl_mkr, sl).map(WBigR::Wide))
+            .or_else(|| Self::imm_wide(op, sym, sl).map(WBigR::Wide))
     }
 }
