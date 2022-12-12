@@ -1,6 +1,6 @@
 use std::{fs::File, env::args, path::Path, io::Write, process::ExitCode};
 
-use telda2::source::{SourceLines, process, DataLine, write_data_operand};
+use telda2::{source::{SourceLines, process, DataLine, write_data_operand}, ext_files::{BINARY_EXT, SYMBOL_FILE_EXT, NON_GLOBAL_SYMBOL_FILE_EXT}};
 
 fn main() -> ExitCode {
     let mut ret = ExitCode::SUCCESS;
@@ -29,20 +29,23 @@ fn main() -> ExitCode {
             }
         }
 
-        let bin_path = p.with_extension("tbin");
+        let bin_path = p.with_extension(BINARY_EXT);
         let mut f = File::create(&bin_path).unwrap();
         f.write_all(&mem).unwrap();
         println!("Wrote binary to {}", bin_path.display());
 
-        let sym_path = p.with_extension("tsym");
-        let mut f = File::create(p.with_extension("tsym")).unwrap();
+        let gsym_path = p.with_extension(SYMBOL_FILE_EXT);
+        let lsym_path = p.with_extension(NON_GLOBAL_SYMBOL_FILE_EXT);
+        let mut global_symbol_f = File::create(&gsym_path).unwrap();
+        let mut local_symbol_f = File::create(&lsym_path).unwrap();
         for (lbl, global, loc) in labels.iter() {
-            if !global {
-                write!(f, "private $").unwrap();
+            if *global {
+                writeln!(global_symbol_f, "{lbl}: 0x{loc:02X}").unwrap();
+            } else {
+                writeln!(local_symbol_f, "{lbl}: 0x{loc:02X}").unwrap();
             }
-            writeln!(f, "{lbl}: 0x{loc:02X}").unwrap();
         }
-        println!("Wrote symbols to {}", sym_path.display());
+        println!("Wrote symbols to {} and {}", gsym_path.display(), lsym_path.display());
 
         if labels.iter().all(|(s, _, _)| &**s != "_start") {
             eprintln!("Warning: no _start symbol");

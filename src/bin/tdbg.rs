@@ -1,6 +1,6 @@
-use std::{fs::File, env::args, io::{BufReader, Read, BufRead, stdin, stdout, Write}, collections::HashMap, path::Path};
+use std::{fs::File, env::args, io::{Read, BufRead, stdin, stdout, Write}, collections::HashMap, path::Path};
 
-use telda2::{mem::{Lazy, Memory}, cpu::{Cpu, ByteRegister, Registers}, disassemble::disassemble_instruction};
+use telda2::{mem::{Lazy, Memory}, cpu::{Cpu, ByteRegister, Registers}, disassemble::disassemble_instruction, ext_files::{read_symbol_file, NON_GLOBAL_SYMBOL_FILE_EXT, SYMBOL_FILE_EXT}};
 
 fn main() {
     let arg = args().nth(1).unwrap();
@@ -8,23 +8,11 @@ fn main() {
     let mut mem = Vec::new();
     let mut f = File::open(p).unwrap();
     f.read_to_end(&mut mem).unwrap();
+
     let mut labels = HashMap::new();
     let mut pos_to_labels = HashMap::new();
-    let f = File::open(p.with_extension("tsym")).unwrap();
-    for line in BufReader::new(f).lines() {
-        let line = line.unwrap();
-        let colon = line.find(':').unwrap();
-        let lbl = line[..colon].to_owned();
-        let pos = u16::from_str_radix(&line[colon+4..], 16).unwrap();
-        labels.insert(
-            lbl.clone(),
-            pos
-        );
-        pos_to_labels.insert(
-            pos,
-            lbl
-        );
-    }
+    read_symbol_file(p.with_extension(NON_GLOBAL_SYMBOL_FILE_EXT), &mut labels, &mut pos_to_labels).unwrap();
+    read_symbol_file(p.with_extension(SYMBOL_FILE_EXT), &mut labels, &mut pos_to_labels).unwrap();
 
     let start_id = labels.get("_start").copied()
         .unwrap_or_else(|| {eprintln!("warning: no _start symbol found, using as 0 startpoint"); 0});

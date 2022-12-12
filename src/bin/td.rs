@@ -1,6 +1,6 @@
-use std::{fs::File, env::args, io::{BufReader, Read, BufRead}, collections::HashMap, path::Path};
+use std::{fs::File, env::args, io::Read, collections::HashMap, path::Path};
 
-use telda2::disassemble::{disassemble_instruction, DisassembledInstruction};
+use telda2::{disassemble::{disassemble_instruction, DisassembledInstruction}, ext_files::{read_symbol_file, NON_GLOBAL_SYMBOL_FILE_EXT, SYMBOL_FILE_EXT}};
 
 fn main() {
     for arg in args().skip(1) {
@@ -8,24 +8,11 @@ fn main() {
         let mut binary_code = Vec::new();
         let mut f = File::open(p).unwrap();
         f.read_to_end(&mut binary_code).unwrap();
+
         let mut labels = HashMap::new();
         let mut pos_to_labels = HashMap::new();
-        let f = File::open(p.with_extension("tsym")).unwrap();
-        for line in BufReader::new(f).lines() {
-            let line = line.unwrap();
-            let colon = line.find(':').unwrap();
-            let lbl = line[..colon].to_owned();
-            let pos = u16::from_str_radix(&line[colon+4..], 16).unwrap();
-            labels.insert(
-                lbl.clone(),
-                pos
-            );
-            pos_to_labels.insert(
-                pos,
-                lbl
-            );
-        }
-
+        read_symbol_file(p.with_extension(NON_GLOBAL_SYMBOL_FILE_EXT), &mut labels, &mut pos_to_labels).unwrap();
+        read_symbol_file(p.with_extension(SYMBOL_FILE_EXT), &mut labels, &mut pos_to_labels).unwrap();
 
         let mut printed_labels = vec!["_start"];
         let mut found_labels = vec!["_start"];

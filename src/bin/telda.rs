@@ -1,27 +1,22 @@
-use std::{env::args, path::Path, fs::File, io::{Read, BufReader, BufRead}, collections::HashMap};
+use std::{env::args, path::Path, fs::File, io::Read, collections::HashMap};
 
-use telda2::{cpu::Cpu, mem::Lazy};
+use telda2::{cpu::Cpu, mem::Lazy, ext_files::{read_symbol_file, NON_GLOBAL_SYMBOL_FILE_EXT, SYMBOL_FILE_EXT}};
 
 fn main() {
     let arg = args().nth(1).unwrap();
     let p = Path::new(&arg);
     let mut mem = Vec::new();
-    let mut f = File::open(p).unwrap();
-    f.read_to_end(&mut mem).unwrap();
+    {
+        let mut f = File::open(p).unwrap();
+        f.read_to_end(&mut mem).unwrap();
+    }
+
     let mut labels = HashMap::new();
-    if let Ok(f) = File::open(p.with_extension("tsym")) {
-        for line in BufReader::new(f).lines() {
-            let line = line.unwrap();
-            let colon = line.find(':').unwrap();
-            let lbl = line[..colon].to_owned();
-            let pos = u16::from_str_radix(&line[colon+4..], 16).unwrap();
-            labels.insert(
-                lbl.clone(),
-                pos
-            );
-        }
-    } else {
-        eprintln!("no symbol file found");
+    if let Err(_) =
+        read_symbol_file(p.with_extension(NON_GLOBAL_SYMBOL_FILE_EXT), &mut labels, &mut ())
+            .and_then(|_| read_symbol_file(p.with_extension(SYMBOL_FILE_EXT), &mut labels, &mut ()))
+    {
+        eprintln!("could not read symbol file(s)");
     }
 
     let start_id = labels.get("_start").copied()
