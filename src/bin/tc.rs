@@ -1,7 +1,7 @@
 use std::{env::args, path::Path, process::ExitCode};
 
 use telda2::{
-    source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType},
+    source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType, Wide},
     aalv::obj::{AALV_OBJECT_EXT, Object, GlobalSymbols, InternalSymbols, SymbolReferenceTable},
     mem::Lazy,
 };
@@ -27,6 +27,13 @@ fn main() -> ExitCode {
             match data_line {
                 DataLine::Raw(mut bytes) => {
                     mem.append(&mut bytes);
+                }
+                DataLine::Wide(Wide::Number(w)) => mem.extend_from_slice(&w.to_le_bytes()),
+                DataLine::Wide(Wide::Label(id)) => {
+                    let lr = LabelRead { position: mem.len() as u16, format: telda2::source::Format::Absolute };
+                    label_reads[id].push(lr);
+                    let w = labels[id].2;
+                    mem.extend_from_slice(&w.to_le_bytes());
                 }
                 DataLine::Ins(opcode, dat_op) => {
                     mem.push(opcode);

@@ -53,7 +53,7 @@ pub enum SourceLine {
     DirInclude(String),
     DirString(Vec<u8>),
     DirByte(u8),
-    DirWide(u16),
+    DirWide(StdResult<u16, String>),
     DirGlobal(String),
     DirReference(String),
 }
@@ -74,6 +74,33 @@ impl SourceLines<BufReader<File>> {
             ln: 0,
             source
         })
+    }
+}
+
+fn parse_number(arg: &str) -> SourceOperand {
+    let so;
+    if arg.ends_with("b") {
+        so = arg[..arg.len()-1]
+            .parse()
+            .ok()
+            .or_else(|| arg[..arg.len()-1].parse::<i8>().ok().map(|b| b as u8))
+            .map(SourceOperand::Byte);
+    } else if arg.ends_with("w") {
+        so = arg[..arg.len()-1]
+            .parse()
+            .ok()
+            .or_else(|| arg[..arg.len()-1].parse::<i16>().ok().map(|w| w as u16))
+            .map(SourceOperand::Wide);
+    } else if arg.starts_with('\'') && arg.ends_with('\'') {
+        so = Some(SourceOperand::Byte(parse_bytechar(arg[1..arg.len()-1].as_bytes()).0));
+    } else {
+        so = arg.parse().ok().map(SourceOperand::Number);
+    }
+
+    if let Some(so) = so {
+        so
+    } else {
+        SourceOperand::Label(arg.to_owned())
     }
 }
 
@@ -112,8 +139,41 @@ impl<B: BufRead> SourceLines<B> {
                         }
                         string
                     }),
-                    "byte" => SourceLine::DirByte(arg.parse().map_err(|_| Error::new(self.source.clone(), self.ln, ErrorType::Other(format!("invalid byte literal \'{arg}\'").into_boxed_str())))?),
-                    "wide" | "word" => SourceLine::DirWide(arg.parse().map_err(|_| Error::new(self.source.clone(), self.ln, ErrorType::Other(format!("invalid wide literal \'{arg}\'").into_boxed_str())))?),
+                    "byte" => {
+                        let b;
+                        match parse_number(arg) {
+                            SourceOperand::Byte(n) => b = n,
+                            SourceOperand::Number(n) => {
+                                if n > u8::MAX as i32 {
+                                    eprintln!("warning: byte literal overflow");
+                                } else if n < i8::MIN as i32 {
+                                    eprintln!("warning: byte literal underflow");
+                                }
+
+                                b = n as u8
+                            }
+                            _ => return Err(Error::new(self.source.clone(), self.ln, ErrorType::Other(format!("invalid byte literal \'{arg}\'").into_boxed_str()))),
+                        }
+                        SourceLine::DirByte(b)
+                    }
+                    "wide" | "word" => {
+                        let w;
+                        match parse_number(arg) {
+                            SourceOperand::Wide(n) => w = Ok(n),
+                            SourceOperand::Number(n) => {
+                                if n > u16::MAX as i32 {
+                                    eprintln!("warning: wide literal overflow");
+                                } else if n < i16::MIN as i32 {
+                                    eprintln!("warning: wide literal underflow");
+                                }
+
+                                w = Ok(n as u16)
+                            }
+                            SourceOperand::Label(l) => w = Err(l),
+                            _ => return Err(Error::new(self.source.clone(), self.ln, ErrorType::Other(format!("invalid wide literal \'{arg}\'").into_boxed_str()))),
+                        }
+                        SourceLine::DirWide(w)
+                    }
                     "include" => SourceLine::DirInclude(arg.to_string()),
                     "global" | "globl" => SourceLine::DirGlobal(arg.to_string()),
                     "ref" | "reference" => SourceLine::DirReference(arg.to_string()),
@@ -145,32 +205,7 @@ impl<B: BufRead> SourceLines<B> {
                         "y" => SourceOperand::WideReg(WReg::Y),
                         "z" => SourceOperand::WideReg(WReg::Z),
                         "s" => SourceOperand::WideReg(WReg::S),
-                        arg => {
-                            let so;
-                            if arg.ends_with("b") {
-                                so = arg[..arg.len()-1]
-                                    .parse()
-                                    .ok()
-                                    .or_else(|| arg[..arg.len()-1].parse::<i8>().ok().map(|b| b as u8))
-                                    .map(SourceOperand::Byte);
-                            } else if arg.ends_with("w") {
-                                so = arg[..arg.len()-1]
-                                    .parse()
-                                    .ok()
-                                    .or_else(|| arg[..arg.len()-1].parse::<i16>().ok().map(|w| w as u16))
-                                    .map(SourceOperand::Wide);
-                            } else if arg.starts_with('\'') && arg.ends_with('\'') {
-                                so = Some(SourceOperand::Byte(parse_bytechar(arg[1..arg.len()-1].as_bytes()).0));
-                            } else {
-                                so = arg.parse().ok().map(SourceOperand::Number);
-                            }
-
-                            if let Some(so) = so {
-                                so
-                            } else {
-                                SourceOperand::Label(arg.to_owned())
-                            }
-                        }
+                        arg => parse_number(arg),
                     });
                 }
 
@@ -224,6 +259,7 @@ impl SourceLocation {
 #[derive(Debug, Clone)]
 pub enum DataLine {
     Ins(Opcode, DataOperand),
+    Wide(Wide),
     Raw(Vec<u8>),
 }
 
@@ -295,9 +331,13 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, symbol
                 data_lines.push(DataLine::Raw(vec![b]));
             }
             SourceLine::DirWide(w) => {
-                let [l, h] = w.to_le_bytes();
+                let wide;
+                match w {
+                    Ok(w) => wide = Wide::Number(w),
+                    Err(l) => wide = Wide::Label(symbols.get_label(&l, SourceLocation::new(&src, ln))),
+                }
+                data_lines.push(DataLine::Wide(wide));
                 *cur_offset += 2;
-                data_lines.push(DataLine::Raw(vec![l, h]));
             }
             SourceLine::DirString(s) => {
                 *cur_offset += s.len() as u16;
