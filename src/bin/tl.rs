@@ -46,7 +46,6 @@ fn main() -> ExitCode {
     let mut mem_out = Vec::new();
     let mut global_refs = Vec::new();
     let mut global_symbols = HashMap::new();
-    // Vec because overlap is allowed
     let mut local_symbols = Vec::new();
     
     for input_file in input_files {
@@ -59,20 +58,26 @@ fn main() -> ExitCode {
         {
             let obj = Object::from_file(&input_file).unwrap();
             mem_file = obj.mem.unwrap().mem;
+            let input_file_display = input_file.display();
 
-            internal_labels = obj.internal_symbols.map(|is| is.0.into_iter()).into_iter().flatten().collect();
+            internal_labels = obj.internal_symbols.map(|is| is.0.into_iter()).into_iter().flatten()
+                .map(|(l, v)| {
+                    let renamed = format!("{input_file_display}${l}").into_boxed_str();
+                    (l, (renamed, v))
+                })
+                .collect();
             global_labels = obj.global_symbols.map(|is| is.0.into_iter()).into_iter().flatten().collect();
             refs = obj.symbol_reference_table.map(|srt| srt.0).unwrap_or(Vec::new());
         }
 
         for (f, lbl, pos_in_file) in refs {
-            let Some(&pos) = internal_labels.get(&*lbl) else {
-                global_refs.push((f, lbl.clone(), pos_in_file+offset));
+            let Some(&(ref renamed, pos)) = internal_labels.get(&*lbl) else {
+                global_refs.push((f, lbl, pos_in_file+offset));
                 continue;
             };
 
             if relocatable {
-                reloc_refs.push((f, lbl, pos_in_file));
+                reloc_refs.push((f, renamed.clone(), offset+pos_in_file));
             }
             rewrite(&mut mem_file, pos_in_file, f, pos+offset);
         }
@@ -86,8 +91,8 @@ fn main() -> ExitCode {
             }
         }
 
-        for (lbl, pos_in_file) in internal_labels {
-            local_symbols.push((lbl, pos_in_file+offset));
+        for (_lbl, (renamed, pos_in_file)) in internal_labels {
+            local_symbols.push((renamed, pos_in_file+offset));
         }
 
         mem_out.extend(mem_file);

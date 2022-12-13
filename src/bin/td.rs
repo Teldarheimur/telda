@@ -3,7 +3,12 @@ use std::{env::args, collections::HashMap, path::Path};
 use telda2::{disassemble::{disassemble_instruction, DisassembledInstruction}, aalv::{obj::ShebangAgnosticObject}};
 
 fn main() {
-    for arg in args().skip(1) {
+    let mut args = args();
+    let arg = args.nth(1).unwrap();
+    let symbol = args.next();
+    let symbol = symbol.as_ref().map(|s| &**s).unwrap_or_else(|| "_start");
+
+    {
         let p = Path::new(&arg);
         
         let binary_code;
@@ -25,8 +30,8 @@ fn main() {
             }
         }
 
-        let mut printed_labels = vec!["_start"];
-        let mut found_labels = vec!["_start"];
+        let mut printed_labels = vec![symbol];
+        let mut found_labels = vec![symbol];
 
         loop {
             if found_labels.is_empty() {
