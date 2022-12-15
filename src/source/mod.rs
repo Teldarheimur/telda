@@ -344,7 +344,6 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, symbol
                 data_lines.push(DataLine::Raw(s));
             }
             SourceLine::DirInclude(path) => {
-                eprintln!("warning: {src}:{ln}: use of deprecated include directive");
                 let pth_buf;
 
                 let path = 
@@ -356,11 +355,9 @@ fn inner_process<B: BufRead>(lines: SourceLines<B>, cur_offset: &mut u16, symbol
                     };
 
                 let lines = SourceLines::new(path)?;
-                let old_symbols = symbols.marker();
                 let included_data_lines = inner_process(lines, cur_offset, symbols)?;
 
                 data_lines.extend(included_data_lines);
-                symbols.mangle_interal(path.display(), old_symbols);
             }
             SourceLine::DirGlobal(l) => {
                 let id = symbols.get_label(&l, SourceLocation::new(&src, ln));
