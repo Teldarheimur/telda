@@ -17,7 +17,8 @@ impl Memory for StrictMemory<'_> {
 
 pub struct DisassembledInstruction {
     pub annotated_source: String,
-    pub does_not_end_function: bool,
+    pub ends_block: bool,
+    pub nesting_difference: i32,
     pub next_instruction_location: u16,
 }
 
@@ -32,16 +33,17 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
 
     let mut op = String::with_capacity(32);
     let f = &mut op;
-    let mut does_not_end_function = true;
+    let mut nesting_difference = 0;
+    let mut ends_block = false;
 
     match opcode {
         NULL => {
             write!(f, "null").unwrap();
-            does_not_end_function = false;
+            ends_block = true;
         }
         HALT => {
             write!(f, "halt").unwrap();
-            does_not_end_function = false;
+            ends_block = true;
         }
         NOP => write!(f, "nop").unwrap(),
         PUSH_B => {
@@ -63,11 +65,13 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
         CALL => {
             let w = Operand::Wide(arg_imm_wide(r, m)).looked_up(label_lookup);
             write!(f, "call {w}").unwrap();
+            nesting_difference = 1;
         }
         RET => {
             let b = arg_imm_byte(r, m);
             write!(f, "ret {b}").unwrap();
-            does_not_end_function = false;
+            nesting_difference = -1;
+            ends_block = true;
         }
         STORE_B => {
             let (r1, r2) = arg_wide_byte_registers(r, m);
@@ -93,7 +97,7 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
             let w = arg_imm_wide(r, m);
             if let Some(lbl) = label_lookup(w) {
                 write!(f, "jmp {lbl}").unwrap();
-                does_not_end_function = false;
+                ends_block = true;
             } else {
                 // TODO: this is wrong
                 println!("jmp 0x{w:02x}");
@@ -104,7 +108,7 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
         JUMP_REG => {
             let (wr, _) = arg_wide_registers(r, m);
             write!(f, "jmp {wr}").unwrap();
-            does_not_end_function = false;
+            ends_block = true;
         }
         JEZ => cjmp("jez", r, m, label_lookup, f),
         JLT => cjmp("jlt", r, m, label_lookup, f),
@@ -190,7 +194,7 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
         }
         b => {
             write!(f, "0x{b:02x}").unwrap();
-            does_not_end_function = false;
+            ends_block = true;
         }
     }
 
@@ -208,9 +212,10 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
     write!(&mut annotated_source, "    {op}").unwrap();
 
     DisassembledInstruction {
-        annotated_source: annotated_source,
-        does_not_end_function,
+        annotated_source,
         next_instruction_location,
+        ends_block,
+        nesting_difference,
     }
 }
 

@@ -30,21 +30,30 @@ fn main() {
     let mut cpu = Cpu::new(start_id);
     let mut stdin = stdin().lock();
     let mut input = String::new();
-    let mut continuing = false;
+    let mut target_nesting = 0;
+    let mut current_nesting = 0;
 
     'disassemble_loop: loop {
-        if let Some(label) = pos_to_labels.get(&cpu.registers.pc) {
-            println!("<{label}>:");
-        }
-
         let dins = disassemble_instruction(cpu.registers.pc, &mem.mem, |p| pos_to_labels.get(&p).map(|s| &**s));
-        println!("{}", dins.annotated_source);
-        if !dins.does_not_end_function {
-            continuing = false;
+
+        if current_nesting == target_nesting {
+            if let Some(label) = pos_to_labels.get(&cpu.registers.pc) {
+                println!("<{label}>:");
+            }
+
+            println!("{}", dins.annotated_source);
+
+            if dins.ends_block || dins.nesting_difference != 0 {
+                println!();
+            }
         }
 
-        'command_loop: loop {
-            if continuing { break }
+        let next_nesting = current_nesting + dins.nesting_difference;
+
+        target_nesting = loop {
+            if target_nesting != current_nesting {
+                break target_nesting;
+            }
 
             print!("+tdgb> ");
             stdout().flush().unwrap();
@@ -54,10 +63,14 @@ fn main() {
 
             match input.trim() {
                 "q" | "quit" => break 'disassemble_loop,
-                "" | "s" | "step" => break 'command_loop,
-                "c" | "continue" => {
-                    continuing = true;
-                    break 'command_loop;
+                "n" | "next" => {
+                    break current_nesting;
+                }
+                "si" | "in" | "stepin" => {
+                    break next_nesting;
+                }
+                "so" | "out" | "stepout" => {
+                    break current_nesting - 1;
                 }
                 l if l.starts_with("r ") => {
                     let arg = l[2..].trim();
@@ -111,7 +124,7 @@ fn main() {
                 }
                 _ => eprintln!("unknown command, type q to quit"),
             }
-        }
+        };
         match cpu.run_instruction(&mut mem) {
             Ok(()) => (),
             Err(e) => {
@@ -119,6 +132,7 @@ fn main() {
                 break 'disassemble_loop;
             }
         }
+        current_nesting = next_nesting;
     }
 }
 

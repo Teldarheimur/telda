@@ -50,7 +50,7 @@ fn main() {
             let mut location = labels[label_to_print];
 
             'labelled_block: loop {
-                let DisassembledInstruction { annotated_source, does_not_end_function, next_instruction_location }
+                let DisassembledInstruction { annotated_source, ends_block, nesting_difference: _, next_instruction_location }
                     = disassemble_instruction(location, &binary_code, |p| {
                         let l = pos_to_labels.get(&p).map(|s| &**s);
                         if let Some(l) = l {
@@ -61,7 +61,7 @@ fn main() {
                         l
                     });
                 println!("{}", annotated_source);
-                if !does_not_end_function {
+                if ends_block {
                     break 'labelled_block;
                 }
                 if let Some(lbl) = pos_to_labels.get(&next_instruction_location) {
