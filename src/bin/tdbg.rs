@@ -33,13 +33,11 @@ fn main() {
     let mut continuing = false;
 
     'disassemble_loop: loop {
-        let mut new_labels = Vec::new();
-
         if let Some(label) = pos_to_labels.get(&cpu.registers.pc) {
             println!("<{label}>:");
         }
 
-        let dins = disassemble_instruction(cpu.registers.pc, &mem.mem, &mut new_labels, &pos_to_labels);
+        let dins = disassemble_instruction(cpu.registers.pc, &mem.mem, |p| pos_to_labels.get(&p).map(|s| &**s));
         println!("{}", dins.annotated_source);
         if !dins.does_not_end_function {
             continuing = false;

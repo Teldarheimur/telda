@@ -1,12 +1,16 @@
-use std::{env::args, collections::HashMap, path::Path};
+use std::{env::args, collections::{HashMap, VecDeque, HashSet}, path::Path};
 
 use telda2::{disassemble::{disassemble_instruction, DisassembledInstruction}, aalv::{obj::ShebangAgnosticObject}};
 
 fn main() {
     let mut args = args();
     let arg = args.nth(1).unwrap();
-    let symbol = args.next();
-    let symbol = symbol.as_ref().map(|s| &**s).unwrap_or_else(|| "_start");
+    let symbols = args.collect::<Vec<_>>();
+
+    if symbols.is_empty() {
+        eprintln!("No starting symbols were given. Perhaps try `_start`");
+        return;
+    }
 
     {
         let p = Path::new(&arg);
@@ -15,6 +19,7 @@ fn main() {
         let mut labels = HashMap::new();
         let mut pos_to_labels = HashMap::new();
         {
+            // TODO: also show relocation rules
             let obj = ShebangAgnosticObject::from_file(p).unwrap().into_object();
             binary_code = obj.mem.unwrap().mem;
 
@@ -30,36 +35,48 @@ fn main() {
             }
         }
 
-        let mut printed_labels = vec![symbol];
-        let mut found_labels = vec![symbol];
+        let mut printed_labels = HashSet::new();
+        let mut labels_to_print = VecDeque::from_iter(symbols.iter().map(|s| &**s));
 
-        loop {
-            if found_labels.is_empty() {
-                break;
+        while let Some(label_to_print) = labels_to_print.pop_front() {
+            // Printed labels can end up in the queue
+            if printed_labels.contains(&label_to_print) {
+                continue;
             }
 
-            let mut new_labels = Vec::new();
-            for label in found_labels {
-                printed_labels.push(label);
-                let mut location = labels[label];
+            println!("<{label_to_print}>:");
+            printed_labels.insert(label_to_print);
 
-                println!("<{label}>:");
-                loop {
-                    let DisassembledInstruction { annotated_source, does_not_end_function, next_instruction_location }
-                        = disassemble_instruction(location, &binary_code, &mut new_labels, &pos_to_labels);
-                    println!("{}", annotated_source);
-                    if !does_not_end_function {
-                        break;
-                    }
-                    location = next_instruction_location;
+            let mut location = labels[label_to_print];
+
+            'labelled_block: loop {
+                let DisassembledInstruction { annotated_source, does_not_end_function, next_instruction_location }
+                    = disassemble_instruction(location, &binary_code, |p| {
+                        let l = pos_to_labels.get(&p).map(|s| &**s);
+                        if let Some(l) = l {
+                            if !printed_labels.contains(&l) {
+                                labels_to_print.push_back(l);
+                            }
+                        }
+                        l
+                    });
+                println!("{}", annotated_source);
+                if !does_not_end_function {
+                    break 'labelled_block;
                 }
-                println!();
+                if let Some(lbl) = pos_to_labels.get(&next_instruction_location) {
+                    if printed_labels.insert(lbl) {
+                        // Was not printed before
+                        println!("<{lbl}>:");
+                    } else {
+                        // Was printed before => end block
+                        println!("<{lbl}> ...");
+                        break 'labelled_block;
+                    }
+                }
+                location = next_instruction_location;
             }
-            new_labels.sort();
-            new_labels.dedup();
-            new_labels.retain(|s| !printed_labels.contains(s));
-
-            found_labels = new_labels;
+            println!();
         }
     }
 }
