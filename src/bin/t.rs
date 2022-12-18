@@ -57,7 +57,7 @@ pub fn main() -> ExitCode {
         (obj.mem.unwrap(), iter)
     };
 
-    let mut cpu = Cpu::new(start_addr);
+    let mut cpu = Cpu::new_with_stdport(start_addr);
     let tm = cpu.run_until_trap(&mut lazy);
 
     if termination_point {

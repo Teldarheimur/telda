@@ -2,15 +2,31 @@ use std::{fmt::{Display, self}, io::{Read, Write}};
 
 use crate::{mem::Memory, isa::OP_HANDLERS};
 
+struct StdPort;
+
+impl IoPort for StdPort {
+    fn read(&mut self) -> u8 {
+        let mut buf = [0];
+        std::io::stdin().read(&mut buf).unwrap();
+        buf[0]
+    }
+    fn write(&mut self, val: u8) {
+        std::io::stdout().write_all(&[val]).unwrap()
+    }
+}
+
 pub struct Cpu {
     pub registers: Registers,
 }
 
 impl Cpu {
-    pub fn new(pc: u16) -> Self {
+    pub fn new(pc: u16, io_port: Box<dyn IoPort>) -> Self {
         Cpu {
-            registers: Registers::new(pc)
+            registers: Registers::new(pc, io_port)
         }
+    }
+    pub fn new_with_stdport(pc: u16) -> Self {
+        Self::new(pc, Box::new(StdPort))
     }
     pub fn run_instruction(&mut self, mem: &mut dyn Memory) -> Result<(), TrapMode> {
         let opcode = mem.read(self.registers.pc);
@@ -43,7 +59,11 @@ pub enum TrapMode {
     ZeroDiv = 2,
 }
 
-#[derive(Debug, Clone)]
+pub trait IoPort {
+    fn read(&mut self) -> u8;
+    fn write(&mut self, val: u8);
+}
+
 pub struct Registers {
     pub a: u16,
     pub b: u16,
@@ -51,6 +71,7 @@ pub struct Registers {
     pub x: u16,
     pub y: u16,
     pub z: u16,
+    io_port: Box<dyn IoPort>,
 
     pub pc: u16,
     pub sp: u16,
@@ -63,7 +84,7 @@ pub struct Registers {
 }
 
 impl Registers {
-    pub fn new(pc: u16) -> Self {
+    pub fn new(pc: u16, io_port: Box<dyn IoPort>) -> Self {
         let seed = (pc << 8) | (!pc);
         // Pseudo-randomise starting registers so that they cannot be relied on
         Registers {
@@ -73,6 +94,7 @@ impl Registers {
             x: seed ^ 0xa2be,
             y: seed ^ 0x2caf,
             z: seed ^ 0x5661,
+            io_port,
             pc,
             sp: 0x7f_ff,
             trap: false,
@@ -83,7 +105,7 @@ impl Registers {
             carry: false,
         }
     }
-    pub fn read_byte(&self, r: ByteRegister) -> u8 {
+    pub fn read_byte(&mut self, r: ByteRegister) -> u8 {
         match r.0 {
             0 => 0,
             1 => self.a.to_le_bytes()[0],
@@ -92,11 +114,7 @@ impl Registers {
             4 => self.b.to_le_bytes()[1],
             5 => self.c.to_le_bytes()[0],
             6 => self.c.to_le_bytes()[1],
-            7 => {
-                let mut buf = [0];
-                std::io::stdin().read(&mut buf).unwrap();
-                buf[0]
-            }
+            7 => self.io_port.read(),
             _ => unimplemented!("no such register"),
         }
     }
@@ -128,7 +146,7 @@ impl Registers {
                 self.c = u16::from_le_bytes([low, val]);
             },
             7 => {
-                std::io::stdout().write_all(&[val]).unwrap();
+                self.io_port.write(val);
             }
             _ => unimplemented!("no such register"),
         }

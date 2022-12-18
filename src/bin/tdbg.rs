@@ -1,6 +1,34 @@
-use std::{env::args, io::{BufRead, stdin, stdout, Write}, collections::HashMap, path::Path};
+use std::{env::args, io::{stdin, stdout, Write}, collections::{HashMap, VecDeque}, path::Path};
 
-use telda2::{mem::{Memory}, cpu::{Cpu, ByteRegister, Registers}, disassemble::disassemble_instruction, aalv::obj::ShebangAgnosticObject};
+use telda2::{mem::{Memory}, cpu::{Cpu, ByteRegister, Registers, IoPort}, disassemble::disassemble_instruction, aalv::obj::ShebangAgnosticObject};
+
+struct DbgIoPort {
+    in_buf: VecDeque<u8>,
+    out_buf: Vec<u8>,
+}
+
+impl IoPort for DbgIoPort {
+    fn write(&mut self, val: u8) {
+        if val == b'\n' {
+            print!("STDOUT line: ");
+            std::io::stdout().write_all(&self.out_buf).unwrap();
+            println!();
+            self.out_buf.clear();
+        } else {
+            self.out_buf.push(val);
+        }
+    }
+    fn read(&mut self) -> u8 {
+        if self.in_buf.is_empty() {
+            print!("STDIN requested: ");
+            stdout().flush().unwrap();
+            let mut buf = String::new();
+            std::io::stdin().read_line(&mut buf).unwrap();
+            self.in_buf.extend(buf.into_bytes());
+        }
+        self.in_buf.pop_front().unwrap()
+    }
+}
 
 fn main() {
     let arg = args().nth(1).unwrap();
@@ -25,10 +53,11 @@ fn main() {
         }
     }
 
+    let io_port = DbgIoPort { in_buf: VecDeque::new(), out_buf: Vec::new() };
     let start_id = labels.get("_start").copied()
         .unwrap_or_else(|| {eprintln!("warning: no _start symbol found, using as 0 startpoint"); 0});
-    let mut cpu = Cpu::new(start_id);
-    let mut stdin = stdin().lock();
+    let mut cpu = Cpu::new(start_id, Box::new(io_port));
+    let stdin = stdin();
     let mut input = String::new();
     let mut target_nesting = 0;
     let mut current_nesting = 0;
@@ -90,12 +119,12 @@ fn main() {
                 "rsp" | "rs" => println!("sp = {sp} 0x{sp:04x}", sp = cpu.registers.sp),
                 "rpc" | "rp" => println!("pc = {pc} 0x{pc:04x}", pc = cpu.registers.pc),
                 "r0" => println!("zero is zero"),
-                "ral" => print_byte_register("al", 1, &cpu.registers),
-                "rah" => print_byte_register("ah", 2, &cpu.registers),
-                "rbl" => print_byte_register("bl", 3, &cpu.registers),
-                "rbh" => print_byte_register("bh", 4, &cpu.registers),
-                "rcl" => print_byte_register("cl", 5, &cpu.registers),
-                "rch" => print_byte_register("ch", 6, &cpu.registers),
+                "ral" => print_byte_register("al", 1, &mut cpu.registers),
+                "rah" => print_byte_register("ah", 2, &mut cpu.registers),
+                "rbl" => print_byte_register("bl", 3, &mut cpu.registers),
+                "rbh" => print_byte_register("bh", 4, &mut cpu.registers),
+                "rcl" => print_byte_register("cl", 5, &mut cpu.registers),
+                "rch" => print_byte_register("ch", 6, &mut cpu.registers),
                 "flags" => {
                     print!("flags = ");
                     if cpu.registers.carry {
@@ -136,7 +165,7 @@ fn main() {
     }
 }
 
-fn print_byte_register(name: &str, r: u8, reg: &Registers) {
+fn print_byte_register(name: &str, r: u8, reg: &mut Registers) {
     let val = reg.read_byte(ByteRegister::new(r));
     print!("{name} = {val} 0x{val:02x}");
     if let Ok(s) = std::str::from_utf8(&[val]) {

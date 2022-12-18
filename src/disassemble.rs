@@ -1,6 +1,6 @@
 use std::fmt::{self, Write, Display};
 
-use crate::{mem::Memory, cpu::{Registers, ByteRegister, WideRegister}};
+use crate::{mem::Memory, cpu::{Registers, ByteRegister, WideRegister, IoPort}};
 
 struct StrictMemory<'a> {
     slice: &'a [u8]
@@ -22,9 +22,20 @@ pub struct DisassembledInstruction {
     pub next_instruction_location: u16,
 }
 
+struct UnreachablePort;
+
+impl IoPort for UnreachablePort {
+    fn read(&mut self) -> u8 {
+        unreachable!()
+    }
+    fn write(&mut self, _val: u8) {
+        unreachable!()
+    }
+}
+
 pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: u16, binary_code: &[u8], label_lookup: F) -> DisassembledInstruction {
     use crate::isa::*;
-    let r = &mut Registers::new(location);
+    let r = &mut Registers::new(location, Box::new(UnreachablePort));
     let m = &mut StrictMemory { slice: binary_code } as &mut dyn Memory;
 
     let addr = r.pc;
