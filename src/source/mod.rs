@@ -381,6 +381,9 @@ fn parse_ins(s: String, ops: Vec<SourceOperand>, sym: &mut Symbols, sl: SourceLo
     Ok(match &*s {
         "null" => (NULL, O::parse_nothing(ops).ok_or("nothing")?),
         "halt" => (HALT, O::parse_nothing(ops).ok_or("nothing")?),
+        "seth" => (SETH, O::parse_immediate_u8(ops).ok_or("byte immediate")?),
+        "ctf" => (CTF, O::parse_nothing(ops).ok_or("nothing")?),
+        "reth" => (RETH, O::parse_nothing(ops).ok_or("nothing")?),
         "nop" => (NOP, O::parse_nothing(ops).ok_or("nothing")?),
         "push" => {
             if let Some(dat_op) = O::parse_b_big_r(ops.clone()) {

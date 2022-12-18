@@ -1,5 +1,8 @@
 pub const NULL: u8 = 0x00;
+pub const SETH: u8 = 0x09;
 pub const HALT: u8 = 0x0a;
+pub const CTF: u8 = 0x0b;
+pub const RETH: u8 = 0x0d;
 
 pub const NOP: u8 = 0x20;
 pub const PUSH_B: u8 = 0x21;

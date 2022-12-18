@@ -28,9 +28,13 @@ b       | 8 b  | a byte immediate
 
 INSTRUCTION            | OPCODE | DESCRIPTION
 null                   | 00     | invalid instruction, triggers invalid opcode fault (so do all opcodes not mentioned here)
-...                    | 01-09  | ...
-halt                   | 0a     | halts processor, triggers halt fault
-...                    | 0b-1f  | ...
+...                    | 01-08  | ...
+seth b                 | 09     | sets fault/trap handler (b = 0, means no handler), the addr will be the location for the address of the handler
+halt                   | 0a     | triggers halt fault
+ctf                    | 1b     | clear trap flag
+...                    | 1c     | ...
+reth                   | 0d     | returns from trap handler, clears trap flag
+...                    | 0e-1f  | ...
 nop                    | 20     |
 push bR                | 21     |
 push wR                | 22     |

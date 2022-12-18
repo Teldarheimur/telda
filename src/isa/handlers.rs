@@ -1,4 +1,4 @@
-use crate::{cpu::{Registers, TrapMode, ByteRegister as Br, WideRegister as Wr}, mem::Memory};
+use crate::{cpu::{Registers, TrapMode, ByteRegister as Br, WideRegister as Wr, Cpu}, mem::Memory};
 
 #[inline]
 pub fn arg_byte_big_r(r: &mut Registers, m: &dyn Memory) -> u8 {
@@ -66,7 +66,10 @@ pub static OP_HANDLERS: [OpHandler; 256] = {
     use super::*;
 
     handlers[NULL as usize] = n;
+    handlers[SETH as usize] = seth;
     handlers[HALT as usize] = halt;
+    handlers[CTF as usize] = ctf;
+    handlers[RETH as usize] = reth;
     handlers[NOP as usize] = nop;
     handlers[PUSH_B as usize] = push_b;
     handlers[PUSH_W as usize] = push_w;
@@ -116,6 +119,22 @@ fn n(r: &mut Registers, _: &mut dyn Memory) {
 }
 fn halt(r: &mut Registers, _: &mut dyn Memory) {
     r.trap(TrapMode::Halt);
+}
+
+
+fn seth(r: &mut Registers, m: &mut dyn Memory) {
+    r.trap_handler = arg_imm_byte(r, m);
+}
+fn ctf(r: &mut Registers, _: &mut dyn Memory) {
+    r.trap = false;
+}
+fn reth(r: &mut Registers, m: &mut dyn Memory) {
+    if !r.trap {
+        r.trap(TrapMode::InvalidHandlerReturn);
+        return
+    }
+    Cpu::pop_registers(r, m);
+    r.trap = false;
 }
 
 #[inline]

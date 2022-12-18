@@ -35,18 +35,84 @@ impl Cpu {
         OP_HANDLERS[opcode as usize](&mut self.registers, mem);
 
         if self.registers.trap {
-            Err(self.registers.trap_mode)
-        } else {
-            Ok(())
+            if self.registers.trap_handler == 0 {
+                return Err(self.registers.trap_mode);
+            } else {
+                Self::push_registers(&mut self.registers, mem);
+                let trap_handler_addr = mem.read_wide(self.registers.trap_handler as u16);
+                self.registers.pc = trap_handler_addr;
+                self.registers.a = self.registers.trap_mode as u8 as u16;
+            }
         }
+
+        Ok(())
     }
-    pub fn run_until_trap(&mut self, mem: &mut dyn Memory) -> TrapMode {
+    /// Until unhandled trap
+    pub fn run_until_abort(&mut self, mem: &mut dyn Memory) -> TrapMode {
         loop {
             match self.run_instruction(mem) {
                 Ok(()) => (),
                 Err(tm) => break tm,
             }
         }
+    }
+
+
+    pub fn pushw<M: ?Sized + Memory>(registers: &mut Registers, w: u16, mem: &mut M) {
+        registers.sp -= 2;
+        mem.write_wide(registers.sp, w);
+    }
+    pub fn pushb<M: ?Sized + Memory>(registers: &mut Registers, b: u8, mem: &mut M) {
+        registers.sp -= 1;
+        mem.write(registers.sp, b);
+    }
+    pub fn popw<M: ?Sized + Memory>(registers: &mut Registers, mem: &mut M) -> u16 {
+        let w = mem.read_wide(registers.sp);
+        registers.sp += 2;
+        w
+    }
+    pub fn popb<M: ?Sized + Memory>(registers: &mut Registers, mem: &mut M) -> u8 {
+        let b = mem.read(registers.sp);
+        registers.sp += 1;
+        b
+    }
+    pub fn push_registers<M: ?Sized + Memory>(registers: &mut Registers, mem: &mut M) {
+        let Registers {
+            a, b, c, x, y, z, io_port: _, pc,
+            sp: _, trap_handler: _, trap_mode: _, trap: _, zero, sign, overflow, carry
+        } = *registers;
+
+        Self::pushw(registers, a, mem);
+        Self::pushw(registers, b, mem);
+        Self::pushw(registers, c, mem);
+        Self::pushw(registers, x, mem);
+        Self::pushw(registers, y, mem);
+        Self::pushw(registers, z, mem);
+        let flags = ((zero as u16) << 7) | ((overflow as u16) << 6) | ((sign as u16) << 5) | ((carry as u16) << 4);
+        Self::pushw(registers, flags, mem);
+        Self::pushw(registers, pc, mem);
+    }
+    pub fn pop_registers<M: ?Sized + Memory>(registers: &mut Registers, mem: &mut M) {
+        let pc = Self::popw(registers, mem);
+        let flags = Self::popw(registers, mem);
+        let z = Self::popw(registers, mem);
+        let y = Self::popw(registers, mem);
+        let x = Self::popw(registers, mem);
+        let c = Self::popw(registers, mem);
+        let b = Self::popw(registers, mem);
+        let a = Self::popw(registers, mem);
+
+        registers.a = a;
+        registers.b = b;
+        registers.c = c;
+        registers.x = x;
+        registers.y = y;
+        registers.z = z;
+        registers.pc = pc;
+        registers.zero = flags & 0b1000_0000 != 0;
+        registers.overflow = flags & 0b0100_0000 != 0;
+        registers.sign = flags & 0b0010_0000 != 0;
+        registers.carry = flags & 0b0001_0000 != 0;
     }
 }
 
@@ -57,6 +123,7 @@ pub enum TrapMode {
     #[default]
     Invalid = 1,
     ZeroDiv = 2,
+    InvalidHandlerReturn = 3,
 }
 
 pub trait IoPort {
@@ -75,8 +142,12 @@ pub struct Registers {
 
     pub pc: u16,
     pub sp: u16,
-    pub trap: bool,
+    /// Address in memory where the location of the trap handler is located
+    /// 
+    /// 0 means no handler is set, 0x01-0xff are allowed.
+    pub trap_handler: u8,
     pub trap_mode: TrapMode,
+    pub trap: bool,
     pub zero: bool,
     pub sign: bool,
     pub overflow: bool,
@@ -98,6 +169,7 @@ impl Registers {
             pc,
             sp: 0x7f_ff,
             trap: false,
+            trap_handler: 0,
             trap_mode: TrapMode::default(),
             zero: false,
             sign: false,
