@@ -86,15 +86,15 @@ fn symbols(obj: &Object) {
 
 fn disassembly(obj: &Object, start_symbol: Option<String>) {
     let symbols;
-    if let Some(start_symbol) = start_symbol {
-        symbols = vec!(start_symbol);
+    if let Some(start_symbol) = start_symbol.as_ref() {
+        symbols = vec![&**start_symbol];
     } else {
         symbols = obj.global_symbols
             .as_ref()
             .map(|is| is.0.iter())
             .into_iter()
             .flatten()
-            .map(|(s, _)| s.to_string())
+            .map(|(s, _)| &**s)
             .collect();
     }
 
@@ -119,7 +119,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>) {
     }
 
     let mut printed_labels = HashSet::new();
-    let mut labels_to_print = VecDeque::from_iter(symbols.iter().map(|s| &**s));
+    let mut labels_to_print = VecDeque::from(symbols);
 
     while let Some(label_to_print) = labels_to_print.pop_front() {
         // Printed labels can end up in the queue
