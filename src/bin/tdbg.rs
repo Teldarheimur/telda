@@ -1,6 +1,6 @@
 use std::{env::args, io::{stdin, stdout, Write}, collections::{HashMap, VecDeque}, path::Path};
 
-use telda2::{mem::{Memory}, cpu::{Cpu, ByteRegister, Registers, IoPort}, disassemble::disassemble_instruction, aalv::obj::ShebangAgnosticObject};
+use telda2::{mem::{Memory}, cpu::{Cpu, ByteRegister, Registers, IoPort}, disassemble::disassemble_instruction, aalv::obj::Object};
 
 struct DbgIoPort {
     in_buf: VecDeque<u8>,
@@ -38,7 +38,7 @@ fn main() {
     let mut labels = HashMap::new();
     let mut pos_to_labels = HashMap::new();
     {
-        let obj = ShebangAgnosticObject::from_file(p).unwrap().into_object();
+        let obj = Object::from_file(p).unwrap();
         mem = obj.mem.unwrap();
 
         let iter = obj.internal_symbols

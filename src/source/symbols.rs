@@ -1,4 +1,4 @@
-use std::{fmt::Display, iter, mem};
+use std::{/*fmt::Display, */iter, mem};
 
 use super::{SourceLocation, Result as SourceResult, Error, ErrorType};
 
@@ -100,25 +100,25 @@ impl Symbols {
             .map(|(a, (b, c))| (a, b, c))
     }
 
-    /// Marker that indicates the state of `self` used for `mangle_interal` to mangle
-    /// non-global symbols that have been since this marker
-    pub fn marker(&self) -> Marker {
-        Marker { size: self.size() }
-    }
-
-    pub fn mangle_interal(&mut self, src: impl Display, old_label_marker: Marker) {
-        for (id, lbl) in self.labels.iter_mut().enumerate().skip(old_label_marker.size) {
-            // mangle interal symbols
-            if let SymbolType::Internal = self.symbol_types.get(id).unwrap_or(&SymbolType::default()) {
-                *lbl = format!("{src}  {lbl}").into_boxed_str();
-            };
-        }
-    }
-    // fn is_global(&self, id: usize) -> bool {
-    //     self.globals.get(id).copied().unwrap_or(false)
+    // /// Marker that indicates the state of `self` used for `mangle_interal` to mangle
+    // /// non-global symbols that have been since this marker
+    // pub fn marker(&self) -> Marker {
+    //     Marker { size: self.size() }
     // }
+
+    // pub fn mangle_interal(&mut self, src: impl Display, old_label_marker: Marker) {
+    //     for (id, lbl) in self.labels.iter_mut().enumerate().skip(old_label_marker.size) {
+    //         // mangle interal symbols
+    //         if let SymbolType::Internal = self.symbol_types.get(id).unwrap_or(&SymbolType::default()) {
+    //             *lbl = format!("{src}  {lbl}").into_boxed_str();
+    //         };
+    //     }
+    // }
+    // // fn is_global(&self, id: usize) -> bool {
+    // //     self.globals.get(id).copied().unwrap_or(false)
+    // // }
 }
 
-pub struct Marker {
-    size: usize,
-}
+// pub struct Marker {
+//     size: usize,
+// }

@@ -9,11 +9,11 @@ struct Cli {
     /// Binary file
     binary: PathBuf,
 
-    /// Whether there is a shebang header to skip
+    /// Does nothing now
     #[arg(short, long)]
     skip_shebang: bool,
 
-    /// Whether there is a shebang header to skip
+    /// Whether the termination point should be displayed
     #[arg(short, long)]
     termination_point: bool,
     
@@ -23,7 +23,7 @@ struct Cli {
 }
 
 pub fn main() -> ExitCode {
-    let Cli { binary, skip_shebang, entry, termination_point } = Cli::parse();
+    let Cli { binary, skip_shebang: _, entry, termination_point } = Cli::parse();
 
     let start_addr;
     loop {
@@ -40,13 +40,7 @@ pub fn main() -> ExitCode {
     }
 
     let (mut lazy, symbols) = {
-        let obj;
-        if skip_shebang {
-            let (_, o) = Object::from_file_ignoring_shebang(binary).unwrap();
-            obj = o;
-        } else {
-            obj = Object::from_file(binary).unwrap();
-        }
+        let obj = Object::from_file(binary).unwrap();
 
         let iter = obj.global_symbols
             .map(|is| is.0.into_iter())

@@ -1,6 +1,6 @@
 use std::{env::args, collections::{HashMap, VecDeque, HashSet}, path::Path};
 
-use telda2::{disassemble::{disassemble_instruction, DisassembledInstruction}, aalv::{obj::ShebangAgnosticObject}};
+use telda2::{disassemble::{disassemble_instruction, DisassembledInstruction}, aalv::obj::Object};
 
 fn main() {
     let mut args = args();
@@ -20,7 +20,7 @@ fn main() {
         let mut pos_to_labels = HashMap::new();
         {
             // TODO: also show relocation rules
-            let obj = ShebangAgnosticObject::from_file(p).unwrap().into_object();
+            let obj = Object::from_file(p).unwrap();
             binary_code = obj.mem.unwrap().mem;
 
             let iter = obj.internal_symbols

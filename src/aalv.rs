@@ -1,4 +1,4 @@
-use std::{io::{self, Write, BufRead, ErrorKind, BufReader}, path::Path, fs::File};
+use std::{io::{self, Write, BufRead, Seek, ErrorKind, BufReader, SeekFrom}, path::Path, fs::File};
 
 const AALV_HEADER: &str = "álvur1";
 
@@ -7,22 +7,25 @@ pub fn read_aalv_file<P: AsRef<Path>>(path: P) -> io::Result<Aalv> {
     Aalv::read(f)
 }
 
-pub fn write_aalv_file<P: AsRef<Path>>(path: P, aalvur: &Aalv) -> io::Result<()> {
-    let f = File::create(path)?;
-    aalvur.write(f)
+pub fn write_aalv_file<P: AsRef<Path>>(path: P, aalvur: &Aalv) -> io::Result<File> {
+    let mut f = File::options().create(true).write(true).open(path)?;
+    aalvur.write(&mut f)?;
+    Ok(f)
 }
 
 pub struct Aalv {
+    pub file_offset: u64,
     segments: Vec<(Box<str>, Box<[u8]>)>,
 }
 
 impl Aalv {
     pub fn new() -> Self {
-        Self { segments: Vec::new() }
+        Self { file_offset: 0, segments: Vec::new() }
     }
 
-    pub fn read<R: BufRead>(mut reader: R) -> io::Result<Self> {
+    pub fn read<R: BufRead + Seek>(mut reader: R) -> io::Result<Self> {
         let mut new = Self::new();
+        new.file_offset = reader.stream_position()?;
         new.read_header(&mut reader)?;
 
         for (_, data) in &mut new.segments {
@@ -32,7 +35,8 @@ impl Aalv {
         Ok(new)
     }
 
-    pub fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+    pub fn write<W: Write + Seek>(&self, mut writer: W) -> io::Result<()> {
+        writer.seek(SeekFrom::Start(self.file_offset))?;
         self.write_header(&mut writer)?;
         for (_name, data) in &self.segments {
             writer.write_all(&data)?;
@@ -65,12 +69,20 @@ impl Aalv {
             .map(|(_, buf)| S::read(buf))
     }
 
-    fn read_header<R: BufRead>(&mut self, reader: &mut R) -> io::Result<()> {
-        {
+    fn read_header<R: BufRead + Seek>(&mut self, reader: &mut R) -> io::Result<()> {
+        // Find magic
+        loop {
+            let first_magic_byte = AALV_HEADER.as_bytes()[0];
             let mut magic_buf = [0; AALV_HEADER.len()];
-            reader.read_exact(&mut magic_buf)?;
-            if &magic_buf != AALV_HEADER.as_bytes() {
-                return Err(io::Error::new(ErrorKind::InvalidData, "magic bytes did not match"));
+
+            while first_magic_byte != magic_buf[0] {
+                reader.read_exact(&mut magic_buf[..1])?;
+            }
+            self.file_offset = reader.stream_position()? - 1;
+
+            reader.read_exact(&mut magic_buf[1..])?;
+            if &magic_buf == AALV_HEADER.as_bytes() {
+                break;
             }
         }
 

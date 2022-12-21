@@ -1,4 +1,4 @@
-use std::{path::PathBuf, collections::HashMap, process::ExitCode, fs::{self}, os::unix::prelude::PermissionsExt};
+use std::{path::PathBuf, collections::HashMap, process::ExitCode, fs::File, os::unix::prelude::PermissionsExt, io::{Write, Seek}};
 
 use clap::Parser;
 use telda2::{source::Format, aalv::obj::{Object, GlobalSymbols, InternalSymbols, SymbolReferenceTable}, mem::Lazy};
@@ -153,11 +153,19 @@ fn main() -> ExitCode {
     if let Some(addr) = start_addr {
         println!("Writing executable binary telda file");
 
-        obj.write_to_file_with_shebang(&out, format!("#!/bin/env -S t -s -e 0x{addr:02x}")).unwrap();
+        let mut obj = obj;
+        {
+            let mut file = File::create(&out).unwrap();
+            writeln!(file, "#!/bin/env -S t -e 0x{addr:02x}").unwrap();
 
-        let mut perms = fs::metadata(&out).unwrap().permissions();
+            obj.file_offset = file.stream_position().unwrap();
+        }
+
+        let f = obj.write_to_file(&out).unwrap();
+
+        let mut perms = f.metadata().unwrap().permissions();
         perms.set_mode(perms.mode() | 0o111);
-        fs::set_permissions(out, perms).unwrap();
+        f.set_permissions(perms).unwrap();
     } else {
         println!("Writing non-executable binary telda file");
         obj.write_to_file(out).unwrap();

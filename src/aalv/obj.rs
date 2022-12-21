@@ -1,4 +1,4 @@
-use std::{path::{Path}, io::{self, BufRead, Write, Read, BufReader}, fs::File, fmt::Display};
+use std::{path::Path, io::{self, BufRead, Read}, fs::File};
 
 use crate::{mem::Lazy, source::Format};
 
@@ -6,49 +6,9 @@ use super::{Segment, read_aalv_file, Aalv, write_aalv_file};
 
 pub const AALV_OBJECT_EXT: &str = "to";
 
-#[derive(Debug)]
-pub enum ShebangAgnosticObject {
-    WithShebang(String, Object),
-    Without(Object),
-}
-
-impl ShebangAgnosticObject {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        let path = path.as_ref();
-
-        match Object::from_file(path) {
-            Ok(obj) => Ok(Self::Without(obj)),
-            // TODO: check that it's the right error
-            Err(_) => {
-                let (mut shebang, obj) = Object::from_file_ignoring_shebang(path)?;
-                shebang.pop();
-
-                Ok(Self::WithShebang(shebang, obj))
-            }
-        }
-    }
-    pub fn obj_mut(&mut self) -> &mut Object {
-        match self {
-            ShebangAgnosticObject::WithShebang(_, o) => o,
-            ShebangAgnosticObject::Without(o) => o,
-        }
-    }
-    pub fn into_object(self) -> Object {
-        match self {
-            ShebangAgnosticObject::WithShebang(_, o) => o,
-            ShebangAgnosticObject::Without(o) => o,
-        }
-    }
-    pub fn save<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
-        match self {
-            ShebangAgnosticObject::WithShebang(shebang, o) => o.write_to_file_with_shebang(path, shebang),
-            ShebangAgnosticObject::Without(o) => o.write_to_file(path),
-        }
-    }
-}
-
 #[derive(Debug, Default)]
 pub struct Object {
+    pub file_offset: u64,
     pub mem: Option<Lazy>,
     pub global_symbols: Option<GlobalSymbols>,
     pub internal_symbols: Option<InternalSymbols>,
@@ -60,14 +20,22 @@ impl Object {
         let aalvur = read_aalv_file(path)?;
 
         Ok(Object {
+            file_offset: aalvur.file_offset,
             mem: aalvur.get_segment().transpose().cannot_fail(),
             global_symbols: aalvur.get_segment().transpose()?,
             internal_symbols: aalvur.get_segment().transpose()?,
             symbol_reference_table: aalvur.get_segment().transpose()?,
         })
     }
-    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+    pub fn zero_offset(self) -> Self {
+        Self {
+            file_offset: 0,
+            .. self
+        }
+    }
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> io::Result<File> {
         let Object {
+            file_offset,
             mem,
             global_symbols,
             internal_symbols,
@@ -75,6 +43,8 @@ impl Object {
         } = self;
 
         let mut aalvur = Aalv::new();
+
+        aalvur.file_offset = *file_offset;
 
         if let Some(mem) = mem {
             aalvur.add_segment(mem).cannot_fail();
@@ -90,51 +60,6 @@ impl Object {
         }
 
         write_aalv_file(path, &aalvur)
-    }
-}
-
-impl Object {
-    pub fn from_file_ignoring_shebang<P: AsRef<Path>>(path: P) -> io::Result<(String, Self)> {
-        let mut f = BufReader::new(File::open(path)?);
-        let mut shebang = String::new();
-        f.read_line(&mut shebang)?;
-
-        let aalvur = Aalv::read(f)?;
-
-        Ok((shebang, Object {
-            mem: aalvur.get_segment().transpose().cannot_fail(),
-            global_symbols: aalvur.get_segment().transpose()?,
-            internal_symbols: aalvur.get_segment().transpose()?,
-            symbol_reference_table: aalvur.get_segment().transpose()?,
-        }))
-    }
-    pub fn write_to_file_with_shebang<P: AsRef<Path>>(&self, path: P, shebang: impl Display) -> io::Result<()> {
-        let Object {
-            mem,
-            global_symbols,
-            internal_symbols,
-            symbol_reference_table
-        } = self;
-
-        let mut aalvur = Aalv::new();
-
-        if let Some(mem) = mem {
-            aalvur.add_segment(mem).cannot_fail();
-        }
-        if let Some(global_symbols) = global_symbols {
-            aalvur.add_segment(global_symbols)?;
-        }
-        if let Some(internal_symbols) = internal_symbols {
-            aalvur.add_segment(internal_symbols)?;
-        }
-        if let Some(symbol_reference_table) = symbol_reference_table {
-            aalvur.add_segment(symbol_reference_table)?;
-        }
-
-        let mut f = File::create(path)?;
-        writeln!(f, "{shebang}")?;
-
-        aalvur.write(f)
     }
 }
 

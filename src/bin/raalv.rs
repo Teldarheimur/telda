@@ -1,11 +1,11 @@
 use std::{env::args, collections::{HashSet, HashMap}};
 
-use telda2::{self, aalv::{obj::{ShebangAgnosticObject, GlobalSymbols, InternalSymbols, SymbolReferenceTable}, Segment}, source::Format};
+use telda2::{self, aalv::{obj::{Object, GlobalSymbols, InternalSymbols, SymbolReferenceTable}, Segment}, source::Format};
 
 fn main() {
     let arg = args().nth(1).unwrap();
 
-    let obj = ShebangAgnosticObject::from_file(&arg).unwrap().into_object();
+    let obj = Object::from_file(&arg).unwrap();
     let mut defined_symbols = HashSet::new();
     let mut undefined_symbols = HashMap::new();
     
