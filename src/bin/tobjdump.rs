@@ -1,20 +1,29 @@
 use std::{path::PathBuf, collections::{HashMap, HashSet, VecDeque}, process::ExitCode};
 
-use clap::Parser;
+use clap::{Parser, ArgGroup};
 use telda2::{source::Format, aalv::{obj::{Object, GlobalSymbols, InternalSymbols, SymbolReferenceTable}, Segment}, disassemble::{DisassembledInstruction, disassemble_instruction}};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
+#[command(group(
+            ArgGroup::new("show")
+                .required(true)
+                .multiple(true)
+                .args(["disassemble", "show_symbols"]),
+        ))]
 struct Cli {
-    /// Input telda object files
+    /// Input telda object file
     input_file: PathBuf,
 
-    #[arg(short, long)]
+    /// Disassemble symbols in .mem. If -D is not set, disassembles from all global symbols
+    #[arg(short, long, group = "show")]
     disassemble: bool,
-    #[arg(short = 'D', long, requires = "disassemble")]
-    dissasemble_from: Option<String>,
+    /// If disassembling, sets the symbols to start disassembling from seperated by commas
+    #[arg(short = 'D', long, requires = "disassemble", value_name = "SYMBOLS")]
+    disassemble_from: Option<String>,
     
-    #[arg(short = 't', long = "syms")]
+    /// Whether to show the symbol table segments
+    #[arg(short = 't', long = "syms", group = "show")]
     show_symbols: bool,
 }
 
@@ -22,7 +31,7 @@ fn main() -> ExitCode {
     let Cli {
         input_file,
         disassemble,
-        dissasemble_from,
+        disassemble_from: dissasemble_from,
         show_symbols,
     } = Cli::parse();
 
@@ -85,9 +94,9 @@ fn symbols(obj: &Object) {
 }
 
 fn disassembly(obj: &Object, start_symbol: Option<String>) {
-    let symbols;
+    let symbols: VecDeque<_>;
     if let Some(start_symbol) = start_symbol.as_ref() {
-        symbols = vec![&**start_symbol];
+        symbols = start_symbol.split(',').map(|s| s.trim()).collect();
     } else {
         symbols = obj.global_symbols
             .as_ref()
@@ -119,7 +128,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>) {
     }
 
     let mut printed_labels = HashSet::new();
-    let mut labels_to_print = VecDeque::from(symbols);
+    let mut labels_to_print = symbols;
 
     while let Some(label_to_print) = labels_to_print.pop_front() {
         // Printed labels can end up in the queue
