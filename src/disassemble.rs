@@ -56,6 +56,17 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
             write!(f, "halt").unwrap();
             ends_block = true;
         }
+        SETH => {
+            let b = arg_imm_byte(r, m);
+            write!(f, "seth {b}").unwrap();
+        }
+        CTF => {
+            write!(f, "ctf").unwrap();
+        }
+        RETH => {
+            write!(f, "reth").unwrap();
+            ends_block = true;
+        }
         NOP => write!(f, "nop").unwrap(),
         PUSH_B => {
             let big_r = byte_big_r(r, m).looked_up(label_lookup);
