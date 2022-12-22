@@ -1,4 +1,4 @@
-use std::{path::PathBuf, collections::{HashMap, HashSet, VecDeque}, process::ExitCode};
+use std::{path::PathBuf, collections::{HashMap, HashSet, VecDeque, BTreeMap}, process::ExitCode};
 
 use clap::{Parser, ArgGroup};
 use telda2::{source::Format, aalv::{obj::{Object, GlobalSymbols, InternalSymbols, SymbolReferenceTable}, Segment}, disassemble::{DisassembledInstruction, disassemble_instruction}};
@@ -25,6 +25,10 @@ struct Cli {
     /// Whether to show the symbol table segments
     #[arg(short = 't', long = "syms", group = "show")]
     show_symbols: bool,
+
+    /// Shows relocations in disassembly
+    #[arg(short = 'R', long, requires = "disassemble")]
+    show_relocations: bool,
 }
 
 fn main() -> ExitCode {
@@ -33,6 +37,7 @@ fn main() -> ExitCode {
         disassemble,
         disassemble_from: dissasemble_from,
         show_symbols,
+        show_relocations,
     } = Cli::parse();
 
     let obj = Object::from_file(&input_file).unwrap();
@@ -41,7 +46,7 @@ fn main() -> ExitCode {
         symbols(&obj);
     }
     if disassemble {
-        disassembly(&obj, dissasemble_from);
+        disassembly(&obj, dissasemble_from, show_relocations);
     }
 
     ExitCode::SUCCESS
@@ -93,7 +98,7 @@ fn symbols(obj: &Object) {
     }
 }
 
-fn disassembly(obj: &Object, start_symbol: Option<String>) {
+fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: bool) {
     let symbols: VecDeque<_>;
     if let Some(start_symbol) = start_symbol.as_ref() {
         symbols = start_symbol.split(',').map(|s| s.trim()).collect();
@@ -112,7 +117,6 @@ fn disassembly(obj: &Object, start_symbol: Option<String>) {
     let mut labels = HashMap::new();
     let mut pos_to_labels = HashMap::new();
     {
-        // TODO: also show relocation rules
         binary_code = &*obj.mem.as_ref().unwrap().mem;
 
         let iter = obj.internal_symbols.as_ref()
@@ -124,6 +128,13 @@ fn disassembly(obj: &Object, start_symbol: Option<String>) {
         for &(ref label, position) in iter {
             labels.insert(label.clone(), position);
             pos_to_labels.insert(position, label.clone());
+        }
+    }
+
+    let mut relocs = BTreeMap::new();
+    if show_relocations {
+        for &(_, ref sym, loc) in obj.symbol_reference_table.as_ref().map(|s| s.0.iter()).into_iter().flatten() {
+            relocs.insert(loc, &**sym);
         }
     }
 
@@ -152,6 +163,12 @@ fn disassembly(obj: &Object, start_symbol: Option<String>) {
                     }
                     l
                 });
+
+            if show_relocations {
+                for (&loc, &sym) in relocs.range(location..next_instruction_location) {
+                    println!("    RELOC: {sym} @ 0x{loc:02x}");
+                }
+            }
             println!("{}", annotated_source);
             if ends_block {
                 break 'labelled_block;
