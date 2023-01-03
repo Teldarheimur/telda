@@ -141,7 +141,7 @@ fn main() {
                 "r10" => println!("r10 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R10)),
                 "rs" => println!("rs = {r} 0x{r:04x}", r = cpu.registers.read_wide(RS)),
                 "rl" => println!("rl = {r} 0x{r:04x}", r = cpu.registers.read_wide(RL)),
-                "rb" => println!("rb = {r} 0x{r:04x}", r = cpu.registers.read_wide(RB)),
+                "rf" => println!("rf = {r} 0x{r:04x}", r = cpu.registers.read_wide(RF)),
                 "rp" => println!("rp = {r} 0x{r:04x}", r = cpu.registers.read_wide(RP)),
                 "rh" => println!("rh = {r} 0x{r:04x}", r = cpu.registers.read_wide(RH)),
                 "rpc" => println!("pc = {pc} 0x{pc:04x}", pc = cpu.registers.program_counter),

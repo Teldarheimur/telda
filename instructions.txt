@@ -30,9 +30,10 @@ WIDE_REGS:
 a r10   high byte zeroes
 b rs    stack pointer
 c rl    link pointer (location of instruction after last `call`)
-d rb    base pointer (unused for now)
+d rf    frame pointer (unused for now)
 e rp    page table pointer (unused for now)
 f rh    trap handler pointer
+_ rpc   program counter, not accessible directly and therefore has no number
 
 OPERAND | SIZE | PURPOSE
 br      | 4 b  | a byte register, (can be followed by another r)

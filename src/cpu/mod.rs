@@ -25,8 +25,7 @@ impl Cpu {
                 return Err(self.registers.trap_mode);
             } else {
                 Self::push_registers(&mut self.registers, mem);
-                let trap_handler_addr = mem.read_wide(self.registers.trap_handler as u16);
-                self.registers.program_counter = trap_handler_addr;
+                self.registers.program_counter = self.registers.trap_handler;
                 self.registers.write_wide(R1, self.registers.trap_mode as u8 as u16);
             }
         }
@@ -89,11 +88,16 @@ impl Cpu {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum TrapMode {
-    Halt = 0,
     #[default]
-    Invalid = 1,
-    ZeroDiv = 2,
-    InvalidHandlerReturn = 3,
+    Invalid = 0,
+    SysCall = 0x5,
+    ZeroDiv = 0x8,
+    Halt = 0xa,
+    IllegalOperation = 0x10,
+    IllegalRead = 0x11,
+    IllegalWrite = 0x12,
+    IllegalExecute = 0x13,
+    IllegalHandlerReturn = 0x1f,
 }
 
 pub struct Registers {
@@ -101,7 +105,7 @@ pub struct Registers {
 
     pub stack: u16,
     pub link: u16,
-    pub base: u16,
+    pub frame: u16,
     pub page: u16,
     pub program_counter: u16,
     /// Zero means no trap handler
@@ -123,7 +127,7 @@ impl Registers {
             program_counter: start,
             link: 0,
             page: 0,
-            base: IO_MAPPING_CUTOFF,
+            frame: IO_MAPPING_CUTOFF,
             stack: IO_MAPPING_CUTOFF,
             trap: false,
             trap_handler: 0,
@@ -177,7 +181,7 @@ impl Registers {
             }
             11 => self.stack,
             12 => self.link,
-            13 => self.base,
+            13 => self.frame,
             14 => self.page,
             15 => self.trap_handler,
             _ => unimplemented!("no such register"),
@@ -195,7 +199,7 @@ impl Registers {
             }
             11 => self.stack = val,
             12 => self.link = val,
-            13 => self.base = val,
+            13 => self.frame = val,
             14 => self.page = val,
             15 => self.trap_handler = val,
             _ => unimplemented!("no such register"),

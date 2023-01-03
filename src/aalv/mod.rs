@@ -30,7 +30,14 @@ impl<F: BufRead + Seek> AalvReader<F> {
             file,
             sections: Vec::new(),
         };
-        new.read_magic()?;
+        new.read_magic()
+            .map_err(|e| {
+                if e.kind() == io::ErrorKind::UnexpectedEof {
+                    io::Error::new(ErrorKind::InvalidData, "could not find magic")
+                } else {
+                    e
+                }
+            })?;
         new.read_section_headers()?;
 
         Ok(new)

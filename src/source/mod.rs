@@ -64,24 +64,37 @@ impl SourceLines<BufReader<File>> {
 
 fn parse_number(arg: &str) -> SourceOperand {
     let so;
+    let mut radix = 10;
+    let mut num = arg;
+    if arg.starts_with("0x") {
+        radix = 16;
+        num = &arg[2..];
+    } else if arg.starts_with("0b") {
+        radix = 2;
+        num = &arg[2..];
+    } else if arg.starts_with("0o") {
+        radix = 8;
+        num = &arg[2..];
+    }
+
     if arg.ends_with("b") {
-        so = arg[..arg.len() - 1]
-            .parse()
+        num = &num[..num.len() - 1];
+        so = u8::from_str_radix(num, radix)
             .ok()
-            .or_else(|| arg[..arg.len() - 1].parse::<i8>().ok().map(|b| b as u8))
+            .or_else(|| i8::from_str_radix(num, radix).ok().map(|b| b as u8))
             .map(SourceOperand::Byte);
     } else if arg.ends_with("w") {
-        so = arg[..arg.len() - 1]
-            .parse()
+        num = &num[..num.len() - 1];
+        so = u16::from_str_radix(num, radix)
             .ok()
-            .or_else(|| arg[..arg.len() - 1].parse::<i16>().ok().map(|w| w as u16))
+            .or_else(|| i16::from_str_radix(num, radix).ok().map(|w| w as u16))
             .map(SourceOperand::Wide);
     } else if arg.starts_with('\'') && arg.ends_with('\'') {
         so = Some(SourceOperand::Byte(
             parse_bytechar(arg[1..arg.len() - 1].as_bytes()).0,
         ));
     } else {
-        so = arg.parse().ok().map(SourceOperand::Number);
+        so = i32::from_str_radix(num, radix).ok().map(SourceOperand::Number);
     }
 
     if let Some(so) = so {
@@ -202,34 +215,35 @@ impl<B: BufRead> SourceLines<B> {
 
                     sos.push(match arg {
                         "r0b" => SourceOperand::ByteReg(R0B),
-                        "r1l" => SourceOperand::ByteReg(R1L),
-                        "r1h" => SourceOperand::ByteReg(R1H),
-                        "r2l" => SourceOperand::ByteReg(R2L),
-                        "r2h" => SourceOperand::ByteReg(R2H),
-                        "r3l" => SourceOperand::ByteReg(R3L),
-                        "r3h" => SourceOperand::ByteReg(R3H),
+                        "r1l" | "ral" => SourceOperand::ByteReg(R1L),
+                        "r1h" | "rah" => SourceOperand::ByteReg(R1H),
+                        "r2l" | "rbl" => SourceOperand::ByteReg(R2L),
+                        "r2h" | "rbh" => SourceOperand::ByteReg(R2H),
+                        "r3l" | "rcl" => SourceOperand::ByteReg(R3L),
+                        "r3h" | "rch" => SourceOperand::ByteReg(R3H),
                         "r4l" => SourceOperand::ByteReg(R4L),
                         "r4h" => SourceOperand::ByteReg(R4H),
                         "r5l" => SourceOperand::ByteReg(R5L),
-                        "r6b" => SourceOperand::ByteReg(R6B),
-                        "r7b" => SourceOperand::ByteReg(R7B),
-                        "r8b" => SourceOperand::ByteReg(R8B),
+                        "r5h" => SourceOperand::ByteReg(R5H),
+                        "r6b" | "rxb" => SourceOperand::ByteReg(R6B),
+                        "r7b" | "ryb" => SourceOperand::ByteReg(R7B),
+                        "r8b" | "rzb" => SourceOperand::ByteReg(R8B),
                         "r9b" => SourceOperand::ByteReg(R9B),
                         "r10b" => SourceOperand::ByteReg(R10B),
                         "r0" => SourceOperand::WideReg(R0),
-                        "r1" => SourceOperand::WideReg(R1),
-                        "r2" => SourceOperand::WideReg(R2),
-                        "r3" => SourceOperand::WideReg(R3),
+                        "r1" | "ra" => SourceOperand::WideReg(R1),
+                        "r2" | "rb" => SourceOperand::WideReg(R2),
+                        "r3" | "rc" => SourceOperand::WideReg(R3),
                         "r4" => SourceOperand::WideReg(R4),
                         "r5" => SourceOperand::WideReg(R5),
-                        "r6" => SourceOperand::WideReg(R6),
-                        "r7" => SourceOperand::WideReg(R7),
-                        "r8" => SourceOperand::WideReg(R8),
+                        "r6" | "rx" => SourceOperand::WideReg(R6),
+                        "r7" | "ry" => SourceOperand::WideReg(R7),
+                        "r8" | "rz" => SourceOperand::WideReg(R8),
                         "r9" => SourceOperand::WideReg(R9),
                         "r10" => SourceOperand::WideReg(R10),
                         "rs" => SourceOperand::WideReg(RS),
                         "rl" => SourceOperand::WideReg(RL),
-                        "rb" => SourceOperand::WideReg(RB),
+                        "rf" => SourceOperand::WideReg(RF),
                         "rp" => SourceOperand::WideReg(RP),
                         "rh" => SourceOperand::WideReg(RH),
                         arg => parse_number(arg),

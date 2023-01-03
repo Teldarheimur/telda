@@ -100,7 +100,7 @@ fn ctf(r: &mut Registers, _: &mut dyn Memory) {
 }
 fn reth(r: &mut Registers, m: &mut dyn Memory) {
     if !r.trap {
-        r.trap(TrapMode::InvalidHandlerReturn);
+        r.trap(TrapMode::IllegalHandlerReturn);
         return
     }
     Cpu::pop_registers(r, m);
