@@ -1,7 +1,7 @@
-use std::{path::PathBuf, collections::{HashMap, HashSet, VecDeque, BTreeMap}, process::ExitCode};
+use std::{path::PathBuf, collections::{HashMap, HashSet, VecDeque, BTreeMap}, process::ExitCode, borrow::Cow};
 
 use clap::{Parser, ArgGroup};
-use telda2::{source::Format, aalv::{obj::{Object, GlobalSymbols, InternalSymbols, SymbolReferenceTable}, Segment}, disassemble::{DisassembledInstruction, disassemble_instruction}};
+use telda2::{aalv::{obj::{Object, SymbolTable, SegmentType}, Section}, disassemble::{DisassembledInstruction, disassemble_instruction}};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -15,14 +15,14 @@ struct Cli {
     /// Input telda object file
     input_file: PathBuf,
 
-    /// Disassemble symbols in .mem. If -D is not set, disassembles from all global symbols
+    /// Disassemble symbols in .text. If -D is not set, disassembles from all global symbols
     #[arg(short, long, group = "show")]
     disassemble: bool,
     /// If disassembling, sets the symbols to start disassembling from seperated by commas
     #[arg(short = 'D', long, requires = "disassemble", value_name = "SYMBOLS")]
     disassemble_from: Option<String>,
     
-    /// Whether to show the symbol table segments
+    /// Whether to show the symbol table
     #[arg(short = 't', long = "syms", group = "show")]
     show_symbols: bool,
 
@@ -53,93 +53,79 @@ fn main() -> ExitCode {
 }
 
 fn symbols(obj: &Object) {
-    let mut defined_symbols = HashSet::new();
-    let mut undefined_symbols = HashMap::new();
-    
-    if let Some(v) = &obj.global_symbols {
-        println!("{}:", GlobalSymbols::NAME);
-        for (l, a) in &v.0 {
-            println!("    {l} = 0x{a:02x}");
-            defined_symbols.insert(l);
-        }
-        println!();
-    }
-    if let Some(v) = &obj.internal_symbols {
-        println!("{}:", InternalSymbols::NAME);
-        for (l, a) in &v.0 {
-            println!("    {l} = 0x{a:02x}");
-            defined_symbols.insert(l);
-        }
-        println!();
-    }
-    if let Some(v) = &obj.symbol_reference_table {
-        println!("{}:", SymbolReferenceTable::NAME);
-        for (f, l, a) in &v.0 {
+    if !obj.symbols.0.is_empty() {
+        println!("{}:", SymbolTable::NAME);
+        for sym_def in &obj.symbols.0 {
             print!("    ");
-            match f {
-                Format::Absolute => print!("A"),
-                Format::Big => print!("B"),
+            if sym_def.is_global {
+                print!("GLOBAL ");
             }
-            println!(" {l} @ 0x{a:02x}");
-            if !defined_symbols.contains(&l) {
-                *undefined_symbols.entry(l).or_insert(0u64) += 1;
+            match sym_def.segment_type {
+                SegmentType::Unknown => println!("{} = UNDEFINED ({:02x})", sym_def.name, sym_def.location),
+                stype => println!("{} = {:02x} in {:?}", sym_def.name, sym_def.location, stype),
             }
-        }
-        println!();
-    }
-
-    if !undefined_symbols.is_empty() {
-        println!("undefined symbols:");
-        for (s, num) in undefined_symbols {
-            let pl = if num == 1 { "" } else { "s" };
-            println!("    {s} with {num} reference{pl}");
         }
         println!();
     }
 }
 
 fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: bool) {
-    let symbols: VecDeque<_>;
+    let syms = &obj.symbols.0;
+
+    let symbols: VecDeque<usize>;
     if let Some(start_symbol) = start_symbol.as_ref() {
-        symbols = start_symbol.split(',').map(|s| s.trim()).collect();
+        symbols = start_symbol
+            .split(',')
+            .map(|s| s.trim())
+            .map(|name| syms.iter().position(|s| &*s.name == name).expect("start symbol did not exist in symbol table"))
+            .collect();
     } else {
-        symbols = obj.global_symbols
-            .as_ref()
-            .map(|is| is.0.iter())
+        let entry_id = obj.symbols.0.len();
+        symbols = obj.entry
+            .map(|_| entry_id)
             .into_iter()
-            .flatten()
-            .map(|(s, _)| &**s)
+            .chain(
+                obj.symbols.0.iter()
+                    .enumerate()
+                    .filter_map(|(i, s)| if s.is_global { Some(i) } else { None })
+            )
             .collect();
     }
 
-    println!(".mem:");
-    let binary_code;
-    let mut labels = HashMap::new();
+    println!("disassembly:");
+    let mem;
     let mut pos_to_labels = HashMap::new();
     {
-        binary_code = &*obj.mem.as_ref().unwrap().mem;
+        mem = obj.get_flattened_memory();
 
-        let iter = obj.internal_symbols.as_ref()
-            .map(|is| is.0.iter())
-            .into_iter()
-            .flatten()
-            .chain(obj.global_symbols.as_ref().map(|is| is.0.iter()).into_iter().flatten());
-
-        for &(ref label, position) in iter {
-            labels.insert(label.clone(), position);
-            pos_to_labels.insert(position, label.clone());
+        for (id, s) in obj.symbols.0.iter().enumerate() {
+            pos_to_labels.insert(s.location, id);
+        }
+        if let Some(ep) = obj.entry {
+            pos_to_labels.insert(ep.0, obj.symbols.0.len());
         }
     }
 
     let mut relocs = BTreeMap::new();
     if show_relocations {
-        for &(_, ref sym, loc) in obj.symbol_reference_table.as_ref().map(|s| s.0.iter()).into_iter().flatten() {
-            relocs.insert(loc, &**sym);
+        for &re in obj.relocation_table.as_ref().map(|s| s.0.iter()).into_iter().flatten() {
+            relocs.insert(re.reference_location, re.symbol_index as usize);
         }
     }
 
     let mut printed_labels = HashSet::new();
     let mut labels_to_print = symbols;
+
+    let get_name = |id: usize| {
+        if id == syms.len() { return Cow::Borrowed(".entry") }
+
+        let name = &*syms[id].name;
+        if name.is_empty() {
+            Cow::Owned(format!("@L{id}"))
+        } else {
+            Cow::Borrowed(name)
+        }
+    };
 
     while let Some(label_to_print) = labels_to_print.pop_front() {
         // Printed labels can end up in the queue
@@ -147,39 +133,49 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
             continue;
         }
 
-        println!("<{label_to_print}>:");
+        println!("<{}>:", get_name(label_to_print));
         printed_labels.insert(label_to_print);
 
-        let mut location = labels[label_to_print];
+        let mut location = if label_to_print == syms.len() {
+            obj.entry.unwrap().0
+        } else {
+            syms[label_to_print].location
+        };
 
         'labelled_block: loop {
+            let mut label_name = Cow::Borrowed("");
             let DisassembledInstruction { annotated_source, ends_block, nesting_difference: _, next_instruction_location }
-                = disassemble_instruction(location, &binary_code, |p| {
-                    let l = pos_to_labels.get(&p).map(|s| &**s);
+                = disassemble_instruction(location, &mem, |p| {
+                    let l = pos_to_labels.get(&p).copied();
                     if let Some(l) = l {
                         if !printed_labels.contains(&l) {
                             labels_to_print.push_back(l);
                         }
+
+                        label_name = get_name(l);
+                        Some(&label_name)
+                    } else {
+                        None
                     }
-                    l
                 });
 
             if show_relocations {
                 for (&loc, &sym) in relocs.range(location..next_instruction_location) {
-                    println!("    RELOC: {sym} @ 0x{loc:02x}");
+                    println!("    RELOC: {} @ 0x{loc:02x}", get_name(sym));
                 }
             }
             println!("{}", annotated_source);
             if ends_block {
                 break 'labelled_block;
             }
-            if let Some(lbl) = pos_to_labels.get(&next_instruction_location) {
+            if let Some(&lbl) = pos_to_labels.get(&next_instruction_location) {
+                let name = get_name(lbl);
                 if printed_labels.insert(lbl) {
                     // Was not printed before
-                    println!("<{lbl}>:");
+                    println!("<{name}>:");
                 } else {
                     // Was printed before => end block
-                    println!("<{lbl}> ...");
+                    println!("<{name}> ...");
                     break 'labelled_block;
                 }
             }

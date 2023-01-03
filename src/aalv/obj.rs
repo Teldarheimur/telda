@@ -1,31 +1,45 @@
-use std::{path::Path, io::{self, BufRead, Read}, fs::File};
+use std::{path::Path, io::{self, BufRead, Read, Write, BufReader}, collections::BTreeMap, fmt::{Display, self}};
 
-use crate::{mem::Lazy, source::Format};
-
-use super::{Segment, read_aalv_file, Aalv, write_aalv_file};
+use super::{Section, read_aalv_file, write_aalv_file_with_offset};
 
 pub const AALV_OBJECT_EXT: &str = "to";
 
 #[derive(Debug, Default)]
 pub struct Object {
     pub file_offset: u64,
-    pub mem: Option<Lazy>,
-    pub global_symbols: Option<GlobalSymbols>,
-    pub internal_symbols: Option<InternalSymbols>,
-    pub symbol_reference_table: Option<SymbolReferenceTable>,
+    pub entry: Option<Entry>,
+    pub segs: BTreeMap<SegmentType, (u16, Vec<u8>)>,
+    pub symbols: SymbolTable,
+    pub relocation_table: Option<RelocationTable>,
 }
 
 impl Object {
     pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        let aalvur = read_aalv_file(path)?;
+        let mut aalvur = read_aalv_file(path)?;
 
-        Ok(Object {
+        let mut segs = BTreeMap::new();
+
+        while let Some(seg) = aalvur.read_section() {
+            let BinarySegment { offset, stype, bytes } = seg?;
+
+            if segs.insert(stype, (offset, bytes)).is_some() {
+                return Err(io::Error::new(io::ErrorKind::InvalidData, "duplicate segment type"));
+            }
+        }
+
+        let obj = Object {
             file_offset: aalvur.file_offset,
-            mem: aalvur.get_segment().transpose().cannot_fail(),
-            global_symbols: aalvur.get_segment().transpose()?,
-            internal_symbols: aalvur.get_segment().transpose()?,
-            symbol_reference_table: aalvur.get_segment().transpose()?,
-        })
+            entry: aalvur.read_section().transpose()?,
+            segs,
+            symbols: aalvur.read_section().transpose()?.unwrap_or_else(|| SymbolTable(Vec::new())),
+            relocation_table: aalvur.read_section().transpose()?,
+        };
+
+        if aalvur.remaing_sections().any(|s| s.starts_with('_')) {
+            unimplemented!("error unexpected sections")
+        } else {
+            Ok(obj)
+        }
     }
     pub fn zero_offset(self) -> Self {
         Self {
@@ -33,190 +47,261 @@ impl Object {
             .. self
         }
     }
-    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> io::Result<File> {
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
         let Object {
             file_offset,
-            mem,
-            global_symbols,
-            internal_symbols,
-            symbol_reference_table
+            entry,
+            segs,
+            symbols,
+            relocation_table
         } = self;
 
-        let mut aalvur = Aalv::new();
+        let mut aalvur = write_aalv_file_with_offset(path, *file_offset)?;
 
-        aalvur.file_offset = *file_offset;
-
-        if let Some(mem) = mem {
-            aalvur.add_segment(mem).cannot_fail();
+        if let Some(entry) = entry {
+            aalvur.write_section(entry)?;
         }
-        if let Some(global_symbols) = global_symbols {
-            aalvur.add_segment(global_symbols)?;
+        for (&stype, &(offset, ref bytes)) in segs {
+            aalvur.write_section(&BinarySegment{stype, offset, bytes: bytes.clone()})?;
         }
-        if let Some(internal_symbols) = internal_symbols {
-            aalvur.add_segment(internal_symbols)?;
+        if !symbols.0.is_empty() {
+            aalvur.write_section(symbols)?;
         }
-        if let Some(symbol_reference_table) = symbol_reference_table {
-            aalvur.add_segment(symbol_reference_table)?;
-        }
-
-        write_aalv_file(path, &aalvur)
-    }
-}
-
-impl Segment for Lazy {
-    type Error = Infallible;
-
-    const NAME: &'static str = ".mem";
-
-    fn read(buf: &[u8]) -> Result<Self, Self::Error> {
-        Ok(Lazy { mem: buf.to_vec() })
-    }
-
-    fn write(&self, buf: &mut Vec<u8>) -> Result<(), Self::Error> {
-        buf.extend_from_slice(&self.mem);
-        Ok(())
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct GlobalSymbols(pub Vec<(Box<str>, u16)>);
-#[derive(Debug, Clone)]
-pub struct InternalSymbols(pub Vec<(Box<str>, u16)>);
-#[derive(Debug, Clone)]
-pub struct SymbolReferenceTable(pub Vec<(Format, Box<str>, u16)>);
-
-impl Segment for GlobalSymbols {
-    type Error = io::Error;
-
-    const NAME: &'static str = "symtab";
-
-    fn read(mut buf: &[u8]) -> Result<Self, Self::Error> {
-        let mut symbols = Vec::new();
-
-        loop {
-            let mut s = String::new();
-            match buf.read_line(&mut s)? {
-                0 => break,
-                _ => ()
-            }
-            s.pop();
-
-            let mut pos_buf = [0; 2];
-            buf.read_exact(&mut pos_buf)?;
-            symbols.push((s.into_boxed_str(), u16::from_le_bytes(pos_buf)));
-        }
-
-        Ok(Self(symbols))
-    }
-
-    fn write(&self, buf: &mut Vec<u8>) -> Result<(), Self::Error> {
-        for (name, pos) in &self.0 {
-            buf.extend_from_slice(name.as_bytes());
-            buf.push(b'\n');
-            buf.extend_from_slice(&pos.to_le_bytes());
+        if let Some(relocation_table) = relocation_table {
+            aalvur.write_section(relocation_table)?;
         }
 
         Ok(())
     }
-}
 
-impl Segment for InternalSymbols {
-    type Error = io::Error;
+    pub fn get_flattened_memory(&self) -> Vec<u8> {
+        let size = self.segs.iter().map(|(_, &(o, ref v))| o as usize + v.len()).max().unwrap();
+        let mut vec = vec![0; size];
 
-    const NAME: &'static str = "symtab.internal";
-
-    fn read(mut buf: &[u8]) -> Result<Self, Self::Error> {
-        let mut symbols = Vec::new();
-
-        loop {
-            let mut s = String::new();
-            match buf.read_line(&mut s)? {
-                0 => break,
-                _ => ()
-            }
-            s.pop();
-
-            let mut pos_buf = [0; 2];
-            buf.read_exact(&mut pos_buf)?;
-            symbols.push((s.into_boxed_str(), u16::from_le_bytes(pos_buf)));
+        for (_, &(offset, ref bytes)) in &self.segs {
+            vec[offset as usize.. offset as usize + bytes.len()].copy_from_slice(&bytes);
         }
 
-        Ok(Self(symbols))
+        vec
     }
-
-    fn write(&self, buf: &mut Vec<u8>) -> Result<(), Self::Error> {
-        for (name, pos) in &self.0 {
-            buf.extend_from_slice(name.as_bytes());
-            buf.push(b'\n');
-            buf.extend_from_slice(&pos.to_le_bytes());
-        }
-
-        Ok(())
-    }
-}
-
-impl Segment for SymbolReferenceTable {
-    type Error = io::Error;
-
-    const NAME: &'static str = "symref";
-
-    fn read(mut buf: &[u8]) -> Result<Self, Self::Error> {
-        let mut symbols = Vec::new();
-
-        loop {
-            let mut s = String::new();
-            match buf.read_line(&mut s)? {
-                0 => break,
-                _ => ()
-            }
-            s.pop();
-
-            let mut pos_buf = [0; 2];
-            buf.read_exact(&mut pos_buf)?;
-
-            let mut format = [0; 1];
-            buf.read_exact(&mut format)?;
-
-            let format = match format {
-                [0] => Format::Absolute,
-                [1] => Format::Big,
-                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "invalid symbol type number")),
-            };
-
-            symbols.push((format, s.into_boxed_str(), u16::from_le_bytes(pos_buf)));
-        }
-
-        Ok(Self(symbols))
-    }
-
-    fn write(&self, buf: &mut Vec<u8>) -> Result<(), Self::Error> {
-        for (format, name, pos) in &self.0 {
-            buf.extend_from_slice(name.as_bytes());
-            buf.push(b'\n');
-            buf.extend_from_slice(&pos.to_le_bytes());
-            buf.push(match format {
-                Format::Absolute => 0,
-                Format::Big => 1,
-            });
-        }
-
-        Ok(())
-    }
-}
-
-trait ResultInfalliableExt<T> {
-    fn cannot_fail(self) -> T;
 }
 
 #[derive(Debug, Clone, Copy)]
-pub enum Infallible {}
+pub struct Entry(pub u16);
 
-impl<T> ResultInfalliableExt<T> for Result<T, Infallible> {
-    #[inline(always)]
-    fn cannot_fail(self) -> T {
+impl Section for Entry {
+    const NAME: &'static str = "_entry";
+    fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let mut buf = [0; 2];
+        reader.read_exact(&mut buf)?;
+        Ok(Entry(u16::from_le_bytes(buf)))
+    }
+    fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        writer.write_all(&self.0.to_le_bytes())
+    }
+}
+
+#[repr(u8)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum SegmentType {
+    Unknown = 0xff,
+    Zero = 0,
+    Data = 0x10,
+    RoData = 0x18,
+    Text = 0x20,
+    Heap = 0x70,
+}
+
+impl Display for SegmentType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Ok(i) => i,
-            Err(i) => match i {},
+            SegmentType::Unknown => write!(f, "unknown"),
+            SegmentType::Zero => write!(f, "zero"),
+            SegmentType::Data => write!(f, "data"),
+            SegmentType::RoData => write!(f, "rodata"),
+            SegmentType::Text => write!(f, "text"),
+            SegmentType::Heap => write!(f, "heap"),
         }
     }
+}
+
+impl TryFrom<u8> for SegmentType {
+    type Error = ();
+
+    fn try_from(value: u8) -> Result<Self, Self::Error> {
+        use self::SegmentType::*;
+        match value {
+            0xff => Ok(Unknown),
+            0x00 => Ok(Zero),
+            0x10 => Ok(Data),
+            0x18 => Ok(RoData),
+            0x20 => Ok(Text),
+            0x70 => Ok(Heap),
+            _ => Err(())
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct BinarySegment{
+    pub offset: u16,
+    pub stype: SegmentType,
+    pub bytes: Vec<u8>,
+}
+
+impl Section for BinarySegment {
+    const NAME: &'static str = "_seg";
+
+    fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let mut buf = [0; 3];
+        reader.read_exact(&mut buf)?;
+        let [ol, oh, stype] = buf;
+
+        let mut bytes = Vec::new();
+        reader.read_to_end(&mut bytes)?;
+
+        Ok(Self{
+            offset: u16::from_le_bytes([ol, oh]),
+            stype: segment_type_from_u8(stype)?,
+            bytes,
+        })
+    }
+    fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        writer.write_all(&self.offset.to_le_bytes())?;
+        writer.write_all(&[self.stype as u8])?;
+        writer.write_all(&self.bytes)?;
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct SymbolDefinition {
+    // No nulls, no initial whitespace
+    pub name: Box<str>,
+    pub is_global: bool,
+    pub segment_type: SegmentType,
+    pub location: u16,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SymbolTable(pub Vec<SymbolDefinition>);
+
+impl SymbolTable {
+    pub fn from_iter(iter: impl Iterator<Item=SymbolDefinition>) -> Self {
+        SymbolTable(iter.collect())
+    }
+    pub fn mutate<F: FnMut(&mut Box<str>, &mut bool, &mut SegmentType, &mut u16)>(&mut self, mut f: F) {
+        for SymbolDefinition { name, is_global, segment_type, location } in &mut self.0 {
+            f(name, is_global, segment_type, location);
+        }
+    }
+    pub fn into_iter(self) -> impl Iterator<Item=SymbolDefinition> {
+        self.0.into_iter()
+    }
+}
+
+impl Section for SymbolTable {
+    const NAME: &'static str = "_syms";
+
+    fn read<R: Read>(reader: R) -> io::Result<Self> {
+        let mut symbols = Vec::new();
+        let mut reader = BufReader::new(reader);
+
+        loop {
+            let mut namebuf = Vec::new();
+            match reader.read_until(0, &mut namebuf)? {
+                0 => break,
+                _ => ()
+            }
+            namebuf.pop();
+
+            let mut buf = [0; 3];
+            reader.read_exact(&mut buf)?;
+            let [stype, ol, oh] = buf;
+
+            let segment_type = segment_type_from_u8(stype)?;
+
+            let is_global = namebuf[0] != b' ';
+            let name;
+            if is_global {
+                name = String::from_utf8_lossy(&namebuf).into();
+            } else {
+                name = String::from_utf8_lossy(&namebuf[1..]).into();
+            }
+
+            let def = SymbolDefinition {
+                name,
+                is_global,
+                segment_type,
+                location: u16::from_le_bytes([ol, oh]),
+            };
+            symbols.push(def);
+        }
+
+        Ok(SymbolTable(symbols))
+    }
+    fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        for &SymbolDefinition { ref name, is_global, segment_type, location } in &self.0 {
+            write!(writer, "{}{name}\0", if is_global { "" } else { " " })?;
+            writer.write_all(&[segment_type as u8])?;
+            writer.write_all(&location.to_le_bytes())?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct RelocationEntry {
+    pub reference_segment: SegmentType,
+    pub reference_location: u16,
+    pub symbol_index: u16,
+    // Future perhaps a format field again
+}
+#[derive(Debug, Clone)]
+pub struct RelocationTable(pub Vec<RelocationEntry>);
+
+impl Section for RelocationTable {
+    const NAME: &'static str = "_reloc";
+
+    fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let mut entries = Vec::new();
+
+        loop {
+            let mut buf = [0; 5];
+            match reader.read_exact(&mut buf) {
+                Ok(()) => (),
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+            let [stype, ol1, oh1, ol2, oh2] = buf;
+
+            let reference_segment = segment_type_from_u8(stype)?;
+            let reference_location = u16::from_le_bytes([ol1, oh1]);
+            let symbol_index = u16::from_le_bytes([ol2, oh2]);
+
+            let entry = RelocationEntry {
+                reference_segment,
+                reference_location,
+                symbol_index,
+            };
+            entries.push(entry)
+        }
+
+        Ok(RelocationTable(entries))
+    }
+    fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        for &RelocationEntry { reference_segment, reference_location, symbol_index } in &self.0 {
+            writer.write_all(&[reference_segment as u8])?;
+            writer.write_all(&reference_location.to_le_bytes())?;
+            writer.write_all(&symbol_index.to_le_bytes())?;
+        }
+        Ok(())
+    }
+}
+
+fn segment_type_from_u8(n: u8) -> io::Result<SegmentType> {
+    SegmentType::try_from(n).map_err(|()| io::Error::new(io::ErrorKind::InvalidData, "unrecognised segment type"))
 }

@@ -1,16 +1,21 @@
-use std::{iter, mem};
+use std::{iter, mem, fmt::{self, Display}};
+
+use crate::aalv::obj::SegmentType;
 
 use super::{SourceLocation, Result as SourceResult, Error, ErrorType};
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Format {
-    Absolute,
-    Big,
+#[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
+pub(super) struct Address(pub SegmentType, pub u16);
+
+impl Display for Address {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "<{}+0x{:02x}>", self.0, self.1)
+    }
 }
 
 pub struct LabelRead {
+    pub segment: SegmentType,
     pub position: u16,
-    pub format: Format,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -40,9 +45,9 @@ impl SymbolType {
     }
 }
 
-pub struct Symbols {
+pub(super) struct Symbols {
     labels: Vec<Box<str>>,
-    id_to_pos: Vec<Result<u16, Vec<SourceLocation>>>,
+    id_to_pos: Vec<Result<Address, Vec<SourceLocation>>>,
     symbol_types: Vec<SymbolType>,
 }
 
@@ -60,12 +65,13 @@ impl Symbols {
             i
         }
     }
-    pub fn set_label(&mut self, lbl: &str, pos: u16, loc: SourceLocation) -> SourceResult<()> {
+    pub fn set_label(&mut self, lbl: &str, addr: Address, loc: SourceLocation) -> SourceResult<()> {
         let id = self.find_id(lbl);
-        match mem::replace(&mut self.id_to_pos[id], Ok(pos)) {
-            Ok(p) => {
+
+        match mem::replace(&mut self.id_to_pos[id], Ok(addr)) {
+            Ok(cur_addr) => {
                 Err(Error::new(loc.source, loc.line_number, ErrorType::Other(
-                    format!("Label {lbl} already had pos {p:03x} but is now being set to {pos:03x}").into_boxed_str()
+                    format!("Label {lbl} already had {cur_addr} but is now being set to {addr}").into_boxed_str()
                 )))
             }
             Err(_) => Ok(()),
@@ -95,7 +101,7 @@ impl Symbols {
     pub fn size(&self) -> usize {
         self.labels.len()
     }
-    pub fn into_iter(self) -> impl Iterator<Item=(Box<str>, SymbolType, Result<u16, Vec<SourceLocation>>)> {
+    pub fn into_iter(self) -> impl Iterator<Item=(Box<str>, SymbolType, Result<Address, Vec<SourceLocation>>)> {
         self.labels.into_iter().zip(self.symbol_types.into_iter().chain(iter::repeat(SymbolType::default())).zip(self.id_to_pos))
             .map(|(a, (b, c))| (a, b, c))
     }

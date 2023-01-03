@@ -1,14 +1,14 @@
 use std::{env::args, io::{stdin, stdout, Write}, collections::{HashMap, VecDeque}, path::Path};
 
-use telda2::{mem::{Memory}, cpu::{Cpu, ByteRegister, Registers, IoPort}, disassemble::disassemble_instruction, aalv::obj::Object};
+use telda2::{mem::{Memory, Lazy, Io}, cpu::*, disassemble::disassemble_instruction, aalv::obj::{Object, SymbolDefinition}};
 
-struct DbgIoPort {
+struct DbgIo {
     in_buf: VecDeque<u8>,
     out_buf: Vec<u8>,
 }
 
-impl IoPort for DbgIoPort {
-    fn write(&mut self, val: u8) {
+impl Io for DbgIo {
+    fn write(&mut self, _addr: u8, val: u8) {
         if val == b'\n' {
             print!("STDOUT line: ");
             std::io::stdout().write_all(&self.out_buf).unwrap();
@@ -18,7 +18,7 @@ impl IoPort for DbgIoPort {
             self.out_buf.push(val);
         }
     }
-    fn read(&mut self) -> u8 {
+    fn read(&mut self, _addr: u8) -> u8 {
         if self.in_buf.is_empty() {
             print!("STDIN requested: ");
             stdout().flush().unwrap();
@@ -34,39 +34,42 @@ fn main() {
     let arg = args().nth(1).unwrap();
     let p = Path::new(&arg);
 
-    let mut mem;
+    let mem;
+    let ep;
     let mut labels = HashMap::new();
     let mut pos_to_labels = HashMap::new();
     {
         let obj = Object::from_file(p).unwrap();
-        mem = obj.mem.unwrap();
 
-        let iter = obj.internal_symbols
-            .map(|is| is.0.into_iter())
-            .into_iter()
-            .flatten()
-            .chain(obj.global_symbols.map(|is| is.0.into_iter()).into_iter().flatten());
+        mem = obj.get_flattened_memory();
 
-        for (label, position) in iter {
-            labels.insert(label.clone(), position);
-            pos_to_labels.insert(position, label);
+        ep = obj.entry.map(|e| e.0);
+
+        for SymbolDefinition{name, location, is_global, ..} in obj.symbols.into_iter() {
+            if is_global {
+                labels.insert(name.clone(), location);
+                pos_to_labels.insert(location, name);
+            } else {
+                labels.entry(name.clone()).or_insert(location);
+                pos_to_labels.entry(location).or_insert(name);
+            }
         }
     }
 
-    let io_port = DbgIoPort { in_buf: VecDeque::new(), out_buf: Vec::new() };
-    let start_id = labels.get("_start").copied()
-        .unwrap_or_else(|| {eprintln!("warning: no _start symbol found, using as 0 startpoint"); 0});
-    let mut cpu = Cpu::new(start_id, Box::new(io_port));
+    let io = DbgIo { in_buf: VecDeque::new(), out_buf: Vec::new() };
+    let mut mem = Lazy { io, mem };
+    let start = ep.unwrap_or_else(|| {eprintln!("warning: no _start segment in binary, using 0 as startpoint"); 0});
+    let mut cpu = Cpu::new(start);
     let stdin = stdin();
     let mut input = String::new();
     let mut target_nesting = 0;
     let mut current_nesting = 0;
 
     'disassemble_loop: loop {
-        let dins = disassemble_instruction(cpu.registers.pc, &mem.mem, |p| pos_to_labels.get(&p).map(|s| &**s));
+        let dins = disassemble_instruction(cpu.registers.program_counter, &mem.mem, |p| pos_to_labels.get(&p).map(|s| &**s));
 
         if current_nesting == target_nesting {
-            if let Some(label) = pos_to_labels.get(&cpu.registers.pc) {
+            if let Some(label) = pos_to_labels.get(&cpu.registers.program_counter) {
                 println!("<{label}>:");
             }
 
@@ -110,21 +113,38 @@ fn main() {
                     };
                     println!(" = 0x{:02x} 0x{:02x} ...", mem.read(addr), mem.read(addr+1));
                 }
-                "ra" => println!("a = {a} 0x{a:04x}", a = cpu.registers.a),
-                "rb" => println!("b = {b} 0x{b:04x}", b = cpu.registers.b),
-                "rc" => println!("c = {c} 0x{c:04x}", c = cpu.registers.c),
-                "rx" => println!("x = {x} 0x{x:04x}", x = cpu.registers.x),
-                "ry" => println!("y = {y} 0x{y:04x}", y = cpu.registers.y),
-                "rz" => println!("z = {z} 0x{z:04x}", z = cpu.registers.z),
-                "rsp" | "rs" => println!("sp = {sp} 0x{sp:04x}", sp = cpu.registers.sp),
-                "rpc" | "rp" => println!("pc = {pc} 0x{pc:04x}", pc = cpu.registers.pc),
-                "r0" => println!("zero is zero"),
-                "ral" => print_byte_register("al", 1, &mut cpu.registers),
-                "rah" => print_byte_register("ah", 2, &mut cpu.registers),
-                "rbl" => print_byte_register("bl", 3, &mut cpu.registers),
-                "rbh" => print_byte_register("bh", 4, &mut cpu.registers),
-                "rcl" => print_byte_register("cl", 5, &mut cpu.registers),
-                "rch" => print_byte_register("ch", 6, &mut cpu.registers),
+                "r0b" => print_byte_register("r0b", R0B, &cpu.registers),
+                "r1l" => print_byte_register("r1l", R1L, &cpu.registers),
+                "r1h" => print_byte_register("r1h", R1H, &cpu.registers),
+                "r2l" => print_byte_register("r2l", R2L, &cpu.registers),
+                "r2h" => print_byte_register("r2h", R2H, &cpu.registers),
+                "r3l" => print_byte_register("r3l", R3L, &cpu.registers),
+                "r3h" => print_byte_register("r3h", R3H, &cpu.registers),
+                "r4l" => print_byte_register("r4l", R4L, &cpu.registers),
+                "r4h" => print_byte_register("r4h", R4H, &cpu.registers),
+                "r5l" => print_byte_register("r5l", R5L, &cpu.registers),
+                "r6b" => print_byte_register("r6b", R6B, &cpu.registers),
+                "r7b" => print_byte_register("r7b", R7B, &cpu.registers),
+                "r8b" => print_byte_register("r8b", R8B, &cpu.registers),
+                "r9b" => print_byte_register("r9b", R9B, &cpu.registers),
+                "r10b" => print_byte_register("r10b", R10B, &cpu.registers),
+                "r0" => println!("r0 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R0)),
+                "r1" => println!("r1 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R1)),
+                "r2" => println!("r2 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R2)),
+                "r3" => println!("r3 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R3)),
+                "r4" => println!("r4 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R4)),
+                "r5" => println!("r5 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R5)),
+                "r6" => println!("r6 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R6)),
+                "r7" => println!("r7 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R7)),
+                "r8" => println!("r8 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R8)),
+                "r9" => println!("r9 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R9)),
+                "r10" => println!("r10 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R10)),
+                "rs" => println!("rs = {r} 0x{r:04x}", r = cpu.registers.read_wide(RS)),
+                "rl" => println!("rl = {r} 0x{r:04x}", r = cpu.registers.read_wide(RL)),
+                "rb" => println!("rb = {r} 0x{r:04x}", r = cpu.registers.read_wide(RB)),
+                "rp" => println!("rp = {r} 0x{r:04x}", r = cpu.registers.read_wide(RP)),
+                "rh" => println!("rh = {r} 0x{r:04x}", r = cpu.registers.read_wide(RH)),
+                "rpc" => println!("pc = {pc} 0x{pc:04x}", pc = cpu.registers.program_counter),
                 "flags" => {
                     print!("flags = ");
                     if cpu.registers.carry {
@@ -148,7 +168,7 @@ fn main() {
                     } else {
                         arg.parse().unwrap()
                     };
-                    cpu.registers.pc = addr;
+                    cpu.registers.program_counter = addr;
                     continue 'disassemble_loop;
                 }
                 _ => eprintln!("unknown command, type q to quit"),
@@ -165,8 +185,8 @@ fn main() {
     }
 }
 
-fn print_byte_register(name: &str, r: u8, reg: &mut Registers) {
-    let val = reg.read_byte(ByteRegister::new(r));
+fn print_byte_register(name: &str, r: ByteRegister, reg: &Registers) {
+    let val = reg.read_byte(r);
     print!("{name} = {val} 0x{val:02x}");
     if let Ok(s) = std::str::from_utf8(&[val]) {
         // TODO: don't rely on debug print here

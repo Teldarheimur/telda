@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use telda2::{cpu::{Cpu, TrapMode}, aalv::obj::Object};
+use telda2::{cpu::{Cpu, TrapMode}, aalv::obj::{Object, SymbolDefinition}, mem::Lazy};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -9,61 +9,39 @@ struct Cli {
     /// Binary file
     binary: PathBuf,
 
-    /// Does nothing now
-    #[arg(short, long)]
-    skip_shebang: bool,
-
     /// Whether the termination point should be displayed
     #[arg(short, long)]
     termination_point: bool,
-    
-    /// Sets the entry-point for this execution
-    #[arg(short, long)]
-    entry: String,
 }
 
 pub fn main() -> ExitCode {
-    let Cli { binary, skip_shebang: _, entry, termination_point } = Cli::parse();
+    let Cli { binary, termination_point } = Cli::parse();
 
-    let start_addr;
-    loop {
-        if entry.starts_with("0x") {
-            if let Ok(p) = u16::from_str_radix(&entry[2..], 16) {
-                start_addr = p;
-                break;
-            }
-        }
-        eprintln!("Invalid entry-point; needs to be a hexadecimal 16-bit value prefixed by 0x");
-        eprintln!("{entry:?}");
-
-        return ExitCode::FAILURE;
-    }
-
-    let (mut lazy, symbols) = {
+    let (mem, symbols, start_addr) = {
         let obj = Object::from_file(binary).unwrap();
+        let mem = obj.get_flattened_memory();
 
-        let iter = obj.global_symbols
-            .map(|is| is.0.into_iter())
-            .into_iter()
-            .flatten()
-            .chain(obj.internal_symbols.map(|is| is.0.into_iter()).into_iter().flatten());
+        let iter = obj.symbols.into_iter();
 
-        (obj.mem.unwrap(), iter)
+        (mem, iter, obj.entry.unwrap().0)
     };
 
-    let mut cpu = Cpu::new_with_stdport(start_addr);
+    let mut lazy = Lazy::new_stdio(mem);
+
+    let mut cpu = Cpu::new(start_addr);
     let tm = cpu.run_until_abort(&mut lazy);
 
     if termination_point {
-        let pc = cpu.registers.pc;
+        let pc = cpu.registers.program_counter;
         let mut diff = pc;
         let mut closest = "".into();
-        for (lbl, loc) in symbols {
-            if pc >= loc {
-                let new_diff = pc - loc;
+        for SymbolDefinition{name, location, ..} in symbols {
+            if name.is_empty() { continue; }
+            if pc >= location {
+                let new_diff = pc - location;
                 if new_diff < diff {
                     diff = new_diff;
-                    closest = lbl;
+                    closest = name;
                 }
             }
         }

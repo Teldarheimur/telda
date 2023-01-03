@@ -1,95 +1,89 @@
-use std::{io::{self, Write, BufRead, Seek, ErrorKind, BufReader, SeekFrom}, path::Path, fs::File};
+use std::{io::{self, Write, BufRead, Seek, ErrorKind, BufReader, SeekFrom, Result, Read, BufWriter}, path::Path, fs::File};
 
-const AALV_HEADER: &str = "álvur1";
+const AALV_MAGIC: &str = "álvur2\n";
 
-pub fn read_aalv_file<P: AsRef<Path>>(path: P) -> io::Result<Aalv> {
+pub fn read_aalv_file<P: AsRef<Path>>(path: P) -> Result<AalvReader<BufReader<File>>> {
     let f = BufReader::new(File::open(path)?);
-    Aalv::read(f)
+    AalvReader::new(f)
 }
 
-pub fn write_aalv_file<P: AsRef<Path>>(path: P, aalvur: &Aalv) -> io::Result<File> {
-    let mut f = File::options().create(true).write(true).open(path)?;
-    aalvur.write(&mut f)?;
-    Ok(f)
+pub fn write_aalv_file<P: AsRef<Path>>(path: P) -> Result<AalvWriter<BufWriter<File>>> {
+    write_aalv_file_with_offset(path, 0)
 }
 
-pub struct Aalv {
+pub fn write_aalv_file_with_offset<P: AsRef<Path>>(path: P, file_offset: u64) -> Result<AalvWriter<BufWriter<File>>> {
+    let f = File::options().create(true).write(true).open(path)?;
+    f.set_len(file_offset)?;
+    AalvWriter::new(BufWriter::new(f), file_offset)
+}
+
+pub struct AalvReader<F> {
     pub file_offset: u64,
-    segments: Vec<(Box<str>, Box<[u8]>)>,
+    file: F,
+    sections: Vec<(Box<str>, u64, u16)>,
 }
 
-impl Aalv {
-    pub fn new() -> Self {
-        Self { file_offset: 0, segments: Vec::new() }
-    }
-
-    pub fn read<R: BufRead + Seek>(mut reader: R) -> io::Result<Self> {
-        let mut new = Self::new();
-        new.file_offset = reader.stream_position()?;
-        new.read_header(&mut reader)?;
-
-        for (_, data) in &mut new.segments {
-            reader.read_exact(data)?;
-        }
+impl<F: BufRead + Seek> AalvReader<F> {
+    pub fn new(mut file: F) -> Result<Self> {
+        let mut new = Self {
+            file_offset: file.stream_position()?,
+            file,
+            sections: Vec::new(),
+        };
+        new.read_magic()?;
+        new.read_section_headers()?;
 
         Ok(new)
     }
 
-    pub fn write<W: Write + Seek>(&self, mut writer: W) -> io::Result<()> {
-        writer.seek(SeekFrom::Start(self.file_offset))?;
-        self.write_header(&mut writer)?;
-        for (_name, data) in &self.segments {
-            writer.write_all(&data)?;
+    pub fn read_section<S: Section>(&mut self) -> Option<Result<S>> {
+        let id = self.sections
+            .iter()
+            .position(|(s, _pos, _size)| &**s == S::NAME)?;
+
+        let (_, pos, size) = self.sections.remove(id);
+        match self.file.seek(SeekFrom::Start(pos)) {
+            Ok(_) => (),
+            Err(e) => return Some(Err(e)),
         }
 
-        Ok(())
+        let read_window = ReadWindow {
+            reader: &mut self.file,
+            length: size as usize,
+        };
+        Some(S::read(read_window))
     }
-
-    /// Returns whether another segment with the same name already exists
-    pub fn add_segment<S: Segment>(&mut self, segment: &S) -> Result<bool, S::Error> {
-        assert!(!S::NAME.contains('\0'), "segment name may not contain null bytes");
-
-        let mut buf = Vec::new();
-        segment.write(&mut buf)?;
-
-        let ret = self.segments.iter().any(|(s, _)| &**s == S::NAME);
-
-        self.segments.push((
-            S::NAME.into(),
-            buf.into_boxed_slice()
-        ));
-
-        Ok(ret)
-    }
-
-    pub fn get_segment<S: Segment>(&self) -> Option<Result<S, S::Error>> {
-        self.segments
+    pub fn remaing_sections(&self) -> impl Iterator<Item=&str> {
+        self.sections
             .iter()
-            .find(|(s, _buf)| &**s == S::NAME)
-            .map(|(_, buf)| S::read(buf))
+            .map(|(s, _, _)| &**s)
     }
 
-    fn read_header<R: BufRead + Seek>(&mut self, reader: &mut R) -> io::Result<()> {
+    fn read_magic(&mut self) -> Result<()> {
         // Find magic
         loop {
-            let first_magic_byte = AALV_HEADER.as_bytes()[0];
-            let mut magic_buf = [0; AALV_HEADER.len()];
+            let first_magic_byte = AALV_MAGIC.as_bytes()[0];
+            let mut magic_buf = [0; AALV_MAGIC.len()];
 
             while first_magic_byte != magic_buf[0] {
-                reader.read_exact(&mut magic_buf[..1])?;
+                self.file.read_exact(&mut magic_buf[..1])?;
             }
-            self.file_offset = reader.stream_position()? - 1;
+            self.file_offset = self.file.stream_position()? - 1;
 
-            reader.read_exact(&mut magic_buf[1..])?;
-            if &magic_buf == AALV_HEADER.as_bytes() {
+            self.file.read_exact(&mut magic_buf[1..])?;
+            if &magic_buf == AALV_MAGIC.as_bytes() {
                 break;
             }
         }
 
+        Ok(())
+   }
+
+   fn read_section_headers(&mut self) -> Result<()> {
         let mut name_buf = Vec::new();
         loop {
             name_buf.clear();
-            reader.read_until(b'\0', &mut name_buf)?;
+            self.file.read_until(b'\0', &mut name_buf)?;
 
             if name_buf.pop() != Some(0) {
                 return Err(io::Error::new(ErrorKind::InvalidData, "name did not end in a zero byte"));
@@ -101,59 +95,137 @@ impl Aalv {
                 break;
             }
 
-            let mut num_buf = [0; 4];
-            reader.read_exact(&mut num_buf)?;
+            let mut num_buf = [0; 2];
+            self.file.read_exact(&mut num_buf)?;
 
-            let len = u32::from_le_bytes(num_buf) as usize;
+            let len = u16::from_le_bytes(num_buf);
 
-            self.segments.push((name, vec![0; len].into_boxed_slice()));
+            let pos = self.file.stream_position()?;
+
+            self.file.seek(SeekFrom::Current(len as i64))?;
+
+            self.sections.push((name, pos, len));
         }
 
         Ok(())
    }
+}
 
-    fn write_header<W: Write>(&self, writer: &mut W) -> io::Result<()> {
-        writer.write_all(AALV_HEADER.as_bytes())?;
-        for (name, data) in &self.segments {
-            let data_len: [u8; 4] = (data.len() as u32).to_le_bytes();
+struct ReadWindow<R: Read> {
+    reader: R,
+    length: usize,
+}
 
-            writer.write_all(name.as_bytes())?;
-            writer.write_all(b"\0")?;
-            writer.write_all(&data_len)?;
+impl<R: Read> Read for ReadWindow<R> {
+    fn read(&mut self, mut buf: &mut [u8]) -> Result<usize> {
+        if buf.len() > self.length {
+            buf = &mut buf[..self.length];
         }
-        writer.write_all(b"\0")
+
+        let n = self.reader.read(buf)?;
+        self.length -= n;
+        Ok(n)
+    }
+    fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
+        if buf.len() > self.length {
+            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "read window is smaller"));
+        }
+
+        self.reader.read_exact(buf)?;
+        self.length -= buf.len();
+        Ok(())
     }
 }
 
-pub trait Segment: Sized {
-    type Error;
+pub struct AalvWriter<F: Write> {
+    file: F,
+}
+
+impl<F: Write + Seek> AalvWriter<F> {
+    pub fn new(file: F, file_offset: u64) -> Result<Self> {
+        let mut new = AalvWriter { file };
+
+        new.file.seek(SeekFrom::Start(file_offset))?;
+        new.write_magic()?;
+        Ok(new)
+    }
+
+    fn write_magic(&mut self) -> Result<()> {
+        self.file.write_all(AALV_MAGIC.as_bytes())
+    }
+
+    pub fn write_section<S: Section>(&mut self, segment: &S) -> Result<()> {
+        assert!(!S::NAME.contains('\0'), "section name may not contain null bytes");
+        assert_ne!(!S::NAME.len(), 0, "section name may not be empty");
+
+        write!(self.file, "{}\0\0\0", S::NAME)?;
+
+        let mut w = CountedWriter {
+            writer: &mut self.file,
+            length: 0,
+        };
+
+        segment.write(&mut w)?;
+        let CountedWriter { writer: _, length } = w;
+
+        self.file.seek(SeekFrom::Current(-(length as i64) - 2))?;
+        self.file.write_all(&(length as u16).to_le_bytes())?;
+        self.file.seek(SeekFrom::Current(length as i64))?;
+
+        Ok(())
+    }
+}
+
+impl<F: Write> Drop for AalvWriter<F> {
+    fn drop(&mut self) {
+        self.file.write_all(&[0]).unwrap();
+    }
+}
+
+struct CountedWriter<W: Write> {
+    writer: W,
+    length: usize,
+}
+
+impl<R: Write> Write for CountedWriter<R> {
+    fn flush(&mut self) -> Result<()> {
+        self.writer.flush()
+    }
+    fn write(&mut self, buf: &[u8]) -> Result<usize> {
+        let n = self.writer.write(buf)?;
+        self.length += n;
+        Ok(n)
+    }
+    fn write_all(&mut self, buf: &[u8]) -> Result<()> {
+        self.length += buf.len();
+        self.writer.write_all(buf)
+    }
+}
+
+pub trait Section: Sized {
     const NAME: &'static str;
-    fn read(buf: &[u8]) -> Result<Self, Self::Error>;
-    fn write(&self, buf: &mut Vec<u8>) -> Result<(), Self::Error>;
+    fn read<R: Read>(reader: R) -> Result<Self>;
+    fn write<W: Write>(&self, writer: W) -> Result<()>;
 }
 
 pub mod obj;
 pub mod sample {
-    use std::string::FromUtf8Error;
-
-    use super::Segment;
+    use super::Section;
+    use std::io::{Write, Read, Result};
 
     #[repr(transparent)]
     pub struct Name(pub String);
     
-    impl Segment for Name {
-        type Error = FromUtf8Error;
-    
+    impl Section for Name {
         const NAME: &'static str = "name";
-    
-        fn read(buf: &[u8]) -> Result<Self, Self::Error> {
-            let v = buf.to_vec();
-            Ok(Name(String::from_utf8(v)?))
+
+        fn read<R: Read>(mut reader: R) -> Result<Self> {
+            let mut buf = String::new();
+            reader.read_to_string(&mut buf)?;
+            Ok(Name(buf))
         }
-    
-        fn write(&self, buf: &mut Vec<u8>) -> Result<(), Self::Error> {
-            buf.extend_from_slice(self.0.as_bytes());
-            Ok(())
+        fn write<W: Write>(&self, mut writer: W) -> Result<()> {
+            write!(writer, "{}", self.0)
         }
     }
 }

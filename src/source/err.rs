@@ -14,6 +14,7 @@ pub enum ErrorType {
     UnknownDirective(Box<str>),
     IoError(IoError),
     Other(Box<str>),
+    DoubleEntry,
 }
 
 #[derive(Debug)]
@@ -64,6 +65,7 @@ impl Display for Error {
 
             write!(f, "{source}:{ln}: ")?;
             match error {
+                ErrorType::DoubleEntry => write!(f, "entry point defined twice"),
                 ErrorType::InvalidOperand(s) => write!(f, "invalid operand: {s}"),
                 ErrorType::UnknownInstruction(s) => write!(f, "unknown instruction: {s}"),
                 ErrorType::UnknownDirective(s) => write!(f, "unknown directive: {s}"),
