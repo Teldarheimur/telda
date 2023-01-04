@@ -102,7 +102,7 @@ fn main() -> ExitCode {
             }
             reloc_table = RelocationTable(reloc_t);
         }
-        aalvur.relocation_table = Some(reloc_table);
+        aalvur.relocation_table = reloc_table;
 
         aalvur.write_to_file(p.with_extension(AALV_OBJECT_EXT)).unwrap();
     }

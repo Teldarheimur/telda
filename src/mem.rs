@@ -69,22 +69,6 @@ impl Lazy<StdIo> {
         Self { mem, io: StdIo }
     }
 }
-impl<I> Lazy<I> {
-    /// Returns address for next segment to a 256 byte aligned value
-    pub fn next_segment(&mut self) -> u16 {
-        let cur_end = self.mem.len();
-        let next_block = ((cur_end >> 8) + 1) << 8;
-
-        // If the current end is already byte-aligned, do nothing
-        if cur_end & 0xff == 0 {
-            cur_end as u16
-        } else {
-            self.mem.resize(next_block, 0);
-
-            next_block as u16
-        }
-    }
-}
 
 impl<I: Io> Memory for Lazy<I> {
     fn read(&mut self, addr: u16) -> u8 {

@@ -29,16 +29,24 @@ struct Cli {
     /// Defines an entry-point and makes this output an executable binary
     ///
     /// Can be either a hexadecimal address prefixed by 0x or a symbol
-    #[arg(short, long)]
-    entry: Option<String>,
+    ///
+    /// Without this, the first entry-point from the given input object files is used.
+    ///
+    /// This means if multiple objects with an entry point are given,
+    /// only the first one will be used for the entry point of the output of this.
+    #[arg(short = 'E', long, requires = "executable")]
+    set_entry: Option<String>,
 
     /// Erase internal symbols
     #[arg(short = 'S', long)]
     strip_internal: bool,
 
-    /// Allow undefined references
-    #[arg(short, long)]
-    relocatable: bool,
+    /// Makes the output file an executable binary which
+    /// disallows undefined references
+    ///
+    /// Errors if no entry-point is defined in input files or with -E
+    #[arg(short = 'e', long)]
+    executable: bool,
 }
 
 fn main() -> ExitCode {
@@ -47,9 +55,9 @@ fn main() -> ExitCode {
     let Cli {
         input_files,
         out,
-        entry,
+        set_entry,
         strip_internal,
-        relocatable,
+        executable,
     } = Cli::parse();
 
     let objects: Vec<_> = input_files
@@ -60,7 +68,7 @@ fn main() -> ExitCode {
         })
         .collect();
 
-    let mut segs = BTreeMap::new();
+    let mut segs_out = BTreeMap::new();
 
     {
         let mut lengths = BTreeMap::new();
@@ -73,12 +81,22 @@ fn main() -> ExitCode {
         let mut last_end = lengths.remove(&SegmentType::Zero).unwrap_or(0);
         last_end = last_end.max(SEGMENT_ALIGNMENT);
 
+        dbg!(&lengths);
+        dbg!(last_end);
+
         for (st, size) in lengths {
             let start = align(last_end, SEGMENT_ALIGNMENT);
-            segs.insert(st, (start, Vec::with_capacity(size as usize)));
+            segs_out.insert(st, (start, Vec::with_capacity(size as usize)));
+            eprintln!("{st}_start = {start}");
             last_end = start + size;
+            eprintln!("last_end = {last_end}");
         }
     }
+
+    let mut segs: BTreeMap<_, _> = segs_out
+        .iter_mut()
+        .map(|(&st, &mut (start, ref mut bytes))| (st, (start, bytes)))
+        .collect();
 
     let out = out.unwrap_or_else(|| PathBuf::from("a.to"));
 
@@ -87,13 +105,32 @@ fn main() -> ExitCode {
     let mut reloc_out = Vec::new();
     let mut undefined_references = Vec::new();
 
+    let mut entry_point = None;
+
     for (input_file, mut obj) in objects {
-        let symbols_file_start = symbols_out.len();
+        let mut file_symbol_to_out_symbol = Vec::new();
         let reloc;
+
+        if entry_point.is_none() {
+            entry_point = obj.entry.map(|Entry(ep)| {
+                let mut segment_offset = 0;
+                let mut ep_segment = SegmentType::Unknown;
+
+                for (&seg, &(start, ref bytes)) in obj.segs.iter().rev() {
+                    if (start..=start + bytes.len() as u16).contains(&ep) {
+                        ep_segment = seg;
+                        segment_offset = start;
+                    }
+                }
+
+                ep - segment_offset + segs[&ep_segment].0
+            });
+        }
 
         {
             for mut symdef in obj.symbols.into_iter() {
                 let next_id = symbols_out.len();
+                let mut id_in_fstos = None;
 
                 symdef.location -= obj.segs.get(&symdef.segment_type).map(|s| s.0).unwrap_or(0);
                 symdef.location += segs.get(&symdef.segment_type).map(|s| s.0).unwrap_or(0);
@@ -109,7 +146,7 @@ fn main() -> ExitCode {
                             if let SegmentType::Unknown = symdef.segment_type {
                             } else {
                                 if let SegmentType::Unknown = cur_symdef.segment_type {
-                                    *cur_symdef = symdef;
+                                    *cur_symdef = symdef.clone();
                                 } else {
                                     eprintln!("global symbol {} defined in {} but was already defined in a previous file at location 0x{:02x} in {}",
                                         symdef.name,
@@ -121,7 +158,7 @@ fn main() -> ExitCode {
                                 }
                             }
 
-                            continue;
+                            id_in_fstos = Some(id);
                         }
                     }
                 } else {
@@ -130,13 +167,16 @@ fn main() -> ExitCode {
                     }
                 }
 
-                symbols_out.push(symdef);
+                let id;
+                if let Some(id_in_fstos) = id_in_fstos {
+                    id = id_in_fstos;
+                } else {
+                    symbols_out.push(symdef);
+                    id = next_id;
+                }
+                file_symbol_to_out_symbol.push(id);
             }
-            reloc = obj
-                .relocation_table
-                .take()
-                .map(|r| r.0)
-                .unwrap_or(Vec::new());
+            reloc = obj.relocation_table.0;
         }
 
         for RelocationEntry {
@@ -145,8 +185,7 @@ fn main() -> ExitCode {
             symbol_index,
         } in reloc
         {
-            // TODO: translate this correctly
-            let symbol_index = symbol_index as usize - symbols_file_start;
+            let symbol_index = file_symbol_to_out_symbol[symbol_index as usize];
 
             let location_in_file =
                 reference_location - obj.segs.get(&reference_segment).map(|s| s.0).unwrap_or(0);
@@ -174,9 +213,12 @@ fn main() -> ExitCode {
         }
 
         for (t, (_, bytes)) in obj.segs {
-            segs.get_mut(&t).unwrap().1.extend(bytes);
+            let seg = segs.get_mut(&t).unwrap();
+            seg.0 += bytes.len() as u16;
+            seg.1.extend(bytes);
         }
     }
+    drop(segs);
 
     for RelocationEntry {
         reference_segment,
@@ -186,7 +228,7 @@ fn main() -> ExitCode {
     {
         let symdef = &symbols_out[symbol_index as usize];
         if let SegmentType::Unknown = symdef.segment_type {
-            if !relocatable {
+            if executable {
                 eprintln!(
                     "undefined reference to {} at 0x{:02x}",
                     symdef.name, symdef.location
@@ -196,13 +238,13 @@ fn main() -> ExitCode {
             continue;
         };
 
-        let seg = segs.get_mut(&reference_segment).unwrap();
+        let seg = segs_out.get_mut(&reference_segment).unwrap();
         let index = (reference_location - seg.0) as usize;
         seg.1[index..index + 2].copy_from_slice(&symdef.location.to_le_bytes());
     }
 
-    let start_addr = match entry {
-        Some(entry) => Some({
+    match set_entry {
+        Some(entry) => entry_point = Some({
             if entry.starts_with("0x") {
                 u16::from_str_radix(&entry[2..], 16).unwrap()
             } else {
@@ -216,7 +258,7 @@ fn main() -> ExitCode {
                 }
             }
         }),
-        None => None,
+        None => (),
     };
 
     if failure {
@@ -226,15 +268,20 @@ fn main() -> ExitCode {
     let obj = {
         let mut obj = Object::default();
 
-        obj.segs = segs;
-        obj.entry = start_addr.map(Entry);
+        obj.segs = segs_out;
+        obj.entry = entry_point.map(Entry);
         obj.symbols = SymbolTable(symbols_out);
-        obj.relocation_table = Some(RelocationTable(reloc_out));
+        obj.relocation_table = RelocationTable(reloc_out);
 
         obj
     };
 
-    if let Some(_addr) = start_addr {
+    if executable {
+        if obj.entry.is_none() {
+            eprintln!("No entry point was defined, cannot make executable. Perhaps use -E to set one?");
+            return ExitCode::FAILURE;
+        }
+
         println!("Writing executable binary telda file");
 
         let mut obj = obj;

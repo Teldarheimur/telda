@@ -320,15 +320,15 @@ fn store_bi(r: &mut Registers, m: &mut dyn Memory) {
     m.write(addr, r.read_byte(r2));
 }
 fn store_br(r: &mut Registers, m: &mut dyn Memory) {
-    let (r1, r2) = arg_pair(r, m, Wr, Br);
-    let (r3, z) = arg_pair(r, m, Wr, u8::from);
+    let (r1, r2) = arg_pair(r, m, Wr, Wr);
+    let (r3, z) = arg_pair(r, m, Br, u8::from);
     if z != 0 {
         return r.trap(TrapMode::Invalid);
     }
-    let offset = r.read_wide(r3);
+    let offset = r.read_wide(r2);
 
     let addr = r.read_wide(r1) + offset;
-    m.write(addr, r.read_byte(r2));
+    m.write(addr, r.read_byte(r3));
 }
 fn store_wi(r: &mut Registers, m: &mut dyn Memory) {
     let (r1, r2) = arg_pair(r, m, Wr, Wr);
@@ -343,10 +343,10 @@ fn store_wr(r: &mut Registers, m: &mut dyn Memory) {
     if z != 0 {
         return r.trap(TrapMode::Invalid);
     }
-    let offset = r.read_wide(r3);
+    let offset = r.read_wide(r2);
 
     let addr = r.read_wide(r1) + offset;
-    m.write_wide(addr, r.read_wide(r2));
+    m.write_wide(addr, r.read_wide(r3));
 }
 fn load_bi(r: &mut Registers, m: &mut dyn Memory) {
     let (r1, r2) = arg_pair(r, m, Br, Wr);

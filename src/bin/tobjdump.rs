@@ -108,7 +108,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
 
     let mut relocs = BTreeMap::new();
     if show_relocations {
-        for &re in obj.relocation_table.as_ref().map(|s| s.0.iter()).into_iter().flatten() {
+        for &re in &obj.relocation_table.0 {
             relocs.insert(re.reference_location, re.symbol_index as usize);
         }
     }

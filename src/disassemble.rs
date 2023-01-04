@@ -197,9 +197,17 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
 
     let mut annotated_source = String::with_capacity(op.len()+21);
     write!(&mut annotated_source, "  {addr:04x}: ").unwrap();
-    for b in binary_code[addr as usize..next_instruction_location as usize].iter() {
-        write!(&mut annotated_source, " {b:02x}").unwrap();
+    
+    if let Some(slice) = binary_code.get(addr as usize..next_instruction_location as usize) {
+        for b in slice {
+            write!(&mut annotated_source, " {b:02x}").unwrap();
+        }
+    } else {
+        for _ in addr as usize..next_instruction_location as usize {
+            write!(&mut annotated_source, " __").unwrap();
+        }
     }
+
     for _ in 0..(4-(next_instruction_location-addr)) {
         write!(&mut annotated_source, "   ").unwrap();
     }

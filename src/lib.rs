@@ -8,7 +8,7 @@ pub mod u4;
 
 pub use self::u4::U4;
 
-pub const SEGMENT_ALIGNMENT: u16 = 0x10;
+pub const SEGMENT_ALIGNMENT: u16 = 0x04;
 
 pub const fn align(addr: u16, alignment: u16) -> u16 {
     let mask = alignment - 1;

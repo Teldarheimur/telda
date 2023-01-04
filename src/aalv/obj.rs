@@ -10,7 +10,7 @@ pub struct Object {
     pub entry: Option<Entry>,
     pub segs: BTreeMap<SegmentType, (u16, Vec<u8>)>,
     pub symbols: SymbolTable,
-    pub relocation_table: Option<RelocationTable>,
+    pub relocation_table: RelocationTable,
 }
 
 impl Object {
@@ -32,7 +32,7 @@ impl Object {
             entry: aalvur.read_section().transpose()?,
             segs,
             symbols: aalvur.read_section().transpose()?.unwrap_or_else(|| SymbolTable(Vec::new())),
-            relocation_table: aalvur.read_section().transpose()?,
+            relocation_table: aalvur.read_section().transpose()?.unwrap_or_else(|| RelocationTable(Vec::new())),
         };
 
         if aalvur.remaing_sections().any(|s| s.starts_with('_')) {
@@ -67,7 +67,7 @@ impl Object {
         if !symbols.0.is_empty() {
             aalvur.write_section(symbols)?;
         }
-        if let Some(relocation_table) = relocation_table {
+        if !relocation_table.0.is_empty() {
             aalvur.write_section(relocation_table)?;
         }
 
@@ -258,7 +258,7 @@ pub struct RelocationEntry {
     pub symbol_index: u16,
     // Future perhaps a format field again
 }
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Default)]
 pub struct RelocationTable(pub Vec<RelocationEntry>);
 
 impl Section for RelocationTable {
