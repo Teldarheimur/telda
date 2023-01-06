@@ -1,4 +1,4 @@
-use std::{env::args, io::{stdin, stdout, Write}, collections::{HashMap, VecDeque}, path::Path};
+use std::{io::{stdin, stdout, Write}, collections::{HashMap, VecDeque}, path::PathBuf, process::ExitCode};
 
 use telda2::{mem::{Memory, Lazy, Io}, cpu::*, disassemble::disassemble_instruction, aalv::obj::{Object, SymbolDefinition}};
 
@@ -30,20 +30,70 @@ impl Io for DbgIo {
     }
 }
 
-fn main() {
-    let arg = args().nth(1).unwrap();
-    let p = Path::new(&arg);
+use clap::Parser;
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Cli {
+    /// Binary to debug
+    #[arg(required = true)]
+    input_file: PathBuf,
+
+    /// Sets custom entry point for this to start execution at
+    ///
+    /// Can be either a hexadecimal address prefixed by 0x or a symbol
+    #[arg(short = 'E', long)]
+    entry: Option<String>,
+}
+
+
+fn main() -> ExitCode {
+    let Cli {
+        input_file,
+        entry,
+    } = Cli::parse();
 
     let mem;
     let ep;
     let mut labels = HashMap::new();
     let mut pos_to_labels = HashMap::new();
     {
-        let obj = Object::from_file(p).unwrap();
+        let obj = match Object::from_file(&input_file) {
+            Ok(o) => o,
+            Err(e) => {
+                eprintln!("could not read object file: {e}");
+
+                return ExitCode::FAILURE;
+            }
+        };
 
         mem = obj.get_flattened_memory();
 
-        ep = obj.entry.map(|e| e.1);
+        if let Some(entry) = entry {
+            if let Some(entry) = entry.strip_prefix("0x") {
+                let Ok(addr) = u16::from_str_radix(entry, 16) else {
+                    eprintln!("could not parse entry point in hex format");
+                    return ExitCode::FAILURE;
+                };
+                ep = Some(addr);
+            } else {
+                let mut ep_candidate = None;
+                for &SymbolDefinition { ref name, is_global, location, .. } in &obj.symbols.0 {
+                    if **name == *entry {
+                        if is_global {
+                            ep_candidate = Some(location);
+                            break;
+                        } else if ep_candidate.is_none() {
+                            ep_candidate = Some(location);
+                        }
+                    }
+                }
+                ep = ep_candidate;
+            }
+        } else {
+            ep = obj.entry.map(|e| e.1);
+        }
+
 
         for SymbolDefinition{name, location, is_global, ..} in obj.symbols.into_iter() {
             if is_global {
@@ -58,7 +108,11 @@ fn main() {
 
     let io = DbgIo { in_buf: VecDeque::new(), out_buf: Vec::new() };
     let mut mem = Lazy { io, mem };
-    let start = ep.unwrap_or_else(|| {eprintln!("warning: no _entry segment in binary, using 0 as startpoint"); 0});
+    let Some(start) = ep else {
+        eprintln!("no _entry section in binary, cannot start");
+        eprintln!("help: you can set a custom one with -E");
+        return ExitCode::FAILURE;
+    };
     let mut cpu = Cpu::new(start);
     let stdin = stdin();
     let mut input = String::new();
@@ -97,10 +151,10 @@ fn main() {
             }
 
             print!("+tdgb> ");
-            stdout().flush().unwrap();
+            stdout().flush().expect("stdout failed");
 
             input.clear();
-            stdin.read_line(&mut input).unwrap();
+            stdin.read_line(&mut input).expect("stdin failed");
 
             match input.trim() {
                 "q" | "quit" => break 'disassemble_loop,
@@ -115,10 +169,12 @@ fn main() {
                 }
                 l if l.starts_with("r ") => {
                     let arg = l[2..].trim();
-                    let addr = if let Some (arg) = arg.strip_prefix("0x") {
-                        u16::from_str_radix(arg, 16).unwrap()
-                    } else {
-                        arg.parse().unwrap()
+                    let addr = match parse_num(arg) {
+                        Ok(addr) => addr,
+                        Err(s) => {
+                            eprintln!("{s}");
+                            continue;
+                        }
                     };
                     println!(" = 0x{:02x} 0x{:02x} ...", mem.read(addr), mem.read(addr+1));
                 }
@@ -172,10 +228,12 @@ fn main() {
                 }
                 l if l.starts_with("g ") => {
                     let arg = l[2..].trim();
-                    let addr = if let Some(arg) = arg.strip_prefix("0x") {
-                        u16::from_str_radix(arg, 16).unwrap()
-                    } else {
-                        arg.parse().unwrap()
+                    let addr = match parse_num(arg) {
+                        Ok(addr) => addr,
+                        Err(s) => {
+                            eprintln!("{s}");
+                            continue;
+                        }
                     };
                     cpu.registers.program_counter = addr;
                     continue 'disassemble_loop;
@@ -192,6 +250,8 @@ fn main() {
         }
         current_nesting = next_nesting;
     }
+
+    ExitCode::SUCCESS
 }
 
 fn print_byte_register(name: &str, r: ByteRegister, reg: &Registers) {
@@ -202,4 +262,16 @@ fn print_byte_register(name: &str, r: ByteRegister, reg: &Registers) {
         print!(" {s:?}");
     }
     println!();
+}
+
+fn parse_num(num: &str) -> Result<u16, &'static str> {
+    Ok(if let Some(num) = num.strip_prefix("0x") {
+        u16::from_str_radix(num, 16).map_err(|_| "invalid hex number")?
+    } else if let Some(num) = num.strip_prefix("0o") {
+        u16::from_str_radix(num, 8).map_err(|_| "invalid octal number")?
+    } else if let Some(num) = num.strip_prefix("0b") {
+        u16::from_str_radix(num, 2).map_err(|_| "invalid binary number")?
+    } else {
+        num.parse().map_err(|_| "invalid decimal number")?
+    })
 }
