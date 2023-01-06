@@ -1,3 +1,5 @@
+// TODO: make this program not suck (and use clippy for better options)
+
 use std::env::args;
 
 use telda2::{self, aalv::obj::{Object, RelocationTable}};

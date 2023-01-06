@@ -13,8 +13,13 @@ pub enum ErrorType {
     UnknownInstruction(Box<str>),
     UnknownDirective(Box<str>),
     IoError(IoError),
-    Other(Box<str>),
+    UnexpectedEndOfString,
+    InvalidEscapeSequence,
+    InvalidEscapeCharacter(u8),
+    EscapeCharacterAtEnd,
     DoubleEntry,
+    CharacterLiteralTooLong,
+    Other(Box<str>),
 }
 
 #[derive(Debug)]
@@ -70,6 +75,11 @@ impl Display for Error {
                 ErrorType::UnknownInstruction(s) => write!(f, "unknown instruction: {s}"),
                 ErrorType::UnknownDirective(s) => write!(f, "unknown directive: {s}"),
                 ErrorType::IoError(e) => write!(f, "io error: {e}"),
+                ErrorType::UnexpectedEndOfString => write!(f, "unexpected end of string"),
+                ErrorType::InvalidEscapeSequence => write!(f, "invalid escape sequence"),
+                ErrorType::InvalidEscapeCharacter(b) => write!(f, "invalid escape character {:?}", *b as char),
+                ErrorType::EscapeCharacterAtEnd => write!(f, "escape_character_at_end"),
+                ErrorType::CharacterLiteralTooLong => write!(f, "character_literal_too_long"),
                 ErrorType::Other(s) => write!(f, "{s}"),
             }?;
             if next.is_some() {

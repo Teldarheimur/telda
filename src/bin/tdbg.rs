@@ -11,7 +11,7 @@ impl Io for DbgIo {
     fn write(&mut self, _addr: u8, val: u8) {
         if val == b'\n' {
             print!("STDOUT line: ");
-            std::io::stdout().write_all(&self.out_buf).unwrap();
+            std::io::stdout().write_all(&self.out_buf).expect("stdout failed");
             println!();
             self.out_buf.clear();
         } else {
@@ -21,12 +21,12 @@ impl Io for DbgIo {
     fn read(&mut self, _addr: u8) -> u8 {
         if self.in_buf.is_empty() {
             print!("STDIN requested: ");
-            stdout().flush().unwrap();
+            stdout().flush().expect("stdin failed");
             let mut buf = String::new();
-            std::io::stdin().read_line(&mut buf).unwrap();
+            std::io::stdin().read_line(&mut buf).expect("stdin failed");
             self.in_buf.extend(buf.into_bytes());
         }
-        self.in_buf.pop_front().unwrap()
+        self.in_buf.pop_front().expect("in_buf has just been filled, this should be impossible")
     }
 }
 

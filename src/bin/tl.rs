@@ -1,13 +1,14 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File},
-    io::{Seek, Write},
+    io::{Seek, Write, self},
     os::unix::prelude::PermissionsExt,
     path::PathBuf,
-    process::ExitCode,
+    process::ExitCode, num::ParseIntError,
 };
 
 use clap::Parser;
+use collect_result::CollectResult;
 use telda2::{
     aalv::obj::{
         Entry, Object, RelocationEntry, RelocationTable, SegmentType,
@@ -50,8 +51,31 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
-    let mut failure = false;
+    match tl_main() {
+        Ok(()) => ExitCode::SUCCESS,
+        Err(e) => {
+            match e {
+                Error::Io(e) => eprintln!("io error: {e}"),
+                Error::InvalidEntryPointFormat(e) => eprintln!("invalid entry point format: {e}"),
+                Error::NoEntryPoint => eprintln!("No entry point was defined, cannot make executable. Perhaps use -E to set one?"),
+                Error::ReferenceToNonExistantSegment => eprintln!("reference to a segment that was not defined"),
+                Error::ObjectFailure => (),
+            }
 
+            ExitCode::FAILURE
+        }
+    }
+}
+
+enum Error {
+    Io(io::Error),
+    InvalidEntryPointFormat(ParseIntError),
+    ObjectFailure,
+    NoEntryPoint,
+    ReferenceToNonExistantSegment,
+}
+
+fn tl_main() -> Result<(), Error> {
     let Cli {
         input_files,
         out,
@@ -62,11 +86,9 @@ fn main() -> ExitCode {
 
     let objects: Vec<_> = input_files
         .into_iter()
-        .map(|p| {
-            let obj = Object::from_file(&p).unwrap();
-            (p, obj)
-        })
-        .collect();
+        .map(|p| Object::from_file(&p).map(|o| (p, o)))
+        .collect_result()
+        .map_err(Error::Io)?;
 
     let mut segs_out = BTreeMap::new();
 
@@ -101,6 +123,8 @@ fn main() -> ExitCode {
     let mut undefined_references = Vec::new();
 
     let mut entry_point = None;
+
+    let mut failure = false;
 
     for (input_file, mut obj) in objects {
         entry_point = entry_point
@@ -167,7 +191,7 @@ fn main() -> ExitCode {
             let location_in_file = reference_location - obj.segs[&reference_segment].0;
             let reference_location = location_in_file + segs[&reference_segment].0;
 
-            let bytes = &mut obj.segs.get_mut(&reference_segment).unwrap().1;
+            let bytes = &mut obj.segs.get_mut(&reference_segment).ok_or(Error::ReferenceToNonExistantSegment)?.1;
 
             let symdef = &symbols_out[symbol_index];
             let undefined = matches!(symdef.segment_type, SegmentType::Unknown);
@@ -188,7 +212,7 @@ fn main() -> ExitCode {
         }
 
         for (t, (_, bytes)) in obj.segs {
-            let seg = segs.get_mut(&t).unwrap();
+            let seg = segs.get_mut(&t).expect("segment guaranteed to exist");
             seg.0 += bytes.len() as u16;
             seg.1.extend(bytes);
         }
@@ -213,7 +237,7 @@ fn main() -> ExitCode {
             continue;
         };
 
-        let seg = segs_out.get_mut(&reference_segment).unwrap();
+        let seg = segs_out.get_mut(&reference_segment).expect("would have been caught earlier");
         let index = (reference_location - seg.0) as usize;
         seg.1[index..index + 2].copy_from_slice(&symdef.location.to_le_bytes());
     }
@@ -221,7 +245,7 @@ fn main() -> ExitCode {
     if let Some(entry) = set_entry {
         entry_point = Some({
             if let Some(entry) = entry.strip_prefix("0x") {
-                Entry(SegmentType::Zero, u16::from_str_radix(entry, 16).unwrap())
+                Entry(SegmentType::Zero, u16::from_str_radix(entry, 16).map_err(Error::InvalidEntryPointFormat)?)
             } else if let Some(&pos) = global_symbols.get(&*entry) {
                 let sym = &symbols_out[pos];
                 Entry(sym.segment_type, sym.location)
@@ -235,7 +259,7 @@ fn main() -> ExitCode {
     };
 
     if failure {
-        return ExitCode::FAILURE;
+        return Err(Error::ObjectFailure);
     }
 
     let obj = Object {
@@ -248,29 +272,25 @@ fn main() -> ExitCode {
 
     if executable {
         if obj.entry.is_none() {
-            eprintln!("No entry point was defined, cannot make executable. Perhaps use -E to set one?");
-            return ExitCode::FAILURE;
+            return Err(Error::NoEntryPoint);
         }
-
-        println!("Writing executable binary telda file");
 
         let mut obj = obj;
         {
-            let mut file = File::create(&out).unwrap();
-            writeln!(file, "#!/bin/env t").unwrap();
+            let mut file = File::create(&out).map_err(Error::Io)?;
+            writeln!(file, "#!/bin/env t").map_err(Error::Io)?;
 
-            obj.file_offset = file.stream_position().unwrap();
+            obj.file_offset = file.stream_position().map_err(Error::Io)?;
         }
 
-        obj.write_to_file(&out).unwrap();
+        obj.write_to_file(&out).map_err(Error::Io)?;
 
-        let mut perms = fs::metadata(&out).unwrap().permissions();
+        let mut perms = fs::metadata(&out).map_err(Error::Io)?.permissions();
         perms.set_mode(perms.mode() | 0o111);
-        fs::set_permissions(&out, perms).unwrap();
+        fs::set_permissions(&out, perms).map_err(Error::Io)?;
     } else {
-        println!("Writing non-executable binary telda file");
-        obj.write_to_file(out).unwrap();
+        obj.write_to_file(out).map_err(Error::Io)?;
     }
 
-    ExitCode::SUCCESS
+    Ok(())
 }

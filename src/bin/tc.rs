@@ -1,7 +1,7 @@
 use std::{env::args, path::Path, process::ExitCode, collections::BTreeMap};
 
 use telda2::{
-    source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType, Wide, ProcessedSource},
+    source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType, Wide, ProcessedSource, Error as TeldaError},
     aalv::obj::{AALV_OBJECT_EXT, Object, SymbolTable, SymbolDefinition, RelocationTable, RelocationEntry, SegmentType},
 };
 
@@ -50,7 +50,7 @@ fn main() -> ExitCode {
                             labels[id].3
                         };
 
-                        write_data_operand(st, mem, read_label, dat_op).unwrap();
+                        write_data_operand(st, mem, read_label, dat_op);
                     }
                 }
             }
@@ -101,7 +101,14 @@ fn main() -> ExitCode {
         }
         aalvur.relocation_table = reloc_table;
 
-        aalvur.write_to_file(p.with_extension(AALV_OBJECT_EXT)).unwrap();
+        match aalvur.write_to_file(p.with_extension(AALV_OBJECT_EXT)) {
+            Ok(()) => (),
+            Err(e) => {
+                eprintln!("{}", TeldaError::from(e));
+                ret = ExitCode::FAILURE;
+                continue;
+            }
+        }
     }
     ret
 }

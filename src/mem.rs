@@ -45,11 +45,11 @@ impl Io for StdIo {
     fn read(&mut self, _addr: u8) -> u8 {
         // TODO: use the address
         let mut buf = [0];
-        stdin().read_exact(&mut buf).unwrap();
+        stdin().read_exact(&mut buf).expect("stdin failed");
         buf[0]
     }
     fn write(&mut self, _addr: u8, val: u8) {
-        stdout().write_all(&[val]).unwrap()
+        stdout().write_all(&[val]).expect("stdout failed")
     }
 }
 
