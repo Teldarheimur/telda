@@ -62,7 +62,7 @@ impl SourceLines<BufReader<File>> {
     }
 }
 
-fn parse_number(arg: &str) -> SourceOperand {
+fn parse_number(arg: &str) -> StdResult<SourceOperand, ErrorType> {
     let so;
     let mut radix = 10;
     let mut num = arg;
@@ -77,31 +77,32 @@ fn parse_number(arg: &str) -> SourceOperand {
         num = new_num;
     }
 
-    if arg.ends_with('b') {
-        num = &num[..num.len() - 1];
+    if let Some(num) = num.strip_suffix('b') {
         so = u8::from_str_radix(num, radix)
             .ok()
             .or_else(|| i8::from_str_radix(num, radix).ok().map(|b| b as u8))
             .map(SourceOperand::Byte);
-    } else if arg.ends_with('w') {
-        num = &num[..num.len() - 1];
+    } else if let Some(num) = num.strip_suffix('w') {
         so = u16::from_str_radix(num, radix)
             .ok()
             .or_else(|| i16::from_str_radix(num, radix).ok().map(|w| w as u16))
             .map(SourceOperand::Wide);
-    } else if arg.starts_with('\'') && arg.ends_with('\'') {
-        so = Some(SourceOperand::Byte(
-            parse_bytechar(arg[1..arg.len() - 1].as_bytes()).0,
-        ));
+    } else if let Some(arg) = arg.strip_prefix('\'').and_then(|a| a.strip_suffix('\'')) {
+        let (byte, rest) = parse_bytechar(arg.as_bytes())?;
+        if !rest.is_empty() {
+            return Err(ErrorType::CharacterLiteralTooLong);
+        }
+
+        so = Some(SourceOperand::Byte(byte));
     } else {
         so = i32::from_str_radix(num, radix).ok().map(SourceOperand::Number);
     }
 
-    if let Some(so) = so {
+    Ok(if let Some(so) = so {
         so
     } else {
         SourceOperand::Label(arg.to_owned())
-    }
+    })
 }
 
 impl<B: BufRead> SourceLines<B> {
@@ -131,7 +132,8 @@ impl<B: BufRead> SourceLines<B> {
                         let mut string = Vec::with_capacity(arg.len());
                         let mut arg = arg.as_bytes();
                         while !arg.is_empty() {
-                            let (c, rest) = parse_bytechar(arg);
+                            let (c, rest) = parse_bytechar(arg)
+                                .map_err(|et| Error::new(self.source.clone(), self.ln, et))?;
                             arg = rest;
                             string.push(c);
                         }
@@ -139,7 +141,7 @@ impl<B: BufRead> SourceLines<B> {
                     }),
                     "byte" => {
                         let b;
-                        match parse_number(arg) {
+                        match parse_number(arg).map_err(|et| Error::new(self.source.clone(), self.ln, et))? {
                             SourceOperand::Byte(n) => b = n,
                             SourceOperand::Number(n) => {
                                 if n > u8::MAX as i32 {
@@ -164,7 +166,7 @@ impl<B: BufRead> SourceLines<B> {
                     }
                     "wide" | "word" => {
                         let w;
-                        match parse_number(arg) {
+                        match parse_number(arg).map_err(|et| Error::new(self.source.clone(), self.ln, et))? {
                             SourceOperand::Wide(n) => w = Ok(n),
                             SourceOperand::Number(n) => {
                                 if n > u16::MAX as i32 {
@@ -243,7 +245,7 @@ impl<B: BufRead> SourceLines<B> {
                         "rf" => SourceOperand::WideReg(RF),
                         "rp" => SourceOperand::WideReg(RP),
                         "rh" => SourceOperand::WideReg(RH),
-                        arg => parse_number(arg),
+                        arg => parse_number(arg).map_err(|et| Error::new(self.source.clone(), self.ln, et))?,
                     });
                 }
 
@@ -255,10 +257,12 @@ impl<B: BufRead> SourceLines<B> {
     }
 }
 
-fn parse_bytechar(s: &[u8]) -> (u8, &[u8]) {
+fn parse_bytechar(s: &[u8]) -> StdResult<(u8, &[u8]), ErrorType> {
+    use self::ErrorType::*;
+
     let mut bs = s.iter();
-    match bs.next().unwrap() {
-        b'\\' => match bs.next().unwrap() {
+    Ok(match bs.next().ok_or(UnexpectedEndOfString)? {
+        b'\\' => match bs.next().ok_or(EscapeCharacterAtEnd)? {
             b'r' => (b'\r', &s[2..]),
             b't' => (b'\t', &s[2..]),
             b'n' => (b'\n', &s[2..]),
@@ -268,13 +272,13 @@ fn parse_bytechar(s: &[u8]) -> (u8, &[u8]) {
             b'\"' => (b'\"', &s[2..]),
             b'x' => (
                 u8::from_str_radix(String::from_utf8_lossy(&s[2..4]).as_ref(), 16)
-                    .expect("invalid escape argument"),
+                    .map_err(|_| InvalidEscapeSequence)?,
                 &s[4..],
             ),
-            c => panic!("invalid escape character \\{c}"),
+            c => return Err(InvalidEscapeCharacter(*c)),
         },
         &c => (c, &s[1..]),
-    }
+    })
 }
 
 impl<B: BufRead> Iterator for SourceLines<B> {
@@ -738,7 +742,7 @@ pub fn write_data_operand<F: FnOnce(usize, LabelRead) -> u16>(
     mem: &mut Vec<u8>,
     read_label: F,
     dat_op: DataOperand,
-) -> StdResult<(), &'static str> {
+) {
     use self::DataOperand::*;
 
     match dat_op {
@@ -806,8 +810,6 @@ pub fn write_data_operand<F: FnOnce(usize, LabelRead) -> u16>(
             mem.push(r3.0.pair(r4.0));
         }
     }
-
-    Ok(())
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]

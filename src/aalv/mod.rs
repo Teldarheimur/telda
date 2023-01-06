@@ -185,7 +185,7 @@ impl<F: Write + Seek> AalvWriter<F> {
 
 impl<F: Write> Drop for AalvWriter<F> {
     fn drop(&mut self) {
-        self.file.write_all(&[0]).unwrap();
+        self.file.write_all(&[0]).expect("writing of final álvur zero byte failed");
     }
 }
 

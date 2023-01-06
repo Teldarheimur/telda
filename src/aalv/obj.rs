@@ -75,7 +75,7 @@ impl Object {
     }
 
     pub fn get_flattened_memory(&self) -> Vec<u8> {
-        let size = self.segs.iter().map(|(_, &(o, ref v))| o as usize + v.len()).max().unwrap();
+        let size = self.segs.iter().map(|(_, &(o, ref v))| o as usize + v.len()).max().unwrap_or(0);
         let mut vec = vec![0; size];
 
         for &(offset, ref bytes) in self.segs.values() {

@@ -40,7 +40,14 @@ fn main() -> ExitCode {
         show_relocations,
     } = Cli::parse();
 
-    let obj = Object::from_file(&input_file).unwrap();
+    let obj = match Object::from_file(&input_file) {
+        Ok(o) => o,
+        Err(e) => {
+            eprintln!("could not read object file: {e}");
+
+            return ExitCode::FAILURE;
+        }
+    };
 
     if show_symbols {
         symbols(&obj);
@@ -137,7 +144,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
         printed_labels.insert(label_to_print);
 
         let mut location = if label_to_print == syms.len() {
-            obj.entry.unwrap().1
+            obj.entry.expect("this value would not happen if it is None").1
         } else {
             syms[label_to_print].location
         };
