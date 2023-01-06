@@ -1,4 +1,4 @@
-use std::io::{Read, Write, stdin, stdout};
+use std::io::{stdin, stdout, Read, Write};
 
 /// Memory below this address is used for IO mapping
 pub const IO_MAPPING_CUTOFF: u16 = 0xffe0;
@@ -14,7 +14,7 @@ pub trait Memory {
 
     fn read_wide(&mut self, addr: u16) -> u16 {
         let lower = self.read(addr);
-        let higher = self.read(addr+1);
+        let higher = self.read(addr + 1);
 
         u16::from_le_bytes([lower, higher])
     }
@@ -22,7 +22,7 @@ pub trait Memory {
         let [lower, higher] = val.to_le_bytes();
 
         self.write(addr, lower);
-        self.write(addr+1, higher);
+        self.write(addr + 1, higher);
     }
 }
 
@@ -61,7 +61,10 @@ pub struct Lazy<I> {
 
 impl Lazy<PanickingIO> {
     pub fn new_panicking(mem: Vec<u8>) -> Self {
-        Self { mem, io: PanickingIO }
+        Self {
+            mem,
+            io: PanickingIO,
+        }
     }
 }
 impl Lazy<StdIo> {

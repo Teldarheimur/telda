@@ -6,7 +6,10 @@ use std::{
     slice::Iter,
 };
 
-use crate::{cpu::{ByteRegister as BReg, WideRegister as WReg}, aalv::obj::Entry};
+use crate::{
+    aalv::obj::Entry,
+    cpu::{ByteRegister as BReg, WideRegister as WReg},
+};
 use crate::{aalv::obj::SegmentType, align, cpu::*, isa, SEGMENT_ALIGNMENT, U4};
 
 mod err;
@@ -46,15 +49,15 @@ pub struct SourceLines<B> {
     lines: Lines<B>,
     ln: LineNumber,
     source: Box<str>,
-    errors: Option<Error>
+    errors: Option<Error>,
 }
 
 fn add_error_opt(errors: &mut Option<Error>, error: Error) {
     if let Some(cur_error) = errors.take() {
-            *errors = Some(cur_error.chain(error));
-        } else {
-            *errors = Some(error);
-        }
+        *errors = Some(cur_error.chain(error));
+    } else {
+        *errors = Some(error);
+    }
 }
 
 impl<B> SourceLines<B> {
@@ -112,7 +115,9 @@ fn parse_number(arg: &str) -> StdResult<SourceOperand, ErrorType> {
 
         so = Some(SourceOperand::Byte(byte));
     } else {
-        so = i32::from_str_radix(num, radix).ok().map(SourceOperand::Number);
+        so = i32::from_str_radix(num, radix)
+            .ok()
+            .map(SourceOperand::Number);
     }
 
     Ok(if let Some(so) = so {
@@ -148,7 +153,11 @@ impl<B: BufRead> SourceLines<B> {
             let line = line?;
             let line = line.trim();
 
-            if line.is_empty() || line.starts_with(';') || line.starts_with("//") || line.starts_with('#') {
+            if line.is_empty()
+                || line.starts_with(';')
+                || line.starts_with("//")
+                || line.starts_with('#')
+            {
                 SourceLine::Comment
             } else if let Some(line) = line.strip_prefix('.') {
                 let (line_i, arg_i) = line
@@ -170,7 +179,9 @@ impl<B: BufRead> SourceLines<B> {
                     }),
                     "byte" => {
                         let b;
-                        match parse_number(arg).map_err(|et| Error::new(self.source.clone(), self.ln, et))? {
+                        match parse_number(arg)
+                            .map_err(|et| Error::new(self.source.clone(), self.ln, et))?
+                        {
                             SourceOperand::Byte(n) => b = n,
                             SourceOperand::Number(n) => {
                                 if n > u8::MAX as i32 {
@@ -195,7 +206,9 @@ impl<B: BufRead> SourceLines<B> {
                     }
                     "wide" | "word" => {
                         let w;
-                        match parse_number(arg).map_err(|et| Error::new(self.source.clone(), self.ln, et))? {
+                        match parse_number(arg)
+                            .map_err(|et| Error::new(self.source.clone(), self.ln, et))?
+                        {
                             SourceOperand::Wide(n) => w = Ok(n),
                             SourceOperand::Number(n) => {
                                 if n > u16::MAX as i32 {
@@ -274,7 +287,8 @@ impl<B: BufRead> SourceLines<B> {
                         "rf" => SourceOperand::WideReg(RF),
                         "rp" => SourceOperand::WideReg(RP),
                         "rh" => SourceOperand::WideReg(RH),
-                        arg => parse_number(arg).map_err(|et| Error::new(self.source.clone(), self.ln, et))?,
+                        arg => parse_number(arg)
+                            .map_err(|et| Error::new(self.source.clone(), self.ln, et))?,
                     });
                 }
 
@@ -397,16 +411,19 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
                 let st = match st {
                     Internal | Global => st,
                     Reference => {
-                        add_error_opt(&mut errors, Error::new(
-                            src.clone(),
-                            0,
-                            ErrorType::Other(
-                                format!(
+                        add_error_opt(
+                            &mut errors,
+                            Error::new(
+                                src.clone(),
+                                0,
+                                ErrorType::Other(
+                                    format!(
                                     "Symbol `{l}' is declared as reference but defined at {addr}"
                                 )
-                                .into_boxed_str(),
+                                    .into_boxed_str(),
+                                ),
                             ),
-                        ));
+                        );
                         continue;
                     }
                 };
@@ -449,14 +466,9 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
             let offset = dls.get(&addr.0).map(|dl| dl.start).unwrap_or(0);
             Entry(addr.0, addr.1 + offset)
         });
-    
-        Ok(ProcessedSource {
-            labels,
-            dls,
-            entry,
-        })
-    }
 
+        Ok(ProcessedSource { labels, dls, entry })
+    }
 }
 fn inner_process<B: BufRead>(
     mut lines: SourceLines<B>,
@@ -479,7 +491,11 @@ fn inner_process<B: BufRead>(
                     "text" => SegmentType::Text,
                     "heap" => SegmentType::Heap,
                     seg => {
-                        return Err(Error::new(src.clone(), ln, ErrorType::UnknownSegment(seg.into())))
+                        return Err(Error::new(
+                            src.clone(),
+                            ln,
+                            ErrorType::UnknownSegment(seg.into()),
+                        ))
                     }
                 };
 
@@ -501,7 +517,11 @@ fn inner_process<B: BufRead>(
                 else {
                     return Err(Error::new(src.clone(), ln, ErrorType::UnknownInstruction(s.into_boxed_str())));
                 };
-                state.add_line(*current_segment, DataLine::Ins(opcode, dat_op), 1 + dat_op.size());
+                state.add_line(
+                    *current_segment,
+                    DataLine::Ins(opcode, dat_op),
+                    1 + dat_op.size(),
+                );
             }
             SourceLine::DirByte(b) => {
                 state.add_line(*current_segment, DataLine::Raw(vec![b]), 1);
@@ -509,9 +529,7 @@ fn inner_process<B: BufRead>(
             SourceLine::DirWide(w) => {
                 let wide = match w {
                     Ok(w) => Wide::Number(w),
-                    Err(l) => {
-                        Wide::Label(symbols.get_label(&l, SourceLocation::new(&src, ln)))
-                    }
+                    Err(l) => Wide::Label(symbols.get_label(&l, SourceLocation::new(&src, ln))),
                 };
                 state.add_line(*current_segment, DataLine::Wide(wide), 2);
             }
@@ -556,11 +574,17 @@ fn inner_process<B: BufRead>(
         Ok(())
     }
 
-
     let mut current_segment = SegmentType::Unknown;
 
     while let Some((ln, line)) = lines.parse_next_line() {
-        match inner_process_line(&lines.source, ln, line, &mut current_segment, state, symbols) {
+        match inner_process_line(
+            &lines.source,
+            ln,
+            line,
+            &mut current_segment,
+            state,
+            symbols,
+        ) {
             Ok(()) => (),
             Err(e) => lines.add_error(e),
         }

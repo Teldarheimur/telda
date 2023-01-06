@@ -1,4 +1,8 @@
-use std::{io::{self, Write, BufRead, Seek, ErrorKind, BufReader, SeekFrom, Result, Read, BufWriter}, path::Path, fs::File};
+use std::{
+    fs::File,
+    io::{self, BufRead, BufReader, BufWriter, ErrorKind, Read, Result, Seek, SeekFrom, Write},
+    path::Path,
+};
 
 const AALV_MAGIC: &str = "álvur2\n";
 
@@ -11,7 +15,10 @@ pub fn write_aalv_file<P: AsRef<Path>>(path: P) -> Result<AalvWriter<BufWriter<F
     write_aalv_file_with_offset(path, 0)
 }
 
-pub fn write_aalv_file_with_offset<P: AsRef<Path>>(path: P, file_offset: u64) -> Result<AalvWriter<BufWriter<File>>> {
+pub fn write_aalv_file_with_offset<P: AsRef<Path>>(
+    path: P,
+    file_offset: u64,
+) -> Result<AalvWriter<BufWriter<File>>> {
     let f = File::options().create(true).write(true).open(path)?;
     f.set_len(file_offset)?;
     AalvWriter::new(BufWriter::new(f), file_offset)
@@ -30,21 +37,21 @@ impl<F: BufRead + Seek> AalvReader<F> {
             file,
             sections: Vec::new(),
         };
-        new.read_magic()
-            .map_err(|e| {
-                if e.kind() == io::ErrorKind::UnexpectedEof {
-                    io::Error::new(ErrorKind::InvalidData, "could not find magic")
-                } else {
-                    e
-                }
-            })?;
+        new.read_magic().map_err(|e| {
+            if e.kind() == io::ErrorKind::UnexpectedEof {
+                io::Error::new(ErrorKind::InvalidData, "could not find magic")
+            } else {
+                e
+            }
+        })?;
         new.read_section_headers()?;
 
         Ok(new)
     }
 
     pub fn read_section<S: Section>(&mut self) -> Option<Result<S>> {
-        let id = self.sections
+        let id = self
+            .sections
             .iter()
             .position(|(s, _pos, _size)| &**s == S::NAME)?;
 
@@ -60,10 +67,8 @@ impl<F: BufRead + Seek> AalvReader<F> {
         };
         Some(S::read(read_window))
     }
-    pub fn remaing_sections(&self) -> impl Iterator<Item=&str> {
-        self.sections
-            .iter()
-            .map(|(s, _, _)| &**s)
+    pub fn remaing_sections(&self) -> impl Iterator<Item = &str> {
+        self.sections.iter().map(|(s, _, _)| &**s)
     }
 
     fn read_magic(&mut self) -> Result<()> {
@@ -84,16 +89,19 @@ impl<F: BufRead + Seek> AalvReader<F> {
         }
 
         Ok(())
-   }
+    }
 
-   fn read_section_headers(&mut self) -> Result<()> {
+    fn read_section_headers(&mut self) -> Result<()> {
         let mut name_buf = Vec::new();
         loop {
             name_buf.clear();
             self.file.read_until(b'\0', &mut name_buf)?;
 
             if name_buf.pop() != Some(0) {
-                return Err(io::Error::new(ErrorKind::InvalidData, "name did not end in a zero byte"));
+                return Err(io::Error::new(
+                    ErrorKind::InvalidData,
+                    "name did not end in a zero byte",
+                ));
             }
 
             let name: Box<str> = String::from_utf8_lossy(&name_buf).into();
@@ -115,7 +123,7 @@ impl<F: BufRead + Seek> AalvReader<F> {
         }
 
         Ok(())
-   }
+    }
 }
 
 struct ReadWindow<R: Read> {
@@ -135,7 +143,10 @@ impl<R: Read> Read for ReadWindow<R> {
     }
     fn read_exact(&mut self, buf: &mut [u8]) -> Result<()> {
         if buf.len() > self.length {
-            return Err(io::Error::new(io::ErrorKind::UnexpectedEof, "read window is smaller"));
+            return Err(io::Error::new(
+                io::ErrorKind::UnexpectedEof,
+                "read window is smaller",
+            ));
         }
 
         self.reader.read_exact(buf)?;
@@ -162,7 +173,10 @@ impl<F: Write + Seek> AalvWriter<F> {
     }
 
     pub fn write_section<S: Section>(&mut self, segment: &S) -> Result<()> {
-        assert!(!S::NAME.contains('\0'), "section name may not contain null bytes");
+        assert!(
+            !S::NAME.contains('\0'),
+            "section name may not contain null bytes"
+        );
         assert_ne!(!S::NAME.len(), 0, "section name may not be empty");
 
         write!(self.file, "{}\0\0\0", S::NAME)?;
@@ -185,7 +199,9 @@ impl<F: Write + Seek> AalvWriter<F> {
 
 impl<F: Write> Drop for AalvWriter<F> {
     fn drop(&mut self) {
-        self.file.write_all(&[0]).expect("writing of final álvur zero byte failed");
+        self.file
+            .write_all(&[0])
+            .expect("writing of final álvur zero byte failed");
     }
 }
 
@@ -218,11 +234,11 @@ pub trait Section: Sized {
 pub mod obj;
 pub mod sample {
     use super::Section;
-    use std::io::{Write, Read, Result};
+    use std::io::{Read, Result, Write};
 
     #[repr(transparent)]
     pub struct Name(pub String);
-    
+
     impl Section for Name {
         const NAME: &'static str = "name";
 

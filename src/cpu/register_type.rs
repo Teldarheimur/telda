@@ -54,7 +54,7 @@ impl Display for ByteRegister {
             0 => write!(f, "r0b"),
             n @ 1..=10 => write!(f, "r{}{}", (n + 1) >> 1, if n & 1 == 0 { "h" } else { "l" }),
             n @ 11..=15 => write!(f, "r{}b", n + 6 - 11),
-            _ => unreachable!("no such register")
+            _ => unreachable!("no such register"),
         }
     }
 }
@@ -67,7 +67,7 @@ impl Display for WideRegister {
             13 => write!(f, "rf"),
             14 => write!(f, "rp"),
             15 => write!(f, "rh"),
-            _ => unreachable!("no such register")
+            _ => unreachable!("no such register"),
         }
     }
 }

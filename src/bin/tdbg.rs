@@ -1,6 +1,16 @@
-use std::{io::{stdin, stdout, Write}, collections::{HashMap, VecDeque}, path::PathBuf, process::ExitCode};
+use std::{
+    collections::{HashMap, VecDeque},
+    io::{stdin, stdout, Write},
+    path::PathBuf,
+    process::ExitCode,
+};
 
-use telda2::{mem::{Memory, Lazy, Io}, cpu::*, disassemble::disassemble_instruction, aalv::obj::{Object, SymbolDefinition}};
+use telda2::{
+    aalv::obj::{Object, SymbolDefinition},
+    cpu::*,
+    disassemble::disassemble_instruction,
+    mem::{Io, Lazy, Memory},
+};
 
 struct DbgIo {
     in_buf: VecDeque<u8>,
@@ -11,7 +21,9 @@ impl Io for DbgIo {
     fn write(&mut self, _addr: u8, val: u8) {
         if val == b'\n' {
             print!("STDOUT line: ");
-            std::io::stdout().write_all(&self.out_buf).expect("stdout failed");
+            std::io::stdout()
+                .write_all(&self.out_buf)
+                .expect("stdout failed");
             println!();
             self.out_buf.clear();
         } else {
@@ -26,7 +38,9 @@ impl Io for DbgIo {
             std::io::stdin().read_line(&mut buf).expect("stdin failed");
             self.in_buf.extend(buf.into_bytes());
         }
-        self.in_buf.pop_front().expect("in_buf has just been filled, this should be impossible")
+        self.in_buf
+            .pop_front()
+            .expect("in_buf has just been filled, this should be impossible")
     }
 }
 
@@ -46,12 +60,8 @@ struct Cli {
     entry: Option<String>,
 }
 
-
 fn main() -> ExitCode {
-    let Cli {
-        input_file,
-        entry,
-    } = Cli::parse();
+    let Cli { input_file, entry } = Cli::parse();
 
     let mem;
     let ep;
@@ -78,7 +88,13 @@ fn main() -> ExitCode {
                 ep = Some(addr);
             } else {
                 let mut ep_candidate = None;
-                for &SymbolDefinition { ref name, is_global, location, .. } in &obj.symbols.0 {
+                for &SymbolDefinition {
+                    ref name,
+                    is_global,
+                    location,
+                    ..
+                } in &obj.symbols.0
+                {
                     if **name == *entry {
                         if is_global {
                             ep_candidate = Some(location);
@@ -94,8 +110,13 @@ fn main() -> ExitCode {
             ep = obj.entry.map(|e| e.1);
         }
 
-
-        for SymbolDefinition{name, location, is_global, ..} in obj.symbols.into_iter() {
+        for SymbolDefinition {
+            name,
+            location,
+            is_global,
+            ..
+        } in obj.symbols.into_iter()
+        {
             if is_global {
                 labels.insert(name.clone(), location);
                 pos_to_labels.insert(location, name);
@@ -106,7 +127,10 @@ fn main() -> ExitCode {
         }
     }
 
-    let io = DbgIo { in_buf: VecDeque::new(), out_buf: Vec::new() };
+    let io = DbgIo {
+        in_buf: VecDeque::new(),
+        out_buf: Vec::new(),
+    };
     let mut mem = Lazy { io, mem };
     let Some(start) = ep else {
         eprintln!("no _entry section in binary, cannot start");
@@ -120,7 +144,9 @@ fn main() -> ExitCode {
     let mut current_nesting = 0;
 
     'disassemble_loop: loop {
-        let dins = disassemble_instruction(cpu.registers.program_counter, &mem.mem, |p| pos_to_labels.get(&p).map(|s| &**s));
+        let dins = disassemble_instruction(cpu.registers.program_counter, &mem.mem, |p| {
+            pos_to_labels.get(&p).map(|s| &**s)
+        });
 
         if cpu.registers.trap {
             println!("handled trap encountered!");
@@ -176,7 +202,11 @@ fn main() -> ExitCode {
                             continue;
                         }
                     };
-                    println!(" = 0x{:02x} 0x{:02x} ...", mem.read(addr), mem.read(addr+1));
+                    println!(
+                        " = 0x{:02x} 0x{:02x} ...",
+                        mem.read(addr),
+                        mem.read(addr + 1)
+                    );
                 }
                 "r0b" => print_byte_register("r0b", R0B, &cpu.registers),
                 "r1l" => print_byte_register("r1l", R1L, &cpu.registers),

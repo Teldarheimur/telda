@@ -33,7 +33,12 @@ pub struct Error {
 
 impl Error {
     pub(super) fn new(s: impl Into<Box<str>>, ln: LineNumber, error: ErrorType) -> Self {
-        Error { source: s.into(), ln, error, next: None, }
+        Error {
+            source: s.into(),
+            ln,
+            error,
+            next: None,
+        }
     }
     pub fn chain(mut self, second: Self) -> Self {
         self.chain_mut(second);
@@ -65,9 +70,14 @@ impl ErrorTrait for Error {
 impl Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let mut cur = Some(self);
-        
+
         while let Some(e) = cur {
-            let Self { source, ln, error, next } = e;
+            let Self {
+                source,
+                ln,
+                error,
+                next,
+            } = e;
 
             if *ln == 0 {
                 write!(f, "{source}: ")?;
@@ -82,7 +92,9 @@ impl Display for Error {
                 ErrorType::IoError(e) => write!(f, "io error: {e}"),
                 ErrorType::UnexpectedEndOfString => write!(f, "unexpected end of string"),
                 ErrorType::InvalidEscapeSequence => write!(f, "invalid escape sequence"),
-                ErrorType::InvalidEscapeCharacter(b) => write!(f, "invalid escape character {:?}", *b as char),
+                ErrorType::InvalidEscapeCharacter(b) => {
+                    write!(f, "invalid escape character {:?}", *b as char)
+                }
                 ErrorType::EscapeCharacterAtEnd => write!(f, "unfinished escape at end"),
                 ErrorType::CharacterLiteralTooLong => write!(f, "character literal too long"),
                 ErrorType::IncorrectOperands(s) => write!(f, "incorrect operands, expected {s}"),

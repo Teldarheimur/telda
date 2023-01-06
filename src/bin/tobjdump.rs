@@ -1,7 +1,18 @@
-use std::{path::PathBuf, collections::{HashMap, HashSet, VecDeque, BTreeMap}, process::ExitCode, borrow::Cow};
+use std::{
+    borrow::Cow,
+    collections::{BTreeMap, HashMap, HashSet, VecDeque},
+    path::PathBuf,
+    process::ExitCode,
+};
 
-use clap::{Parser, ArgGroup};
-use telda2::{aalv::{obj::{Object, SymbolTable, SegmentType}, Section}, disassemble::{DisassembledInstruction, disassemble_instruction}};
+use clap::{ArgGroup, Parser};
+use telda2::{
+    aalv::{
+        obj::{Object, SegmentType, SymbolTable},
+        Section,
+    },
+    disassemble::{disassemble_instruction, DisassembledInstruction},
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -21,7 +32,7 @@ struct Cli {
     /// If disassembling, sets the symbols to start disassembling from seperated by commas
     #[arg(short = 'D', long, requires = "disassemble", value_name = "SYMBOLS")]
     disassemble_from: Option<String>,
-    
+
     /// Whether to show the symbol table
     #[arg(short = 't', long = "syms", group = "show")]
     show_symbols: bool,
@@ -68,7 +79,9 @@ fn symbols(obj: &Object) {
                 print!("GLOBAL ");
             }
             match sym_def.segment_type {
-                SegmentType::Unknown => println!("{} = UNDEFINED ({:02x})", sym_def.name, sym_def.location),
+                SegmentType::Unknown => {
+                    println!("{} = UNDEFINED ({:02x})", sym_def.name, sym_def.location)
+                }
                 stype => println!("{} = {:02x} in {:?}", sym_def.name, sym_def.location, stype),
             }
         }
@@ -84,18 +97,25 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
         symbols = start_symbol
             .split(',')
             .map(|s| s.trim())
-            .map(|name| syms.iter().position(|s| &*s.name == name).expect("start symbol did not exist in symbol table"))
+            .map(|name| {
+                syms.iter()
+                    .position(|s| &*s.name == name)
+                    .expect("start symbol did not exist in symbol table")
+            })
             .collect();
     } else {
         let entry_id = obj.symbols.0.len();
-        symbols = obj.entry
+        symbols = obj
+            .entry
             .map(|_| entry_id)
             .into_iter()
-            .chain(
-                obj.symbols.0.iter()
-                    .enumerate()
-                    .filter_map(|(i, s)| if s.is_global { Some(i) } else { None })
-            )
+            .chain(obj.symbols.0.iter().enumerate().filter_map(|(i, s)| {
+                if s.is_global {
+                    Some(i)
+                } else {
+                    None
+                }
+            }))
             .collect();
     }
 
@@ -124,7 +144,9 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
     let mut labels_to_print = symbols;
 
     let get_name = |id: usize| {
-        if id == syms.len() { return Cow::Borrowed(".entry") }
+        if id == syms.len() {
+            return Cow::Borrowed(".entry");
+        }
 
         let name = &*syms[id].name;
         if name.is_empty() {
@@ -144,27 +166,33 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
         printed_labels.insert(label_to_print);
 
         let mut location = if label_to_print == syms.len() {
-            obj.entry.expect("this value would not happen if it is None").1
+            obj.entry
+                .expect("this value would not happen if it is None")
+                .1
         } else {
             syms[label_to_print].location
         };
 
         'labelled_block: loop {
             let mut label_name = Cow::Borrowed("");
-            let DisassembledInstruction { annotated_source, ends_block, nesting_difference: _, next_instruction_location }
-                = disassemble_instruction(location, &mem, |p| {
-                    let l = pos_to_labels.get(&p).copied();
-                    if let Some(l) = l {
-                        if !printed_labels.contains(&l) {
-                            labels_to_print.push_back(l);
-                        }
-
-                        label_name = get_name(l);
-                        Some(&label_name)
-                    } else {
-                        None
+            let DisassembledInstruction {
+                annotated_source,
+                ends_block,
+                nesting_difference: _,
+                next_instruction_location,
+            } = disassemble_instruction(location, &mem, |p| {
+                let l = pos_to_labels.get(&p).copied();
+                if let Some(l) = l {
+                    if !printed_labels.contains(&l) {
+                        labels_to_print.push_back(l);
                     }
-                });
+
+                    label_name = get_name(l);
+                    Some(&label_name)
+                } else {
+                    None
+                }
+            });
 
             if show_relocations {
                 for (&loc, &sym) in relocs.range(location..next_instruction_location) {

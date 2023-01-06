@@ -1,18 +1,18 @@
 use std::{
     collections::{BTreeMap, HashMap},
     fs::{self, File},
-    io::{Seek, Write, self},
+    io::{self, Seek, Write},
+    num::ParseIntError,
     os::unix::prelude::PermissionsExt,
     path::PathBuf,
-    process::ExitCode, num::ParseIntError,
+    process::ExitCode,
 };
 
 use clap::Parser;
 use collect_result::CollectResult;
 use telda2::{
     aalv::obj::{
-        Entry, Object, RelocationEntry, RelocationTable, SegmentType,
-        SymbolDefinition, SymbolTable,
+        Entry, Object, RelocationEntry, RelocationTable, SegmentType, SymbolDefinition, SymbolTable,
     },
     align, SEGMENT_ALIGNMENT,
 };
@@ -127,8 +127,10 @@ fn tl_main() -> Result<(), Error> {
     let mut failure = false;
 
     for (input_file, mut obj) in objects {
-        entry_point = entry_point
-            .or_else(|| obj.entry.map(|Entry(st, ep)| Entry(st, ep - obj.segs[&st].0 + segs[&st].0)));
+        entry_point = entry_point.or_else(|| {
+            obj.entry
+                .map(|Entry(st, ep)| Entry(st, ep - obj.segs[&st].0 + segs[&st].0))
+        });
 
         let mut file_symbol_to_out_symbol = Vec::new();
         let reloc;
@@ -191,7 +193,11 @@ fn tl_main() -> Result<(), Error> {
             let location_in_file = reference_location - obj.segs[&reference_segment].0;
             let reference_location = location_in_file + segs[&reference_segment].0;
 
-            let bytes = &mut obj.segs.get_mut(&reference_segment).ok_or(Error::ReferenceToNonExistantSegment)?.1;
+            let bytes = &mut obj
+                .segs
+                .get_mut(&reference_segment)
+                .ok_or(Error::ReferenceToNonExistantSegment)?
+                .1;
 
             let symdef = &symbols_out[symbol_index];
             let undefined = matches!(symdef.segment_type, SegmentType::Unknown);
@@ -237,7 +243,9 @@ fn tl_main() -> Result<(), Error> {
             continue;
         };
 
-        let seg = segs_out.get_mut(&reference_segment).expect("would have been caught earlier");
+        let seg = segs_out
+            .get_mut(&reference_segment)
+            .expect("would have been caught earlier");
         let index = (reference_location - seg.0) as usize;
         seg.1[index..index + 2].copy_from_slice(&symdef.location.to_le_bytes());
     }
@@ -245,7 +253,10 @@ fn tl_main() -> Result<(), Error> {
     if let Some(entry) = set_entry {
         entry_point = Some({
             if let Some(entry) = entry.strip_prefix("0x") {
-                Entry(SegmentType::Zero, u16::from_str_radix(entry, 16).map_err(Error::InvalidEntryPointFormat)?)
+                Entry(
+                    SegmentType::Zero,
+                    u16::from_str_radix(entry, 16).map_err(Error::InvalidEntryPointFormat)?,
+                )
             } else if let Some(&pos) = global_symbols.get(&*entry) {
                 let sym = &symbols_out[pos];
                 Entry(sym.segment_type, sym.location)
@@ -267,7 +278,7 @@ fn tl_main() -> Result<(), Error> {
         entry: entry_point,
         symbols: SymbolTable(symbols_out),
         relocation_table: RelocationTable(reloc_out),
-        .. Object::default()
+        ..Object::default()
     };
 
     if executable {

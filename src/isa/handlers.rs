@@ -1,7 +1,16 @@
-use crate::{cpu::{Registers, TrapMode, ByteRegister as Br, WideRegister as Wr, Cpu, R0}, mem::Memory, U4};
+use crate::{
+    cpu::{ByteRegister as Br, Cpu, Registers, TrapMode, WideRegister as Wr, R0},
+    mem::Memory,
+    U4,
+};
 
 #[inline]
-pub fn arg_pair<T, U, F1: FnOnce(U4) -> T, F2: FnOnce(U4) -> U>(r: &mut Registers, m: &mut dyn Memory, f1: F1, f2: F2) -> (T, U) {
+pub fn arg_pair<T, U, F1: FnOnce(U4) -> T, F2: FnOnce(U4) -> U>(
+    r: &mut Registers,
+    m: &mut dyn Memory,
+    f1: F1,
+    f2: F2,
+) -> (T, U) {
     let operand = m.read(r.program_counter);
     r.program_counter += 1;
     let (a, b) = U4::paired(operand);
@@ -101,14 +110,19 @@ fn ctf(r: &mut Registers, _: &mut dyn Memory) {
 fn reth(r: &mut Registers, m: &mut dyn Memory) {
     if !r.trap {
         r.trap(TrapMode::IllegalHandlerReturn);
-        return
+        return;
     }
     Cpu::pop_registers(r, m);
     r.trap = false;
 }
 
 #[inline]
-fn binop_b(r: &mut Registers, m: &mut dyn Memory, binop: fn(u8, u8) -> (u8, bool), ibinop: fn(i8, i8) -> (i8, bool)) {
+fn binop_b(
+    r: &mut Registers,
+    m: &mut dyn Memory,
+    binop: fn(u8, u8) -> (u8, bool),
+    ibinop: fn(i8, i8) -> (i8, bool),
+) {
     let (r1, r2) = arg_pair(r, m, Br, Br);
     let (r3, r4) = arg_pair(r, m, Br, u8::from);
 
@@ -128,7 +142,12 @@ fn binop_b(r: &mut Registers, m: &mut dyn Memory, binop: fn(u8, u8) -> (u8, bool
     r.write_byte(r1, res);
 }
 #[inline]
-fn binop_w(r: &mut Registers, m: &mut dyn Memory, binop: fn(u16, u16) -> (u16, bool), ibinop: fn(i16, i16) -> (i16, bool)) {
+fn binop_w(
+    r: &mut Registers,
+    m: &mut dyn Memory,
+    binop: fn(u16, u16) -> (u16, bool),
+    ibinop: fn(i16, i16) -> (i16, bool),
+) {
     let (r1, r2) = arg_pair(r, m, Wr, Wr);
     let (r3, r4) = arg_pair(r, m, Wr, u8::from);
 
@@ -185,16 +204,36 @@ fn shl_w(r: &mut Registers, m: &mut dyn Memory) {
     binop_w(r, m, |x, y| (x << y, false), |x, y| (x << y, false));
 }
 fn asr_b(r: &mut Registers, m: &mut dyn Memory) {
-    binop_b(r, m, |x, y| (((x as i8) >> y) as u8, false), |x, y| (x >> y, false));
+    binop_b(
+        r,
+        m,
+        |x, y| (((x as i8) >> y) as u8, false),
+        |x, y| (x >> y, false),
+    );
 }
 fn asr_w(r: &mut Registers, m: &mut dyn Memory) {
-    binop_w(r, m, |x, y| (((x as i16) >> y) as u16, false), |x, y| (x >> y, false));
+    binop_w(
+        r,
+        m,
+        |x, y| (((x as i16) >> y) as u16, false),
+        |x, y| (x >> y, false),
+    );
 }
 fn lsr_b(r: &mut Registers, m: &mut dyn Memory) {
-    binop_b(r, m, |x, y| (x >> y, false), |x, y| (((x as u8) >> y) as i8, false));
+    binop_b(
+        r,
+        m,
+        |x, y| (x >> y, false),
+        |x, y| (((x as u8) >> y) as i8, false),
+    );
 }
 fn lsr_w(r: &mut Registers, m: &mut dyn Memory) {
-    binop_w(r, m, |x, y| (x >> y, false), |x, y| (((x as u16) >> y) as i16, false));
+    binop_w(
+        r,
+        m,
+        |x, y| (x >> y, false),
+        |x, y| (((x as u16) >> y) as i16, false),
+    );
 }
 fn mul_b(r: &mut Registers, m: &mut dyn Memory) {
     let (r1, r2) = arg_pair(r, m, Br, Br);

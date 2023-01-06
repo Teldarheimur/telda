@@ -1,6 +1,9 @@
 use std::{path::PathBuf, process::ExitCode};
 
-use telda2::{self, aalv::obj::{Object, RelocationTable}};
+use telda2::{
+    self,
+    aalv::obj::{Object, RelocationTable},
+};
 
 use clap::Parser;
 
@@ -20,10 +23,7 @@ struct Cli {
 }
 
 fn main() -> ExitCode {
-    let Cli {
-        input_file,
-        all,
-    } = Cli::parse();
+    let Cli { input_file, all } = Cli::parse();
 
     let mut obj = match Object::from_file(&input_file) {
         Ok(o) => o,
@@ -41,7 +41,11 @@ fn main() -> ExitCode {
         obj.relocation_table = RelocationTable::default();
         obj.symbols.0.clear();
     } else {
-        obj.symbols.mutate(|name, &mut is_global, _, _| if !is_global { *name = "".into() });
+        obj.symbols.mutate(|name, &mut is_global, _, _| {
+            if !is_global {
+                *name = "".into()
+            }
+        });
     }
     match obj.write_to_file(&input_file) {
         Ok(()) => ExitCode::SUCCESS,

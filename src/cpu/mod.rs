@@ -1,4 +1,8 @@
-use crate::{mem::{Memory, IO_MAPPING_CUTOFF}, isa::OP_HANDLERS, U4};
+use crate::{
+    isa::OP_HANDLERS,
+    mem::{Memory, IO_MAPPING_CUTOFF},
+    U4,
+};
 
 mod register_type;
 
@@ -11,7 +15,7 @@ pub struct Cpu {
 impl Cpu {
     pub fn new(pc: u16) -> Self {
         Cpu {
-            registers: Registers::new(pc)
+            registers: Registers::new(pc),
         }
     }
     pub fn run_instruction(&mut self, mem: &mut dyn Memory) -> Result<(), TrapMode> {
@@ -26,7 +30,8 @@ impl Cpu {
             } else {
                 Self::push_registers(&mut self.registers, mem);
                 self.registers.program_counter = self.registers.trap_handler;
-                self.registers.write_wide(R1, self.registers.trap_mode as u8 as u16);
+                self.registers
+                    .write_wide(R1, self.registers.trap_mode as u8 as u16);
             }
         }
 
@@ -41,7 +46,6 @@ impl Cpu {
             }
         }
     }
-
 
     pub fn pushw<M: ?Sized + Memory>(registers: &mut Registers, w: u16, mem: &mut M) {
         registers.stack -= 2;
@@ -62,9 +66,18 @@ impl Cpu {
         b
     }
     pub fn push_registers<M: ?Sized + Memory>(registers: &mut Registers, mem: &mut M) {
-        let Registers {zero, sign, overflow, carry, ..} = *registers;
+        let Registers {
+            zero,
+            sign,
+            overflow,
+            carry,
+            ..
+        } = *registers;
 
-        let flags = ((zero as u16) << 7) | ((overflow as u16) << 6) | ((sign as u16) << 5) | ((carry as u16) << 4);
+        let flags = ((zero as u16) << 7)
+            | ((overflow as u16) << 6)
+            | ((sign as u16) << 5)
+            | ((carry as u16) << 4);
         Self::pushw(registers, flags, mem);
         for r in 1..=15 {
             let w = registers.read_wide(WideRegister(U4::new(r)));
@@ -148,7 +161,7 @@ impl Registers {
             }
             n @ 11..=15 => {
                 let index = 10 + ((n as usize - 11) << 1);
-                let wreg = &self.general_purposes[index..index+2];
+                let wreg = &self.general_purposes[index..index + 2];
                 wreg[0]
             }
             _ => unimplemented!("no such register"),
@@ -164,7 +177,7 @@ impl Registers {
             }
             n @ 11..=15 => {
                 let index = 10 + ((n as usize - 11) << 1);
-                let wreg = &mut self.general_purposes[index..index+2];
+                let wreg = &mut self.general_purposes[index..index + 2];
                 wreg[0] = val;
                 wreg[1] = 0;
             }
@@ -176,7 +189,7 @@ impl Registers {
             0 => 0,
             n @ 1..=10 => {
                 let index = (n as usize - 1) << 1;
-                let wreg = &self.general_purposes[index..index+2];
+                let wreg = &self.general_purposes[index..index + 2];
                 u16::from_le_bytes([wreg[0], wreg[1]])
             }
             11 => self.stack,
@@ -192,7 +205,7 @@ impl Registers {
             0 => (),
             n @ 1..=10 => {
                 let index = (n as usize - 1) << 1;
-                let wreg = &mut self.general_purposes[index..index+2];
+                let wreg = &mut self.general_purposes[index..index + 2];
                 let [l, h] = val.to_le_bytes();
                 wreg[0] = l;
                 wreg[1] = h;

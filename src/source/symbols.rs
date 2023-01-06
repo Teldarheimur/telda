@@ -1,8 +1,11 @@
-use std::{iter, mem, fmt::{self, Display}};
+use std::{
+    fmt::{self, Display},
+    iter, mem,
+};
 
 use crate::aalv::obj::SegmentType;
 
-use super::{SourceLocation, Result as SourceResult, Error, ErrorType};
+use super::{Error, ErrorType, Result as SourceResult, SourceLocation};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Hash)]
 pub(super) struct Address(pub SegmentType, pub u16);
@@ -53,7 +56,11 @@ pub(super) struct Symbols {
 
 impl Symbols {
     pub fn new() -> Self {
-        Self { labels: Vec::new(), symbol_types: Vec::new(), id_to_pos: Vec::new() }
+        Self {
+            labels: Vec::new(),
+            symbol_types: Vec::new(),
+            id_to_pos: Vec::new(),
+        }
     }
     fn find_id(&mut self, lbl: &str) -> usize {
         if let Some(i) = self.labels.iter().position(|l| &**l == lbl) {
@@ -69,11 +76,14 @@ impl Symbols {
         let id = self.find_id(lbl);
 
         match mem::replace(&mut self.id_to_pos[id], Ok(addr)) {
-            Ok(cur_addr) => {
-                Err(Error::new(loc.source, loc.line_number, ErrorType::Other(
-                    format!("Label {lbl} already had {cur_addr} but is now being set to {addr}").into_boxed_str()
-                )))
-            }
+            Ok(cur_addr) => Err(Error::new(
+                loc.source,
+                loc.line_number,
+                ErrorType::Other(
+                    format!("Label {lbl} already had {cur_addr} but is now being set to {addr}")
+                        .into_boxed_str(),
+                ),
+            )),
             Err(_) => Ok(()),
         }
     }
@@ -88,21 +98,30 @@ impl Symbols {
     }
     pub fn set_global(&mut self, id: usize) {
         if id >= self.symbol_types.len() {
-            self.symbol_types.resize(id+1, SymbolType::default());
+            self.symbol_types.resize(id + 1, SymbolType::default());
         }
         self.symbol_types[id].set_global();
     }
     pub fn set_reference(&mut self, id: usize) {
         if id >= self.symbol_types.len() {
-            self.symbol_types.resize(id+1, SymbolType::default());
+            self.symbol_types.resize(id + 1, SymbolType::default());
         }
         self.symbol_types[id].set_reference();
     }
     pub fn size(&self) -> usize {
         self.labels.len()
     }
-    pub fn into_iter(self) -> impl Iterator<Item=(Box<str>, SymbolType, Result<Address, Vec<SourceLocation>>)> {
-        self.labels.into_iter().zip(self.symbol_types.into_iter().chain(iter::repeat(SymbolType::default())).zip(self.id_to_pos))
+    pub fn into_iter(
+        self,
+    ) -> impl Iterator<Item = (Box<str>, SymbolType, Result<Address, Vec<SourceLocation>>)> {
+        self.labels
+            .into_iter()
+            .zip(
+                self.symbol_types
+                    .into_iter()
+                    .chain(iter::repeat(SymbolType::default()))
+                    .zip(self.id_to_pos),
+            )
             .map(|(a, (b, c))| (a, b, c))
     }
 }

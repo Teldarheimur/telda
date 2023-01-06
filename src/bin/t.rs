@@ -1,7 +1,11 @@
-use std::{path::PathBuf, process::ExitCode, io};
+use std::{io, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use telda2::{cpu::{Cpu, TrapMode}, aalv::obj::{Object, SymbolDefinition}, mem::Lazy};
+use telda2::{
+    aalv::obj::{Object, SymbolDefinition},
+    cpu::{Cpu, TrapMode},
+    mem::Lazy,
+};
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -35,7 +39,10 @@ pub fn main() -> ExitCode {
 }
 
 fn t_main() -> Result<(), Error> {
-    let Cli { binary, termination_point } = Cli::parse();
+    let Cli {
+        binary,
+        termination_point,
+    } = Cli::parse();
 
     let (mem, symbols, start_addr) = {
         let obj = Object::from_file(binary).map_err(Error::IoError)?;
@@ -55,8 +62,10 @@ fn t_main() -> Result<(), Error> {
         let pc = cpu.registers.program_counter;
         let mut diff = pc;
         let mut closest = "".into();
-        for SymbolDefinition{name, location, ..} in symbols {
-            if name.is_empty() { continue; }
+        for SymbolDefinition { name, location, .. } in symbols {
+            if name.is_empty() {
+                continue;
+            }
             if pc >= location {
                 let new_diff = pc - location;
                 if new_diff < diff {

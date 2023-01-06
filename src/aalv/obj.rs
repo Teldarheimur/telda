@@ -1,6 +1,11 @@
-use std::{path::Path, io::{self, BufRead, Read, Write, BufReader}, collections::BTreeMap, fmt::{Display, self}};
+use std::{
+    collections::BTreeMap,
+    fmt::{self, Display},
+    io::{self, BufRead, BufReader, Read, Write},
+    path::Path,
+};
 
-use super::{Section, read_aalv_file, write_aalv_file_with_offset};
+use super::{read_aalv_file, write_aalv_file_with_offset, Section};
 
 pub const AALV_OBJECT_EXT: &str = "to";
 
@@ -20,10 +25,17 @@ impl Object {
         let mut segs = BTreeMap::new();
 
         while let Some(seg) = aalvur.read_section() {
-            let BinarySegment { offset, stype, bytes } = seg?;
+            let BinarySegment {
+                offset,
+                stype,
+                bytes,
+            } = seg?;
 
             if segs.insert(stype, (offset, bytes)).is_some() {
-                return Err(io::Error::new(io::ErrorKind::InvalidData, "duplicate segment type"));
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "duplicate segment type",
+                ));
             }
         }
 
@@ -31,8 +43,14 @@ impl Object {
             file_offset: aalvur.file_offset,
             entry: aalvur.read_section().transpose()?,
             segs,
-            symbols: aalvur.read_section().transpose()?.unwrap_or_else(|| SymbolTable(Vec::new())),
-            relocation_table: aalvur.read_section().transpose()?.unwrap_or_else(|| RelocationTable(Vec::new())),
+            symbols: aalvur
+                .read_section()
+                .transpose()?
+                .unwrap_or_else(|| SymbolTable(Vec::new())),
+            relocation_table: aalvur
+                .read_section()
+                .transpose()?
+                .unwrap_or_else(|| RelocationTable(Vec::new())),
         };
 
         if aalvur.remaing_sections().any(|s| s.starts_with('_')) {
@@ -44,7 +62,7 @@ impl Object {
     pub fn zero_offset(self) -> Self {
         Self {
             file_offset: 0,
-            .. self
+            ..self
         }
     }
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
@@ -53,7 +71,7 @@ impl Object {
             entry,
             segs,
             symbols,
-            relocation_table
+            relocation_table,
         } = self;
 
         let mut aalvur = write_aalv_file_with_offset(path, *file_offset)?;
@@ -62,7 +80,11 @@ impl Object {
             aalvur.write_section(entry)?;
         }
         for (&stype, &(offset, ref bytes)) in segs {
-            aalvur.write_section(&BinarySegment{stype, offset, bytes: bytes.clone()})?;
+            aalvur.write_section(&BinarySegment {
+                stype,
+                offset,
+                bytes: bytes.clone(),
+            })?;
         }
         if !symbols.0.is_empty() {
             aalvur.write_section(symbols)?;
@@ -75,11 +97,16 @@ impl Object {
     }
 
     pub fn get_flattened_memory(&self) -> Vec<u8> {
-        let size = self.segs.iter().map(|(_, &(o, ref v))| o as usize + v.len()).max().unwrap_or(0);
+        let size = self
+            .segs
+            .iter()
+            .map(|(_, &(o, ref v))| o as usize + v.len())
+            .max()
+            .unwrap_or(0);
         let mut vec = vec![0; size];
 
         for &(offset, ref bytes) in self.segs.values() {
-            vec[offset as usize.. offset as usize + bytes.len()].copy_from_slice(bytes);
+            vec[offset as usize..offset as usize + bytes.len()].copy_from_slice(bytes);
         }
 
         vec
@@ -139,13 +166,13 @@ impl TryFrom<u8> for SegmentType {
             0x18 => Ok(RoData),
             0x20 => Ok(Text),
             0x70 => Ok(Heap),
-            _ => Err(())
+            _ => Err(()),
         }
     }
 }
 
 #[derive(Debug, Clone)]
-pub struct BinarySegment{
+pub struct BinarySegment {
     pub offset: u16,
     pub stype: SegmentType,
     pub bytes: Vec<u8>,
@@ -162,7 +189,7 @@ impl Section for BinarySegment {
         let mut bytes = Vec::new();
         reader.read_to_end(&mut bytes)?;
 
-        Ok(Self{
+        Ok(Self {
             offset: u16::from_le_bytes([ol, oh]),
             stype: segment_type_from_u8(stype)?,
             bytes,
@@ -189,8 +216,17 @@ pub struct SymbolDefinition {
 pub struct SymbolTable(pub Vec<SymbolDefinition>);
 
 impl SymbolTable {
-    pub fn mutate<F: FnMut(&mut Box<str>, &mut bool, &mut SegmentType, &mut u16)>(&mut self, mut f: F) {
-        for SymbolDefinition { name, is_global, segment_type, location } in &mut self.0 {
+    pub fn mutate<F: FnMut(&mut Box<str>, &mut bool, &mut SegmentType, &mut u16)>(
+        &mut self,
+        mut f: F,
+    ) {
+        for SymbolDefinition {
+            name,
+            is_global,
+            segment_type,
+            location,
+        } in &mut self.0
+        {
             f(name, is_global, segment_type, location);
         }
     }
@@ -245,7 +281,13 @@ impl Section for SymbolTable {
         Ok(SymbolTable(symbols))
     }
     fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        for &SymbolDefinition { ref name, is_global, segment_type, location } in &self.0 {
+        for &SymbolDefinition {
+            ref name,
+            is_global,
+            segment_type,
+            location,
+        } in &self.0
+        {
             write!(writer, "{}{name}\0", if is_global { "" } else { " " })?;
             writer.write_all(&[segment_type as u8])?;
             writer.write_all(&location.to_le_bytes())?;
@@ -297,7 +339,12 @@ impl Section for RelocationTable {
         Ok(RelocationTable(entries))
     }
     fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        for &RelocationEntry { reference_segment, reference_location, symbol_index } in &self.0 {
+        for &RelocationEntry {
+            reference_segment,
+            reference_location,
+            symbol_index,
+        } in &self.0
+        {
             writer.write_all(&[reference_segment as u8])?;
             writer.write_all(&reference_location.to_le_bytes())?;
             writer.write_all(&symbol_index.to_le_bytes())?;
@@ -307,5 +354,6 @@ impl Section for RelocationTable {
 }
 
 fn segment_type_from_u8(n: u8) -> io::Result<SegmentType> {
-    SegmentType::try_from(n).map_err(|()| io::Error::new(io::ErrorKind::InvalidData, "unrecognised segment type"))
+    SegmentType::try_from(n)
+        .map_err(|()| io::Error::new(io::ErrorKind::InvalidData, "unrecognised segment type"))
 }

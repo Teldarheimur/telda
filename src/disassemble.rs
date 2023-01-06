@@ -1,9 +1,14 @@
-use std::fmt::{self, Write, Display};
+use std::fmt::{self, Display, Write};
 
-use crate::{mem::{Memory, IO_MAPPING_CUTOFF}, cpu::{Registers, ByteRegister, WideRegister, R0}, U4, isa::{arg_pair, arg_imm_wide}};
+use crate::{
+    cpu::{ByteRegister, Registers, WideRegister, R0},
+    isa::{arg_imm_wide, arg_pair},
+    mem::{Memory, IO_MAPPING_CUTOFF},
+    U4,
+};
 
 struct StrictMemory<'a> {
-    slice: &'a [u8]
+    slice: &'a [u8],
 }
 
 impl Memory for StrictMemory<'_> {
@@ -26,9 +31,15 @@ pub struct DisassembledInstruction {
     pub next_instruction_location: u16,
 }
 
-fn id<T>(x: T) -> T { x }
+fn id<T>(x: T) -> T {
+    x
+}
 
-pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: u16, binary_code: &[u8], label_lookup: F) -> DisassembledInstruction {
+pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(
+    location: u16,
+    binary_code: &[u8],
+    label_lookup: F,
+) -> DisassembledInstruction {
     use crate::isa::*;
     let r = &mut Registers::new(location);
     let m = &mut StrictMemory { slice: binary_code } as &mut dyn Memory;
@@ -194,10 +205,9 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
 
     let next_instruction_location = r.program_counter;
 
-
-    let mut annotated_source = String::with_capacity(op.len()+21);
+    let mut annotated_source = String::with_capacity(op.len() + 21);
     write!(&mut annotated_source, "  {addr:04x}: ").unwrap();
-    
+
     if let Some(slice) = binary_code.get(addr as usize..next_instruction_location as usize) {
         for b in slice {
             write!(&mut annotated_source, " {b:02x}").unwrap();
@@ -208,7 +218,7 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
         }
     }
 
-    for _ in 0..(4-(next_instruction_location-addr)) {
+    for _ in 0..(4 - (next_instruction_location - addr)) {
         write!(&mut annotated_source, "   ").unwrap();
     }
     write!(&mut annotated_source, "    {op}").unwrap();
@@ -221,11 +231,28 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
     }
 }
 
-fn cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(name: &str, r: &mut Registers, m: &mut dyn Memory, label_lookup: F, f: &mut String) {
-    write!(f, "{name} {}", Operand::Wide(arg_imm_wide(r, m)).looked_up(label_lookup)).unwrap();
+fn cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(
+    name: &str,
+    r: &mut Registers,
+    m: &mut dyn Memory,
+    label_lookup: F,
+    f: &mut String,
+) {
+    write!(
+        f,
+        "{name} {}",
+        Operand::Wide(arg_imm_wide(r, m)).looked_up(label_lookup)
+    )
+    .unwrap();
 }
 
-fn binop<T: Display, RF: Fn(U4) -> T>(name: &str, rf: RF, r: &mut Registers, m: &mut dyn Memory, f: &mut String) {
+fn binop<T: Display, RF: Fn(U4) -> T>(
+    name: &str,
+    rf: RF,
+    r: &mut Registers,
+    m: &mut dyn Memory,
+    f: &mut String,
+) {
     let (r1, r2) = arg_pair(r, m, &rf, &rf);
     let (r3, _o) = arg_pair(r, m, &rf, id);
     write!(f, "{name} {r1}, {r2}, {r3}").unwrap();

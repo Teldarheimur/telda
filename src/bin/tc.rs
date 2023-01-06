@@ -1,16 +1,21 @@
-use std::{env::args, path::Path, process::ExitCode, collections::BTreeMap};
+use std::{collections::BTreeMap, env::args, path::Path, process::ExitCode};
 
 use telda2::{
-    source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType, Wide, ProcessedSource, Error as TeldaError},
-    aalv::obj::{AALV_OBJECT_EXT, Object, SymbolTable, SymbolDefinition, RelocationTable, RelocationEntry, SegmentType},
+    aalv::obj::{
+        Object, RelocationEntry, RelocationTable, SegmentType, SymbolDefinition, SymbolTable,
+        AALV_OBJECT_EXT,
+    },
+    source::{
+        process, write_data_operand, DataLine, Error as TeldaError, LabelRead, ProcessedSource,
+        SourceLines, SymbolType, Wide,
+    },
 };
 
 fn main() -> ExitCode {
     let mut ret = ExitCode::SUCCESS;
     for arg in args().skip(1) {
         let p = Path::new(&arg);
-        let ProcessedSource{labels, dls, entry}
-        = match SourceLines::new(p).and_then(process) {
+        let ProcessedSource { labels, dls, entry } = match SourceLines::new(p).and_then(process) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("{}", e);
@@ -37,7 +42,10 @@ fn main() -> ExitCode {
                     }
                     DataLine::Wide(Wide::Number(w)) => mem.extend_from_slice(&w.to_le_bytes()),
                     DataLine::Wide(Wide::Label(id)) => {
-                        let lr = LabelRead { segment: st, position: mem.len() as u16 + segment_start };
+                        let lr = LabelRead {
+                            segment: st,
+                            position: mem.len() as u16 + segment_start,
+                        };
                         label_reads[id].push(lr);
                         let w = labels[id].3;
                         mem.extend_from_slice(&w.to_le_bytes());
@@ -56,7 +64,11 @@ fn main() -> ExitCode {
             }
         }
 
-        let mut aalvur = Object {segs, entry, .. Object::default()};
+        let mut aalvur = Object {
+            segs,
+            entry,
+            ..Object::default()
+        };
 
         let mut symbol_table = Vec::new();
         {
@@ -65,7 +77,11 @@ fn main() -> ExitCode {
                     SymbolType::Global => true,
                     SymbolType::Internal => false,
                     SymbolType::Reference => {
-                        assert_eq!(segment_type, SegmentType::Unknown, "reference symbols should have unknown segment type");
+                        assert_eq!(
+                            segment_type,
+                            SegmentType::Unknown,
+                            "reference symbols should have unknown segment type"
+                        );
                         true
                     }
                 };
@@ -87,7 +103,7 @@ fn main() -> ExitCode {
             for (i, label_reads) in label_reads.into_iter().enumerate() {
                 let symbol_index = i as u16;
 
-                for LabelRead{ segment, position } in label_reads {
+                for LabelRead { segment, position } in label_reads {
                     let entry = RelocationEntry {
                         reference_location: aalvur.segs[&segment].0 + position,
                         reference_segment: segment,
