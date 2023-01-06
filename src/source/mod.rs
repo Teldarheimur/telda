@@ -46,6 +46,22 @@ pub struct SourceLines<B> {
     lines: Lines<B>,
     ln: LineNumber,
     source: Box<str>,
+    errors: Option<Error>
+}
+
+fn add_error_opt(errors: &mut Option<Error>, error: Error) {
+    if let Some(cur_error) = errors.take() {
+            *errors = Some(cur_error.chain(error));
+        } else {
+            *errors = Some(error);
+        }
+}
+
+impl<B> SourceLines<B> {
+    #[inline]
+    fn add_error(&mut self, error: Error) {
+        add_error_opt(&mut self.errors, error)
+    }
 }
 
 impl SourceLines<BufReader<File>> {
@@ -58,6 +74,7 @@ impl SourceLines<BufReader<File>> {
             lines: br.lines(),
             ln: 0,
             source,
+            errors: None,
         })
     }
 }
@@ -111,11 +128,23 @@ impl<B: BufRead> SourceLines<B> {
             lines: r.lines(),
             ln: 0,
             source: "<input>".into(),
+            errors: None,
         }
     }
-    fn parse_line(&mut self, line: StdResult<String, IoError>) -> Result<SourceLine> {
-        Ok({
+    pub fn parse_next_line(&mut self) -> Option<(u32, SourceLine)> {
+        loop {
+            let line = self.lines.next()?;
             self.ln += 1;
+            match self.inner_parse_line(line) {
+                Ok(sl) => break Some((self.ln, sl)),
+                Err(e) => {
+                    self.add_error(e);
+                }
+            }
+        }
+    }
+    fn inner_parse_line(&mut self, line: StdResult<String, IoError>) -> Result<SourceLine> {
+        Ok({
             let line = line?;
             let line = line.trim();
 
@@ -281,16 +310,6 @@ fn parse_bytechar(s: &[u8]) -> StdResult<(u8, &[u8]), ErrorType> {
     })
 }
 
-impl<B: BufRead> Iterator for SourceLines<B> {
-    type Item = Result<(LineNumber, SourceLine)>;
-    fn next(&mut self) -> Option<Self::Item> {
-        Some({
-            let line = self.lines.next()?;
-            self.parse_line(line).map(|l| (self.ln, l))
-        })
-    }
-}
-
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
     source: Box<str>,
@@ -355,7 +374,9 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
     let mut symbols = Symbols::new();
     let mut state = ProcessState::new();
 
-    inner_process(lines, &mut state, &mut symbols)?;
+    let src = lines.source.clone();
+
+    let mut errors = inner_process(lines, &mut state, &mut symbols);
 
     let ProcessState { mut dls, entry } = state;
 
@@ -376,16 +397,17 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
                 let st = match st {
                     Internal | Global => st,
                     Reference => {
-                        return Err(Error::new(
-                            <Box<str>>::from("<src>"),
+                        add_error_opt(&mut errors, Error::new(
+                            src.clone(),
                             0,
                             ErrorType::Other(
                                 format!(
-                                    "Symbol {l} is declared as reference but defined at {addr}"
+                                    "Symbol `{l}' is declared as reference but defined at {addr}"
                                 )
                                 .into_boxed_str(),
                             ),
-                        ))
+                        ));
+                        continue;
                     }
                 };
 
@@ -401,13 +423,14 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
                         let e = e
                             .into_iter()
                             .map(|SourceLocation { source, line_number }| Error::new(source, line_number, ErrorType::Other(
-                                    format!("non-global label {l} was never defined, but used here").into_boxed_str()
+                                    format!("non-global label `{l}' was never defined, but used here").into_boxed_str()
                                 )))
                             // Reversed order to make it faster (since it's a linked list)
                             .reduce(|accum, item| item.chain(accum))
                             .expect("ghost label, expected at least one use location")
                             ;
-                        return Err(e);
+                        add_error_opt(&mut errors, e);
+                        continue;
                     }
                     Reference | Global => {
                         element = (l, Reference, SegmentType::Unknown, 0xfaff);
@@ -419,29 +442,35 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
         labels.push(element);
     }
 
-    let entry = entry.map(|addr| {
-        let offset = dls.get(&addr.0).map(|dl| dl.start).unwrap_or(0);
-        Entry(addr.0, addr.1 + offset)
-    });
+    if let Some(error) = errors {
+        Err(error)
+    } else {
+        let entry = entry.map(|addr| {
+            let offset = dls.get(&addr.0).map(|dl| dl.start).unwrap_or(0);
+            Entry(addr.0, addr.1 + offset)
+        });
+    
+        Ok(ProcessedSource {
+            labels,
+            dls,
+            entry,
+        })
+    }
 
-    Ok(ProcessedSource {
-        labels,
-        dls,
-        entry,
-    })
 }
 fn inner_process<B: BufRead>(
-    lines: SourceLines<B>,
+    mut lines: SourceLines<B>,
     state: &mut ProcessState,
     symbols: &mut Symbols,
-) -> Result<()> {
-    let mut current_segment = SegmentType::Unknown;
-
-    let src = lines.source.clone();
-
-    for line in lines {
-        let (ln, line) = line?;
-
+) -> Option<Error> {
+    fn inner_process_line(
+        src: &Box<str>,
+        ln: u32,
+        line: SourceLine,
+        current_segment: &mut SegmentType,
+        state: &mut ProcessState,
+        symbols: &mut Symbols,
+    ) -> Result<()> {
         match line {
             SourceLine::DirSeg(seg) => {
                 let new_seg = match &*seg {
@@ -451,7 +480,7 @@ fn inner_process<B: BufRead>(
                     "heap" => SegmentType::Heap,
                     seg => {
                         return Err(Error::new(
-                            src,
+                            src.clone(),
                             ln,
                             ErrorType::InvalidOperand(
                                 format!(".seg {seg} not supported, unknown segment")
@@ -461,25 +490,25 @@ fn inner_process<B: BufRead>(
                     }
                 };
 
-                current_segment = new_seg;
+                *current_segment = new_seg;
             }
             SourceLine::DirEntry => {
                 if state.entry.is_some() {
-                    return Err(Error::new(src, ln, ErrorType::DoubleEntry));
+                    return Err(Error::new(src.clone(), ln, ErrorType::DoubleEntry));
                 }
-                state.entry = Some(Address(current_segment, state.get_size(current_segment)));
+                state.entry = Some(Address(*current_segment, state.get_size(*current_segment)));
             }
             SourceLine::Label(s) => {
-                let addr = Address(current_segment, state.get_size(current_segment));
+                let addr = Address(*current_segment, state.get_size(*current_segment));
                 symbols.set_label(&s, addr, SourceLocation::new(&src, ln))?;
             }
             SourceLine::Ins(s, ops) => {
                 let (opcode, dat_op) = parse_ins(s, ops, symbols, SourceLocation::new(&src, ln))
                     .map_err(|e| Error::new(src.clone(), ln, ErrorType::Other(e.into())))?;
-                state.add_line(current_segment, DataLine::Ins(opcode, dat_op), 1 + dat_op.size());
+                state.add_line(*current_segment, DataLine::Ins(opcode, dat_op), 1 + dat_op.size());
             }
             SourceLine::DirByte(b) => {
-                state.add_line(current_segment, DataLine::Raw(vec![b]), 1);
+                state.add_line(*current_segment, DataLine::Raw(vec![b]), 1);
             }
             SourceLine::DirWide(w) => {
                 let wide = match w {
@@ -488,11 +517,11 @@ fn inner_process<B: BufRead>(
                         Wide::Label(symbols.get_label(&l, SourceLocation::new(&src, ln)))
                     }
                 };
-                state.add_line(current_segment, DataLine::Wide(wide), 2);
+                state.add_line(*current_segment, DataLine::Wide(wide), 2);
             }
             SourceLine::DirString(s) => {
                 let size = s.len() as u16;
-                state.add_line(current_segment, DataLine::Raw(s), size);
+                state.add_line(*current_segment, DataLine::Raw(s), size);
             }
             SourceLine::DirInclude(path) => {
                 let pth_buf;
@@ -500,12 +529,14 @@ fn inner_process<B: BufRead>(
                 let path = if let Some(path) = path.strip_prefix('/') {
                     Path::new(path)
                 } else {
-                    pth_buf = Path::new(&*src).with_file_name("").join(&path);
+                    pth_buf = Path::new(&**src).with_file_name("").join(&path);
                     &pth_buf
                 };
 
                 let lines = SourceLines::new(path)?;
-                inner_process(lines, state, symbols)?;
+                if let Some(e) = inner_process(lines, state, symbols) {
+                    return Err(e);
+                }
             }
             SourceLine::DirGlobal(l) => {
                 let id = symbols.get_label(&l, SourceLocation::new(&src, ln));
@@ -520,14 +551,26 @@ fn inner_process<B: BufRead>(
 
         if state.unknown_defined() {
             return Err(Error::new(
-                src,
+                src.clone(),
                 ln,
                 ErrorType::Other("no segment was started".to_string().into_boxed_str()),
             ));
         }
+
+        Ok(())
     }
 
-    Ok(())
+
+    let mut current_segment = SegmentType::Unknown;
+
+    while let Some((ln, line)) = lines.parse_next_line() {
+        match inner_process_line(&lines.source, ln, line, &mut current_segment, state, symbols) {
+            Ok(()) => (),
+            Err(e) => lines.add_error(e),
+        }
+    }
+
+    lines.errors
 }
 
 fn parse_ins(

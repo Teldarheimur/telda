@@ -68,7 +68,11 @@ impl Display for Error {
         while let Some(e) = cur {
             let Self { source, ln, error, next } = e;
 
-            write!(f, "{source}:{ln}: ")?;
+            if *ln == 0 {
+                write!(f, "{source}: ")?;
+            } else {
+                write!(f, "{source}:{ln}: ")?;
+            }
             match error {
                 ErrorType::DoubleEntry => write!(f, "entry point defined twice"),
                 ErrorType::InvalidOperand(s) => write!(f, "invalid operand: {s}"),
