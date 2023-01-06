@@ -68,6 +68,13 @@ fn main() {
     'disassemble_loop: loop {
         let dins = disassemble_instruction(cpu.registers.program_counter, &mem.mem, |p| pos_to_labels.get(&p).map(|s| &**s));
 
+        if cpu.registers.trap {
+            println!("handled trap encountered!");
+            current_nesting += 1;
+            target_nesting = current_nesting;
+        }
+
+        let mut skip_loop = true;
         if current_nesting == target_nesting {
             if let Some(label) = pos_to_labels.get(&cpu.registers.program_counter) {
                 println!("<{label}>:");
@@ -78,12 +85,14 @@ fn main() {
             if dins.ends_block || dins.nesting_difference != 0 {
                 println!();
             }
+
+            skip_loop = false;
         }
 
         let next_nesting = current_nesting + dins.nesting_difference;
 
         target_nesting = loop {
-            if target_nesting != current_nesting {
+            if skip_loop {
                 break target_nesting;
             }
 
