@@ -23,7 +23,7 @@ pub fn main() -> ExitCode {
 
         let iter = obj.symbols.into_iter();
 
-        (mem, iter, obj.entry.unwrap().0)
+        (mem, iter, obj.entry.unwrap().1)
     };
 
     let mut lazy = Lazy::new_stdio(mem);

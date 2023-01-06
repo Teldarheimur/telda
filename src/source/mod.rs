@@ -6,7 +6,7 @@ use std::{
     slice::Iter,
 };
 
-use crate::cpu::{ByteRegister as BReg, WideRegister as WReg};
+use crate::{cpu::{ByteRegister as BReg, WideRegister as WReg}, aalv::obj::Entry};
 use crate::{aalv::obj::SegmentType, align, cpu::*, isa, SEGMENT_ALIGNMENT, U4};
 
 mod err;
@@ -215,30 +215,30 @@ impl<B: BufRead> SourceLines<B> {
 
                     sos.push(match arg {
                         "r0b" => SourceOperand::ByteReg(R0B),
-                        "r1l" | "ral" => SourceOperand::ByteReg(R1L),
-                        "r1h" | "rah" => SourceOperand::ByteReg(R1H),
-                        "r2l" | "rbl" => SourceOperand::ByteReg(R2L),
-                        "r2h" | "rbh" => SourceOperand::ByteReg(R2H),
-                        "r3l" | "rcl" => SourceOperand::ByteReg(R3L),
-                        "r3h" | "rch" => SourceOperand::ByteReg(R3H),
+                        "r1l" => SourceOperand::ByteReg(R1L),
+                        "r1h" => SourceOperand::ByteReg(R1H),
+                        "r2l" => SourceOperand::ByteReg(R2L),
+                        "r2h" => SourceOperand::ByteReg(R2H),
+                        "r3l" => SourceOperand::ByteReg(R3L),
+                        "r3h" => SourceOperand::ByteReg(R3H),
                         "r4l" => SourceOperand::ByteReg(R4L),
                         "r4h" => SourceOperand::ByteReg(R4H),
                         "r5l" => SourceOperand::ByteReg(R5L),
                         "r5h" => SourceOperand::ByteReg(R5H),
-                        "r6b" | "rxb" => SourceOperand::ByteReg(R6B),
-                        "r7b" | "ryb" => SourceOperand::ByteReg(R7B),
-                        "r8b" | "rzb" => SourceOperand::ByteReg(R8B),
+                        "r6b" => SourceOperand::ByteReg(R6B),
+                        "r7b" => SourceOperand::ByteReg(R7B),
+                        "r8b" => SourceOperand::ByteReg(R8B),
                         "r9b" => SourceOperand::ByteReg(R9B),
                         "r10b" => SourceOperand::ByteReg(R10B),
                         "r0" => SourceOperand::WideReg(R0),
-                        "r1" | "ra" => SourceOperand::WideReg(R1),
-                        "r2" | "rb" => SourceOperand::WideReg(R2),
-                        "r3" | "rc" => SourceOperand::WideReg(R3),
+                        "r1" => SourceOperand::WideReg(R1),
+                        "r2" => SourceOperand::WideReg(R2),
+                        "r3" => SourceOperand::WideReg(R3),
                         "r4" => SourceOperand::WideReg(R4),
                         "r5" => SourceOperand::WideReg(R5),
-                        "r6" | "rx" => SourceOperand::WideReg(R6),
-                        "r7" | "ry" => SourceOperand::WideReg(R7),
-                        "r8" | "rz" => SourceOperand::WideReg(R8),
+                        "r6" => SourceOperand::WideReg(R6),
+                        "r7" => SourceOperand::WideReg(R7),
+                        "r8" => SourceOperand::WideReg(R8),
                         "r9" => SourceOperand::WideReg(R9),
                         "r10" => SourceOperand::WideReg(R10),
                         "rs" => SourceOperand::WideReg(RS),
@@ -315,7 +315,7 @@ pub enum DataLine {
 pub struct ProcessedSource {
     pub labels: Vec<(Box<str>, SymbolType, SegmentType, u16)>,
     pub dls: BTreeMap<SegmentType, DataLineSegment>,
-    pub entry: Option<u16>,
+    pub entry: Option<Entry>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -420,7 +420,7 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
 
     let entry = entry.map(|addr| {
         let offset = dls.get(&addr.0).map(|dl| dl.start).unwrap_or(0);
-        addr.1 + offset
+        Entry(addr.0, addr.1 + offset)
     });
 
     Ok(ProcessedSource {

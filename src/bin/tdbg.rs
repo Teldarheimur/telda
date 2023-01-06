@@ -43,7 +43,7 @@ fn main() {
 
         mem = obj.get_flattened_memory();
 
-        ep = obj.entry.map(|e| e.0);
+        ep = obj.entry.map(|e| e.1);
 
         for SymbolDefinition{name, location, is_global, ..} in obj.symbols.into_iter() {
             if is_global {
@@ -58,7 +58,7 @@ fn main() {
 
     let io = DbgIo { in_buf: VecDeque::new(), out_buf: Vec::new() };
     let mut mem = Lazy { io, mem };
-    let start = ep.unwrap_or_else(|| {eprintln!("warning: no _start segment in binary, using 0 as startpoint"); 0});
+    let start = ep.unwrap_or_else(|| {eprintln!("warning: no _entry segment in binary, using 0 as startpoint"); 0});
     let mut cpu = Cpu::new(start);
     let stdin = stdin();
     let mut input = String::new();

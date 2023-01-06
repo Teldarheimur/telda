@@ -81,15 +81,10 @@ fn main() -> ExitCode {
         let mut last_end = lengths.remove(&SegmentType::Zero).unwrap_or(0);
         last_end = last_end.max(SEGMENT_ALIGNMENT);
 
-        dbg!(&lengths);
-        dbg!(last_end);
-
         for (st, size) in lengths {
             let start = align(last_end, SEGMENT_ALIGNMENT);
             segs_out.insert(st, (start, Vec::with_capacity(size as usize)));
-            eprintln!("{st}_start = {start}");
             last_end = start + size;
-            eprintln!("last_end = {last_end}");
         }
     }
 
@@ -108,25 +103,11 @@ fn main() -> ExitCode {
     let mut entry_point = None;
 
     for (input_file, mut obj) in objects {
+        entry_point = entry_point
+            .or_else(|| obj.entry.map(|Entry(st, ep)| Entry(st, ep - obj.segs[&st].0 + segs[&st].0)));
+
         let mut file_symbol_to_out_symbol = Vec::new();
         let reloc;
-
-        if entry_point.is_none() {
-            entry_point = obj.entry.map(|Entry(ep)| {
-                let mut segment_offset = 0;
-                let mut ep_segment = SegmentType::Unknown;
-
-                for (&seg, &(start, ref bytes)) in obj.segs.iter().rev() {
-                    if (start..=start + bytes.len() as u16).contains(&ep) {
-                        ep_segment = seg;
-                        segment_offset = start;
-                    }
-                }
-
-                ep - segment_offset + segs[&ep_segment].0
-            });
-        }
-
         {
             for mut symdef in obj.symbols.into_iter() {
                 let next_id = symbols_out.len();
@@ -187,10 +168,8 @@ fn main() -> ExitCode {
         {
             let symbol_index = file_symbol_to_out_symbol[symbol_index as usize];
 
-            let location_in_file =
-                reference_location - obj.segs.get(&reference_segment).map(|s| s.0).unwrap_or(0);
-            let reference_location =
-                location_in_file + segs.get(&reference_segment).map(|s| s.0).unwrap_or(0);
+            let location_in_file = reference_location - obj.segs[&reference_segment].0;
+            let reference_location = location_in_file + segs[&reference_segment].0;
 
             let bytes = &mut obj.segs.get_mut(&reference_segment).unwrap().1;
 
@@ -246,15 +225,16 @@ fn main() -> ExitCode {
     match set_entry {
         Some(entry) => entry_point = Some({
             if entry.starts_with("0x") {
-                u16::from_str_radix(&entry[2..], 16).unwrap()
+                Entry(SegmentType::Zero, u16::from_str_radix(&entry[2..], 16).unwrap())
             } else {
                 if let Some(&pos) = global_symbols.get(&*entry) {
-                    symbols_out[pos].location
+                    let sym = &symbols_out[pos];
+                    Entry(sym.segment_type, sym.location)
                 } else {
                     eprintln!("Start symbol {entry} was not found. Perhaps it is not global?");
                     eprintln!("Aborting linking");
                     failure = true;
-                    0xffff
+                    Entry(SegmentType::Unknown, 0xffff)
                 }
             }
         }),
@@ -269,7 +249,7 @@ fn main() -> ExitCode {
         let mut obj = Object::default();
 
         obj.segs = segs_out;
-        obj.entry = entry_point.map(Entry);
+        obj.entry = entry_point;
         obj.symbols = SymbolTable(symbols_out);
         obj.relocation_table = RelocationTable(reloc_out);
 

@@ -87,17 +87,19 @@ impl Object {
 }
 
 #[derive(Debug, Clone, Copy)]
-pub struct Entry(pub u16);
+pub struct Entry(pub SegmentType, pub u16);
 
 impl Section for Entry {
     const NAME: &'static str = "_entry";
     fn read<R: Read>(mut reader: R) -> io::Result<Self> {
-        let mut buf = [0; 2];
+        let mut buf = [0; 3];
         reader.read_exact(&mut buf)?;
-        Ok(Entry(u16::from_le_bytes(buf)))
+        let [stype, loc @ ..] = buf;
+        Ok(Entry(segment_type_from_u8(stype)?, u16::from_le_bytes(loc)))
     }
     fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        writer.write_all(&self.0.to_le_bytes())
+        writer.write_all(&[self.0 as u8])?;
+        writer.write_all(&self.1.to_le_bytes())
     }
 }
 

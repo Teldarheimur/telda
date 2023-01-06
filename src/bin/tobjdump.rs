@@ -102,7 +102,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
             pos_to_labels.insert(s.location, id);
         }
         if let Some(ep) = obj.entry {
-            pos_to_labels.insert(ep.0, obj.symbols.0.len());
+            pos_to_labels.insert(ep.1, obj.symbols.0.len());
         }
     }
 
@@ -137,7 +137,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
         printed_labels.insert(label_to_print);
 
         let mut location = if label_to_print == syms.len() {
-            obj.entry.unwrap().0
+            obj.entry.unwrap().1
         } else {
             syms[label_to_print].location
         };

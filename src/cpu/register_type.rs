@@ -30,21 +30,21 @@ pub const R7: WideRegister = WideRegister(U4::new_unchecked(7));
 pub const R8: WideRegister = WideRegister(U4::new_unchecked(8));
 pub const R9: WideRegister = WideRegister(U4::new_unchecked(9));
 pub const R10: WideRegister = WideRegister(U4::new_unchecked(10));
-// Stack pointer register
+/// Stack pointer register
 pub const RS: WideRegister = WideRegister(U4::new_unchecked(11));
-// Link pointer register
+/// Link pointer register
 pub const RL: WideRegister = WideRegister(U4::new_unchecked(12));
-// Frame pointer register
+/// Frame pointer register
 pub const RF: WideRegister = WideRegister(U4::new_unchecked(13));
-// Page table pointer register
+/// Page table pointer register
 pub const RP: WideRegister = WideRegister(U4::new_unchecked(14));
-// Trap handler pointer register
+/// Trap handler pointer register
 pub const RH: WideRegister = WideRegister(U4::new_unchecked(15));
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct ByteRegister(pub U4);
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]
 pub struct WideRegister(pub U4);
 

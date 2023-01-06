@@ -2,7 +2,7 @@ use std::{env::args, path::Path, process::ExitCode, collections::BTreeMap};
 
 use telda2::{
     source::{SourceLines, process, DataLine, write_data_operand, LabelRead, SymbolType, Wide, ProcessedSource},
-    aalv::obj::{AALV_OBJECT_EXT, Object, SymbolTable, SymbolDefinition, RelocationTable, RelocationEntry, SegmentType, Entry},
+    aalv::obj::{AALV_OBJECT_EXT, Object, SymbolTable, SymbolDefinition, RelocationTable, RelocationEntry, SegmentType},
 };
 
 fn main() -> ExitCode {
@@ -56,9 +56,7 @@ fn main() -> ExitCode {
             }
         }
 
-        let mut aalvur = Object {segs, .. Object::default()};
-
-        aalvur.entry = entry.map(Entry);
+        let mut aalvur = Object {segs, entry, .. Object::default()};
 
         let mut symbol_table = Vec::new();
         {
