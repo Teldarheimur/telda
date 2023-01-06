@@ -78,7 +78,7 @@ impl<F: BufRead + Seek> AalvReader<F> {
             self.file_offset = self.file.stream_position()? - 1;
 
             self.file.read_exact(&mut magic_buf[1..])?;
-            if &magic_buf == AALV_MAGIC.as_bytes() {
+            if magic_buf == AALV_MAGIC.as_bytes() {
                 break;
             }
         }

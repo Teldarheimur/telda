@@ -66,24 +66,24 @@ fn parse_number(arg: &str) -> SourceOperand {
     let so;
     let mut radix = 10;
     let mut num = arg;
-    if arg.starts_with("0x") {
+    if let Some(new_num) = arg.strip_prefix("0x") {
         radix = 16;
-        num = &arg[2..];
-    } else if arg.starts_with("0b") {
+        num = new_num;
+    } else if let Some(new_num) = arg.strip_prefix("0b") {
         radix = 2;
-        num = &arg[2..];
-    } else if arg.starts_with("0o") {
+        num = new_num;
+    } else if let Some(new_num) = arg.strip_prefix("0o") {
         radix = 8;
-        num = &arg[2..];
+        num = new_num;
     }
 
-    if arg.ends_with("b") {
+    if arg.ends_with('b') {
         num = &num[..num.len() - 1];
         so = u8::from_str_radix(num, radix)
             .ok()
             .or_else(|| i8::from_str_radix(num, radix).ok().map(|b| b as u8))
             .map(SourceOperand::Byte);
-    } else if arg.ends_with("w") {
+    } else if arg.ends_with('w') {
         num = &num[..num.len() - 1];
         so = u16::from_str_radix(num, radix)
             .ok()
@@ -118,12 +118,9 @@ impl<B: BufRead> SourceLines<B> {
             let line = line?;
             let line = line.trim();
 
-            if line.is_empty() {
+            if line.is_empty() || line.starts_with(';') || line.starts_with("//") || line.starts_with('#') {
                 SourceLine::Comment
-            } else if line.starts_with(";") || line.starts_with("//") || line.starts_with("#") {
-                SourceLine::Comment
-            } else if line.starts_with(".") {
-                let line = &line[1..];
+            } else if let Some(line) = line.strip_prefix('.') {
                 let (line_i, arg_i) = line
                     .find(' ')
                     .map(|i| (i, i + 1))
@@ -204,8 +201,8 @@ impl<B: BufRead> SourceLines<B> {
                         ))
                     }
                 }
-            } else if line.ends_with(":") {
-                SourceLine::Label((line[..line.len() - 1]).to_owned())
+            } else if let Some(line) = line.strip_suffix(':') {
+                SourceLine::Label(line.to_owned())
             } else if let Some(i) = line.find(' ') {
                 let (ins, args) = line.split_at(i);
                 let mut sos = Vec::new();
@@ -290,7 +287,7 @@ impl<B: BufRead> Iterator for SourceLines<B> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SourceLocation {
     source: Box<str>,
     line_number: LineNumber,
@@ -481,13 +478,12 @@ fn inner_process<B: BufRead>(
                 state.add_line(current_segment, DataLine::Raw(vec![b]), 1);
             }
             SourceLine::DirWide(w) => {
-                let wide;
-                match w {
-                    Ok(w) => wide = Wide::Number(w),
+                let wide = match w {
+                    Ok(w) => Wide::Number(w),
                     Err(l) => {
-                        wide = Wide::Label(symbols.get_label(&l, SourceLocation::new(&src, ln)))
+                        Wide::Label(symbols.get_label(&l, SourceLocation::new(&src, ln)))
                     }
-                }
+                };
                 state.add_line(current_segment, DataLine::Wide(wide), 2);
             }
             SourceLine::DirString(s) => {
@@ -497,8 +493,8 @@ fn inner_process<B: BufRead>(
             SourceLine::DirInclude(path) => {
                 let pth_buf;
 
-                let path = if path.starts_with("/") {
-                    Path::new(&path[1..])
+                let path = if let Some(path) = path.strip_prefix('/') {
+                    Path::new(path)
                 } else {
                     pth_buf = Path::new(&*src).with_file_name("").join(&path);
                     &pth_buf
@@ -522,7 +518,7 @@ fn inner_process<B: BufRead>(
             return Err(Error::new(
                 src,
                 ln,
-                ErrorType::Other(format!("no segment was started").into_boxed_str()),
+                ErrorType::Other("no segment was started".to_string().into_boxed_str()),
             ));
         }
     }
@@ -577,7 +573,7 @@ fn parse_ins(
         "store" | "str" => {
             if let Some(dat_op) = O::parse_wide_imm_byte(ops.clone(), sym, sl.clone()) {
                 (STORE_BI, dat_op)
-            } else if let Some(dat_op) = O::parse_wide_imm_wide(ops.clone(), sym, sl.clone()) {
+            } else if let Some(dat_op) = O::parse_wide_imm_wide(ops.clone(), sym, sl) {
                 (STORE_WI, dat_op)
             } else if let Some(dat_op) = O::parse_two_wide_one_byte(ops.clone()) {
                 (STORE_BR, dat_op)
@@ -1047,9 +1043,9 @@ impl DataOperand {
         }
     }
     fn imm_byte(op: &SourceOperand) -> Option<u8> {
-        match op {
-            &SourceOperand::Number(n) => Some(n as u8),
-            &SourceOperand::Byte(n) => Some(n),
+        match *op {
+            SourceOperand::Number(n) => Some(n as u8),
+            SourceOperand::Byte(n) => Some(n),
             _ => None,
         }
     }

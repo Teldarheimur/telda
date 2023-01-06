@@ -10,7 +10,7 @@ fn main() -> ExitCode {
     for arg in args().skip(1) {
         let p = Path::new(&arg);
         let ProcessedSource{labels, dls, entry}
-        = match SourceLines::new(p).and_then(|l| process(l)) {
+        = match SourceLines::new(p).and_then(process) {
             Ok(s) => s,
             Err(e) => {
                 eprintln!("{}", e);
@@ -61,15 +61,14 @@ fn main() -> ExitCode {
         let mut symbol_table = Vec::new();
         {
             for &(ref lbl, st, segment_type, location) in labels.iter() {
-                let is_global;
-                match st {
-                    SymbolType::Global => is_global = true,
-                    SymbolType::Internal => is_global = false,
+                let is_global = match st {
+                    SymbolType::Global => true,
+                    SymbolType::Internal => false,
                     SymbolType::Reference => {
                         assert_eq!(segment_type, SegmentType::Unknown, "reference symbols should have unknown segment type");
-                        is_global = true;
+                        true
                     }
-                }
+                };
 
                 symbol_table.push(SymbolDefinition {
                     name: lbl.clone(),
@@ -79,7 +78,7 @@ fn main() -> ExitCode {
                 })
             }
         }
-        aalvur.symbols = SymbolTable::from_iter(symbol_table.into_iter());
+        aalvur.symbols = SymbolTable(symbol_table);
 
         let reloc_table;
         {

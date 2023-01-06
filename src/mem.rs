@@ -45,7 +45,7 @@ impl Io for StdIo {
     fn read(&mut self, _addr: u8) -> u8 {
         // TODO: use the address
         let mut buf = [0];
-        stdin().read(&mut buf).unwrap();
+        stdin().read_exact(&mut buf).unwrap();
         buf[0]
     }
     fn write(&mut self, _addr: u8, val: u8) {

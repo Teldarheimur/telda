@@ -78,8 +78,8 @@ impl Object {
         let size = self.segs.iter().map(|(_, &(o, ref v))| o as usize + v.len()).max().unwrap();
         let mut vec = vec![0; size];
 
-        for (_, &(offset, ref bytes)) in &self.segs {
-            vec[offset as usize.. offset as usize + bytes.len()].copy_from_slice(&bytes);
+        for &(offset, ref bytes) in self.segs.values() {
+            vec[offset as usize.. offset as usize + bytes.len()].copy_from_slice(bytes);
         }
 
         vec
@@ -189,15 +189,17 @@ pub struct SymbolDefinition {
 pub struct SymbolTable(pub Vec<SymbolDefinition>);
 
 impl SymbolTable {
-    pub fn from_iter(iter: impl Iterator<Item=SymbolDefinition>) -> Self {
-        SymbolTable(iter.collect())
-    }
     pub fn mutate<F: FnMut(&mut Box<str>, &mut bool, &mut SegmentType, &mut u16)>(&mut self, mut f: F) {
         for SymbolDefinition { name, is_global, segment_type, location } in &mut self.0 {
             f(name, is_global, segment_type, location);
         }
     }
-    pub fn into_iter(self) -> impl Iterator<Item=SymbolDefinition> {
+}
+
+impl IntoIterator for SymbolTable {
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+    type Item = SymbolDefinition;
+    fn into_iter(self) -> Self::IntoIter {
         self.0.into_iter()
     }
 }
@@ -211,9 +213,10 @@ impl Section for SymbolTable {
 
         loop {
             let mut namebuf = Vec::new();
-            match reader.read_until(0, &mut namebuf)? {
-                0 => break,
-                _ => ()
+            let read_n = reader.read_until(0, &mut namebuf)?;
+            if read_n == 0 {
+                // EOF => we're done
+                break;
             }
             namebuf.pop();
 
@@ -224,12 +227,11 @@ impl Section for SymbolTable {
             let segment_type = segment_type_from_u8(stype)?;
 
             let is_global = namebuf[0] != b' ';
-            let name;
-            if is_global {
-                name = String::from_utf8_lossy(&namebuf).into();
+            let name = if is_global {
+                String::from_utf8_lossy(&namebuf).into()
             } else {
-                name = String::from_utf8_lossy(&namebuf[1..]).into();
-            }
+                String::from_utf8_lossy(&namebuf[1..]).into()
+            };
 
             let def = SymbolDefinition {
                 name,

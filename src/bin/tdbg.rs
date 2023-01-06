@@ -115,8 +115,8 @@ fn main() {
                 }
                 l if l.starts_with("r ") => {
                     let arg = l[2..].trim();
-                    let addr = if arg.starts_with("0x") {
-                        u16::from_str_radix(&arg[2..], 16).unwrap()
+                    let addr = if let Some (arg) = arg.strip_prefix("0x") {
+                        u16::from_str_radix(arg, 16).unwrap()
                     } else {
                         arg.parse().unwrap()
                     };
@@ -172,8 +172,8 @@ fn main() {
                 }
                 l if l.starts_with("g ") => {
                     let arg = l[2..].trim();
-                    let addr = if arg.starts_with("0x") {
-                        u16::from_str_radix(&arg[2..], 16).unwrap()
+                    let addr = if let Some(arg) = arg.strip_prefix("0x") {
+                        u16::from_str_radix(arg, 16).unwrap()
                     } else {
                         arg.parse().unwrap()
                     };

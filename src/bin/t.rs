@@ -46,10 +46,8 @@ pub fn main() -> ExitCode {
             }
         }
         println!("Ended with {tm:?} at <{closest}+{diff:02X}>");
-    } else {
-        if tm != TrapMode::Halt {
-            eprintln!("trapped with {tm:?}")
-        }
+    } else if tm != TrapMode::Halt {
+        eprintln!("trapped with {tm:?}")
     }
 
     ExitCode::SUCCESS

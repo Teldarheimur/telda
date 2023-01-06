@@ -125,27 +125,23 @@ fn main() -> ExitCode {
                             let cur_symdef: &mut SymbolDefinition = &mut symbols_out[id];
 
                             if let SegmentType::Unknown = symdef.segment_type {
+                            } else if let SegmentType::Unknown = cur_symdef.segment_type {
+                                *cur_symdef = symdef.clone();
                             } else {
-                                if let SegmentType::Unknown = cur_symdef.segment_type {
-                                    *cur_symdef = symdef.clone();
-                                } else {
-                                    eprintln!("global symbol {} defined in {} but was already defined in a previous file at location 0x{:02x} in {}",
-                                        symdef.name,
-                                        input_file.display(),
-                                        symdef.location,
-                                        symdef.segment_type,
-                                    );
-                                    failure = true;
-                                }
+                                eprintln!("global symbol {} defined in {} but was already defined in a previous file at location 0x{:02x} in {}",
+                                    symdef.name,
+                                    input_file.display(),
+                                    symdef.location,
+                                    symdef.segment_type,
+                                );
+                                failure = true;
                             }
 
                             id_in_fstos = Some(id);
                         }
                     }
-                } else {
-                    if strip_internal {
-                        symdef.name = "".into();
-                    }
+                } else if strip_internal {
+                    symdef.name = "".into();
                 }
 
                 let id;
@@ -222,38 +218,32 @@ fn main() -> ExitCode {
         seg.1[index..index + 2].copy_from_slice(&symdef.location.to_le_bytes());
     }
 
-    match set_entry {
-        Some(entry) => entry_point = Some({
-            if entry.starts_with("0x") {
-                Entry(SegmentType::Zero, u16::from_str_radix(&entry[2..], 16).unwrap())
+    if let Some(entry) = set_entry {
+        entry_point = Some({
+            if let Some(entry) = entry.strip_prefix("0x") {
+                Entry(SegmentType::Zero, u16::from_str_radix(entry, 16).unwrap())
+            } else if let Some(&pos) = global_symbols.get(&*entry) {
+                let sym = &symbols_out[pos];
+                Entry(sym.segment_type, sym.location)
             } else {
-                if let Some(&pos) = global_symbols.get(&*entry) {
-                    let sym = &symbols_out[pos];
-                    Entry(sym.segment_type, sym.location)
-                } else {
-                    eprintln!("Start symbol {entry} was not found. Perhaps it is not global?");
-                    eprintln!("Aborting linking");
-                    failure = true;
-                    Entry(SegmentType::Unknown, 0xffff)
-                }
+                eprintln!("Start symbol {entry} was not found. Perhaps it is not global?");
+                eprintln!("Aborting linking");
+                failure = true;
+                Entry(SegmentType::Unknown, 0xffff)
             }
-        }),
-        None => (),
+        });
     };
 
     if failure {
         return ExitCode::FAILURE;
     }
 
-    let obj = {
-        let mut obj = Object::default();
-
-        obj.segs = segs_out;
-        obj.entry = entry_point;
-        obj.symbols = SymbolTable(symbols_out);
-        obj.relocation_table = RelocationTable(reloc_out);
-
-        obj
+    let obj = Object {
+        segs: segs_out,
+        entry: entry_point,
+        symbols: SymbolTable(symbols_out),
+        relocation_table: RelocationTable(reloc_out),
+        .. Object::default()
     };
 
     if executable {

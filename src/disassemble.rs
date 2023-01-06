@@ -148,7 +148,7 @@ pub fn disassemble_instruction<'a, F: FnOnce(u16) -> Option<&'a str>>(location: 
             let (r1, o) = arg_pair(r, m, WideRegister, u8::from);
             let w = Operand::Wide(arg_imm_wide(r, m)).looked_up(label_lookup);
 
-            match u8::from(o) {
+            match o {
                 // ldi
                 0 => write!(f, "ldi {r1}, {w}").unwrap(),
                 // jmp, jump
@@ -227,7 +227,7 @@ fn cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(name: &str, r: &mut Registers, m:
 
 fn binop<T: Display, RF: Fn(U4) -> T>(name: &str, rf: RF, r: &mut Registers, m: &mut dyn Memory, f: &mut String) {
     let (r1, r2) = arg_pair(r, m, &rf, &rf);
-    let (r3, _o) = arg_pair(r, m, &rf, &id);
+    let (r3, _o) = arg_pair(r, m, &rf, id);
     write!(f, "{name} {r1}, {r2}, {r3}").unwrap();
 }
 
@@ -243,13 +243,10 @@ impl<'a> Operand<'a> {
         self
     }
     pub fn convert_wide_to_label<F: FnOnce(u16) -> Option<&'a str>>(&mut self, label_lookup: F) {
-        match &*self {
-            &Operand::Wide(w) => {
-                if let Some(lbl) = label_lookup(w) {
-                    *self = Operand::Label(lbl);
-                }
+        if let Operand::Wide(w) = *self {
+            if let Some(lbl) = label_lookup(w) {
+                *self = Operand::Label(lbl);
             }
-            _ => ()
         }
     }
 }

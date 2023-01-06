@@ -443,7 +443,7 @@ fn ldi_w(r: &mut Registers, m: &mut dyn Memory) {
 
     let w = arg_imm_wide(r, m);
 
-    match u8::from(o) {
+    match o {
         // ldi
         0 => r.write_wide(r1, w),
         // jmp, jump
@@ -456,6 +456,6 @@ fn ldi_w(r: &mut Registers, m: &mut dyn Memory) {
                 r.program_counter = r.read_wide(r1);
             }
         }
-        _ => return r.trap(TrapMode::Invalid),
+        _ => r.trap(TrapMode::Invalid),
     }
 }
