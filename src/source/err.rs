@@ -9,7 +9,7 @@ pub type LineNumber = u32;
 
 #[derive(Debug)]
 pub enum ErrorType {
-    InvalidOperand(Box<str>),
+    UnknownSegment(Box<str>),
     UnknownInstruction(Box<str>),
     UnknownDirective(Box<str>),
     IoError(IoError),
@@ -19,6 +19,7 @@ pub enum ErrorType {
     EscapeCharacterAtEnd,
     DoubleEntry,
     CharacterLiteralTooLong,
+    IncorrectOperands(&'static str),
     Other(Box<str>),
 }
 
@@ -75,15 +76,16 @@ impl Display for Error {
             }
             match error {
                 ErrorType::DoubleEntry => write!(f, "entry point defined twice"),
-                ErrorType::InvalidOperand(s) => write!(f, "invalid operand: {s}"),
+                ErrorType::UnknownSegment(s) => write!(f, "unsupported segment `{s}'"),
                 ErrorType::UnknownInstruction(s) => write!(f, "unknown instruction: {s}"),
                 ErrorType::UnknownDirective(s) => write!(f, "unknown directive: {s}"),
                 ErrorType::IoError(e) => write!(f, "io error: {e}"),
                 ErrorType::UnexpectedEndOfString => write!(f, "unexpected end of string"),
                 ErrorType::InvalidEscapeSequence => write!(f, "invalid escape sequence"),
                 ErrorType::InvalidEscapeCharacter(b) => write!(f, "invalid escape character {:?}", *b as char),
-                ErrorType::EscapeCharacterAtEnd => write!(f, "escape_character_at_end"),
-                ErrorType::CharacterLiteralTooLong => write!(f, "character_literal_too_long"),
+                ErrorType::EscapeCharacterAtEnd => write!(f, "unfinished escape at end"),
+                ErrorType::CharacterLiteralTooLong => write!(f, "character literal too long"),
+                ErrorType::IncorrectOperands(s) => write!(f, "incorrect operands, expected {s}"),
                 ErrorType::Other(s) => write!(f, "{s}"),
             }?;
             if next.is_some() {

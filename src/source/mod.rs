@@ -479,14 +479,7 @@ fn inner_process<B: BufRead>(
                     "text" => SegmentType::Text,
                     "heap" => SegmentType::Heap,
                     seg => {
-                        return Err(Error::new(
-                            src.clone(),
-                            ln,
-                            ErrorType::InvalidOperand(
-                                format!(".seg {seg} not supported, unknown segment")
-                                    .into_boxed_str(),
-                            ),
-                        ))
+                        return Err(Error::new(src.clone(), ln, ErrorType::UnknownSegment(seg.into())))
                     }
                 };
 
@@ -503,8 +496,11 @@ fn inner_process<B: BufRead>(
                 symbols.set_label(&s, addr, SourceLocation::new(&src, ln))?;
             }
             SourceLine::Ins(s, ops) => {
-                let (opcode, dat_op) = parse_ins(s, ops, symbols, SourceLocation::new(&src, ln))
-                    .map_err(|e| Error::new(src.clone(), ln, ErrorType::Other(e.into())))?;
+                let Some((opcode, dat_op)) = parse_ins(&s, ops, symbols, SourceLocation::new(&src, ln))
+                    .map_err(|e| Error::new(src.clone(), ln, ErrorType::IncorrectOperands(e)))?
+                else {
+                    return Err(Error::new(src.clone(), ln, ErrorType::UnknownInstruction(s.into_boxed_str())));
+                };
                 state.add_line(*current_segment, DataLine::Ins(opcode, dat_op), 1 + dat_op.size());
             }
             SourceLine::DirByte(b) => {
@@ -574,27 +570,27 @@ fn inner_process<B: BufRead>(
 }
 
 fn parse_ins(
-    s: String,
+    s: &str,
     ops: Vec<SourceOperand>,
     sym: &mut Symbols,
     sl: SourceLocation,
-) -> StdResult<(u8, DataOperand), &'static str> {
+) -> StdResult<Option<(u8, DataOperand)>, &'static str> {
     use self::isa::*;
     use self::DataOperand as O;
     let ops = ops.iter();
-    Ok(match &*s {
-        "null" => (NULL, O::parse_nothing(ops).ok_or("nothing")?),
-        "halt" => (HALT, O::parse_nothing(ops).ok_or("nothing")?),
-        "ctf" => (CTF, O::parse_nothing(ops).ok_or("nothing")?),
-        "reth" => (RETH, O::parse_nothing(ops).ok_or("nothing")?),
-        "nop" => (NOP, O::parse_nothing(ops).ok_or("nothing")?),
+    Ok(Some(match s {
+        "null" => (NULL, O::parse_nothing(ops).ok_or("no operands")?),
+        "halt" => (HALT, O::parse_nothing(ops).ok_or("no operands")?),
+        "ctf" => (CTF, O::parse_nothing(ops).ok_or("no operands")?),
+        "reth" => (RETH, O::parse_nothing(ops).ok_or("no operands")?),
+        "nop" => (NOP, O::parse_nothing(ops).ok_or("no operands")?),
         "push" => {
             if let Some(dat_op) = O::parse_breg(ops.clone()) {
                 (PUSH_B, dat_op)
             } else if let Some(dat_op) = O::parse_wreg(ops.clone()) {
                 (PUSH_W, dat_op)
             } else {
-                return Err("takes one register");
+                return Err("one register");
             }
         }
         "pop" => {
@@ -603,7 +599,7 @@ fn parse_ins(
             } else if let Some(dat_op) = O::parse_wreg(ops) {
                 (POP_W, dat_op)
             } else {
-                return Err("takes one register");
+                return Err("one register");
             }
         }
         "call" => (
@@ -711,7 +707,7 @@ fn parse_ins(
             } else if let Some(dat_op) = O::parse_wreg(ops) {
                 let DataOperand::WideRegister(wr) = dat_op else { unreachable!() };
                 if wr == R0 {
-                    return Err("r0 is not a valid jmp destination");
+                    return Err("any other register; r0 is not a valid jmp destination");
                 }
                 (LDI_W, DataOperand::TwoWideImm(wr, R1, Wide::Number(0)))
             } else {
@@ -747,11 +743,9 @@ fn parse_ins(
         }
         // TODO: BAD
         _ => {
-            return Err(Box::leak(
-                format!("unknown instruction {s}").into_boxed_str(),
-            ))
+            return Ok(None);
         }
-    })
+    }))
 }
 
 fn parse_binop(
