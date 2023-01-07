@@ -77,11 +77,11 @@ _ rpc   program counter, not accessible directly and therefore has no number
 _ rflags flags
 ```
 
-The stack pointer `rs` gets affected by stack operations. Its value is initially `0xffe0` on machine startup, putting it right before the I/O-mapping. Pushing first decrements this pointer and then writes the value to this new location. Popping will first read the value and then increment the pointer.
+The stack pointer `rs` gets affected by stack operations. Its value is initially `0xffe0` on machine startup, putting it right before the I/O mapped memory. Pushing first decrements this pointer and then writes the value to this new location. Popping will first read the value and then increment the pointer.
 The frame pointer `rf` has the same start value but is unused right now, but can be used to implement stack frames.
 
 The link pointer `rl` is set by the `call` instruction to be the location of the instruction following
-the call instruction. This is used by the `ret` instruction which just sets the program counter to `rl`.
+the call instruction. This is used by the `ret` instruction to return from the sub-routine by just setting the program counter to `rl` (and adding some value to `rs` for stack cleanup).
 You will need to `push rl` in a sub-routine before calling another sub-routine in order to be able return again, because otherwise the return location is lost.
 
 `rp` is unused for now but will store the location of the page table. A value of `0` indicates no page table is to be used and instead direct memory access.
@@ -90,7 +90,9 @@ You will need to `push rl` in a sub-routine before calling another sub-routine i
 so that the trap handler can determine what to do based on this value. The instruction `reth` can be used
 to return from a trap handler, which will pop all registers and continue execution.
 
-Lastly, the hidden registers `rpc` and `rflags` have unstable names. They are the program counter and flags respectively. The program counter is the location of the next instruction to be loaded and run, it gets updated when an instruction is read and by various other like jumps, `call`, `ret`, `reth`, ...
+Lastly, the names of the hidden registers `rpc` and `rflags` are subject to change since they are inaccessible.
+They are the program counter and flags respectively. The program counter is the location of the next instruction to be loaded and run,
+it gets updated when an instruction is read and by various other like jumps, `call`, `ret`, `reth`, ...
 `rflags` are flags set by arithmetic instructions which conditional jumps depend on.
 
 ## Instruction and operand encoding
@@ -99,10 +101,10 @@ An instruction is encoded in three steps. First is the opcode which is one byte.
 uniquely determines the operands it takes and thus you can determine the size of the whole instruction
 from this alone.
 
-Secondly, all registers are encoded in order. Each register only takes up 4 bits, and if the instruction
-takes an uneven number of registers, the last 4-bit byte of a byte has to be zero (as if it was r0(b)).
-The operands in the assembly language representation might have an immediate between some registers,
-but the encoded representation will put all registers first.
+Secondly, all registers are encoded in order. Each register only takes up 4 bits, using first the most significant 4 bits of a byte, then the least significant,
+and if the instruction takes an uneven number of registers, the least significant 4-bit portion of a byte has to be zero (as if it was r0(b)).
+The operands _in the assembly language representation_ might have an immediate between some registers,
+but the encoded representation will put all registers before any immediates.
 
 Then lastly, any immediate operand will be written after it in little-endian byte order (if it is a wide,
 if it's a byte, then byte order does not matter, haha).
