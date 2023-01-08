@@ -218,6 +218,7 @@ fn main() -> ExitCode {
                 "r4l" => print_byte_register("r4l", R4L, &cpu.registers),
                 "r4h" => print_byte_register("r4h", R4H, &cpu.registers),
                 "r5l" => print_byte_register("r5l", R5L, &cpu.registers),
+                "r5h" => print_byte_register("r5h", R5H, &cpu.registers),
                 "r6b" => print_byte_register("r6b", R6B, &cpu.registers),
                 "r7b" => print_byte_register("r7b", R7B, &cpu.registers),
                 "r8b" => print_byte_register("r8b", R8B, &cpu.registers),
