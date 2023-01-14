@@ -1,28 +1,80 @@
 use std::io::{stdin, stdout, Read, Write};
 
 /// Memory below this address is used for IO mapping
-pub const IO_MAPPING_CUTOFF: u16 = 0xffe0;
+pub const VIRTUAL_IO_MAPPING_CUTOFF: u16 = 0xfff0;
+pub const MAIN_IO_MAPPING_CUTOFF: u32 = 0xfffff0;
 
-/// A memory request handler
-///
-/// Addresses up to `IO_MAPPING_CUTOFF` should be guaranteed to stay consistent between reads and writes with no side-effects.
-///
-/// Addresses from `IO_MAPPING_CUTOFF` have no such guarantees and should be used to map to I/O (such as to peripherals or just STDIO).
-pub trait Memory {
-    fn read(&mut self, addr: u16) -> u8;
-    fn write(&mut self, addr: u16, val: u8);
+pub trait MainMemory {
+    fn read(&mut self, addr: u32) -> u8;
+    fn write(&mut self, addr: u32, byte: u8);
+}
 
-    fn read_wide(&mut self, addr: u16) -> u16 {
-        let lower = self.read(addr);
-        let higher = self.read(addr + 1);
+#[derive(Debug, Clone)]
+pub struct LazyMain<P> {
+    cells: [Option<Box<[u8; 256*256]>>; 256],
+    ports: P,
+}
 
-        u16::from_le_bytes([lower, higher])
+impl<P: Io> MainMemory for LazyMain<P> {
+    fn read(&mut self, addr: u32) -> u8 {
+        if addr >= MAIN_IO_MAPPING_CUTOFF {
+            return self.ports.read((addr & 0xf) as u8);
+        }
+
+        let cell_index = (addr >> 16) as usize;
+        if let Some(cell) = &self.cells[cell_index] {
+            let index = (addr & 0xffff) as usize;
+            cell[index]
+        } else {
+            0
+        }
     }
-    fn write_wide(&mut self, addr: u16, val: u16) {
-        let [lower, higher] = val.to_le_bytes();
+    fn write(&mut self, addr: u32, byte: u8) {
+        if addr >= MAIN_IO_MAPPING_CUTOFF {
+            self.ports.write((addr & 0xf) as u8, byte);
+            return;
+        }
 
-        self.write(addr, lower);
-        self.write(addr + 1, higher);
+        let cell_index = (addr >> 16) as usize;
+        let index = (addr & 0xffff) as usize;
+        match &mut self.cells[cell_index] {
+            Some(cell) => cell[index] = byte,
+            opt @ None => {
+                let mut cell = Box::new([0; 256*256]);
+                cell[index] = byte;
+                *opt = Some(cell);
+            }
+        }
+    }
+}
+
+impl<P> LazyMain<P> {
+    pub fn new(ports: P) -> Self {
+        Self {
+            cells: ([(); 256]).map(|()| None),
+            ports,
+        }
+    }
+    pub fn new_with_memory(ports: P, flat_bytes: Vec<u8>) -> Self {
+        let mut new = Self::new(ports);
+
+        for (chunk, cell) in flat_bytes.chunks(256*256).zip(&mut new.cells) {
+            let mut new_cell = Box::new([0; 256*256]);
+            new_cell[..chunk.len()].copy_from_slice(chunk);
+            *cell = Some(new_cell);
+        }
+
+        new
+    }
+}
+impl LazyMain<PanickingIO> {
+    pub fn new_panicking() -> Self {
+        Self::new(PanickingIO)
+    }
+}
+impl LazyMain<StdIo> {
+    pub fn new_stdio() -> Self {
+        Self::new(StdIo)
     }
 }
 
@@ -50,56 +102,5 @@ impl Io for StdIo {
     }
     fn write(&mut self, _addr: u8, val: u8) {
         stdout().write_all(&[val]).expect("stdout failed")
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Lazy<I> {
-    pub mem: Vec<u8>,
-    pub io: I,
-}
-
-impl Lazy<PanickingIO> {
-    pub fn new_panicking(mem: Vec<u8>) -> Self {
-        Self {
-            mem,
-            io: PanickingIO,
-        }
-    }
-}
-impl Lazy<StdIo> {
-    pub fn new_stdio(mem: Vec<u8>) -> Self {
-        Self { mem, io: StdIo }
-    }
-}
-
-impl<I: Io> Memory for Lazy<I> {
-    fn read(&mut self, addr: u16) -> u8 {
-        if addr < IO_MAPPING_CUTOFF {
-            self.mem.get(addr as usize).copied().unwrap_or(0)
-        } else {
-            self.io.read(addr as u8)
-        }
-    }
-    fn write(&mut self, addr: u16, val: u8) {
-        if addr < IO_MAPPING_CUTOFF {
-            if self.mem.len() <= addr as usize {
-                self.mem.resize(addr as usize + 1, 0);
-            }
-            self.mem[addr as usize] = val;
-        } else {
-            self.io.write(addr as u8, val);
-        }
-    }
-}
-
-impl Memory for [u8] {
-    // No I/O
-    fn read(&mut self, addr: u16) -> u8 {
-        self[addr as usize]
-    }
-    // No I/O
-    fn write(&mut self, addr: u16, val: u8) {
-        self[addr as usize] = val;
     }
 }

@@ -8,9 +8,12 @@ use std::{
 
 use crate::{
     aalv::obj::Entry,
-    cpu::{ByteRegister as BReg, WideRegister as WReg},
+    blf4::{ByteRegister as BReg, WideRegister as WReg, *},
+    aalv::obj::SegmentType,
+    align,
+    SEGMENT_ALIGNMENT,
+    U4,
 };
-use crate::{aalv::obj::SegmentType, align, cpu::*, isa, SEGMENT_ALIGNMENT, U4};
 
 mod err;
 pub use self::err::*;

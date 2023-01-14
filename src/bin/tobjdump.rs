@@ -11,7 +11,7 @@ use telda2::{
         obj::{Object, SegmentType, SymbolTable},
         Section,
     },
-    disassemble::{disassemble_instruction, DisassembledInstruction},
+    disassemble::{disassemble_instruction, DisassembledInstruction}, mem::{LazyMain, PanickingIO},
 };
 
 #[derive(Parser)]
@@ -120,10 +120,10 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
     }
 
     println!("disassembly:");
-    let mem;
+    let mut mem;
     let mut pos_to_labels = HashMap::new();
     {
-        mem = obj.get_flattened_memory();
+        mem = LazyMain::new_with_memory(PanickingIO, obj.get_flattened_memory());
 
         for (id, s) in obj.symbols.0.iter().enumerate() {
             pos_to_labels.insert(s.location, id);
@@ -180,7 +180,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
                 ends_block,
                 nesting_difference: _,
                 next_instruction_location,
-            } = disassemble_instruction(location, &mem, |p| {
+            } = disassemble_instruction(location, &mut mem, |p| {
                 let l = pos_to_labels.get(&p).copied();
                 if let Some(l) = l {
                     if !printed_labels.contains(&l) {

@@ -2,9 +2,7 @@ use std::{io, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use telda2::{
-    aalv::obj::{Object, SymbolDefinition},
-    cpu::{Cpu, TrapMode},
-    mem::Lazy,
+    aalv::obj::{Object, SymbolDefinition}, blf4::{TrapMode, Blf4}, mem::{StdIo, LazyMain}, machine::Machine,
 };
 
 #[derive(Parser)]
@@ -53,13 +51,14 @@ fn t_main() -> Result<(), Error> {
         (mem, iter, obj.entry.ok_or(Error::NoEntry)?.1)
     };
 
-    let mut lazy = Lazy::new_stdio(mem);
+    let lazy = LazyMain::new_with_memory(StdIo, mem);
+    let cpu = Blf4::new(start_addr);
 
-    let mut cpu = Cpu::new(start_addr);
-    let tm = cpu.run_until_abort(&mut lazy);
+    let mut machine = Machine::new(lazy, cpu);
+    let tm = machine.run_until_abort();
 
     if termination_point {
-        let pc = cpu.registers.program_counter;
+        let pc = machine.cpu.program_counter;
         let mut diff = pc;
         let mut closest = "".into();
         for SymbolDefinition { name, location, .. } in symbols {

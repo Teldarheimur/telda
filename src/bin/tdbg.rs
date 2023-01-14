@@ -7,9 +7,9 @@ use std::{
 
 use telda2::{
     aalv::obj::{Object, SymbolDefinition},
-    cpu::*,
+    blf4::*,
     disassemble::disassemble_instruction,
-    mem::{Io, Lazy, Memory},
+    mem::{Io, LazyMain}, machine::Cpu,
 };
 
 struct DbgIo {
@@ -63,7 +63,7 @@ struct Cli {
 fn main() -> ExitCode {
     let Cli { input_file, entry } = Cli::parse();
 
-    let mem;
+    let flat_mem;
     let ep;
     let mut labels = HashMap::new();
     let mut pos_to_labels = HashMap::new();
@@ -77,7 +77,7 @@ fn main() -> ExitCode {
             }
         };
 
-        mem = obj.get_flattened_memory();
+        flat_mem = obj.get_flattened_memory();
 
         if let Some(entry) = entry {
             if let Some(entry) = entry.strip_prefix("0x") {
@@ -131,24 +131,24 @@ fn main() -> ExitCode {
         in_buf: VecDeque::new(),
         out_buf: Vec::new(),
     };
-    let mut mem = Lazy { io, mem };
+    let mut mem = LazyMain::new_with_memory(io, flat_mem);
     let Some(start) = ep else {
         eprintln!("no _entry section in binary, cannot start");
         eprintln!("help: you can set a custom one with -E");
         return ExitCode::FAILURE;
     };
-    let mut cpu = Cpu::new(start);
+    let mut cpu = Blf4::new(start);
     let stdin = stdin();
     let mut input = String::new();
     let mut target_nesting = 0;
     let mut current_nesting = 0;
 
     'disassemble_loop: loop {
-        let dins = disassemble_instruction(cpu.registers.program_counter, &mem.mem, |p| {
+        let dins = disassemble_instruction(cpu.program_counter, &mut mem, |p| {
             pos_to_labels.get(&p).map(|s| &**s)
         });
 
-        if cpu.registers.trap {
+        if cpu.trap {
             println!("handled trap encountered!");
             current_nesting += 1;
             target_nesting = current_nesting;
@@ -156,7 +156,7 @@ fn main() -> ExitCode {
 
         let mut skip_loop = true;
         if current_nesting == target_nesting {
-            if let Some(label) = pos_to_labels.get(&cpu.registers.program_counter) {
+            if let Some(label) = pos_to_labels.get(&cpu.program_counter) {
                 println!("<{label}>:");
             }
 
@@ -202,57 +202,58 @@ fn main() -> ExitCode {
                             continue;
                         }
                     };
+                    let mut c = cpu.context(&mut mem);
                     println!(
                         " = 0x{:02x} 0x{:02x} ...",
-                        mem.read(addr),
-                        mem.read(addr + 1)
+                        c.read(addr),
+                        c.read(addr + 1)
                     );
                 }
-                "r0b" => print_byte_register("r0b", R0B, &cpu.registers),
-                "r1l" => print_byte_register("r1l", R1L, &cpu.registers),
-                "r1h" => print_byte_register("r1h", R1H, &cpu.registers),
-                "r2l" => print_byte_register("r2l", R2L, &cpu.registers),
-                "r2h" => print_byte_register("r2h", R2H, &cpu.registers),
-                "r3l" => print_byte_register("r3l", R3L, &cpu.registers),
-                "r3h" => print_byte_register("r3h", R3H, &cpu.registers),
-                "r4l" => print_byte_register("r4l", R4L, &cpu.registers),
-                "r4h" => print_byte_register("r4h", R4H, &cpu.registers),
-                "r5l" => print_byte_register("r5l", R5L, &cpu.registers),
-                "r5h" => print_byte_register("r5h", R5H, &cpu.registers),
-                "r6b" => print_byte_register("r6b", R6B, &cpu.registers),
-                "r7b" => print_byte_register("r7b", R7B, &cpu.registers),
-                "r8b" => print_byte_register("r8b", R8B, &cpu.registers),
-                "r9b" => print_byte_register("r9b", R9B, &cpu.registers),
-                "r10b" => print_byte_register("r10b", R10B, &cpu.registers),
-                "r0" => println!("r0 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R0)),
-                "r1" => println!("r1 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R1)),
-                "r2" => println!("r2 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R2)),
-                "r3" => println!("r3 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R3)),
-                "r4" => println!("r4 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R4)),
-                "r5" => println!("r5 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R5)),
-                "r6" => println!("r6 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R6)),
-                "r7" => println!("r7 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R7)),
-                "r8" => println!("r8 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R8)),
-                "r9" => println!("r9 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R9)),
-                "r10" => println!("r10 = {r} 0x{r:04x}", r = cpu.registers.read_wide(R10)),
-                "rs" => println!("rs = {r} 0x{r:04x}", r = cpu.registers.read_wide(RS)),
-                "rl" => println!("rl = {r} 0x{r:04x}", r = cpu.registers.read_wide(RL)),
-                "rf" => println!("rf = {r} 0x{r:04x}", r = cpu.registers.read_wide(RF)),
-                "rp" => println!("rp = {r} 0x{r:04x}", r = cpu.registers.read_wide(RP)),
-                "rh" => println!("rh = {r} 0x{r:04x}", r = cpu.registers.read_wide(RH)),
-                "rpc" => println!("pc = {pc} 0x{pc:04x}", pc = cpu.registers.program_counter),
+                "r0b" => print_byte_register("r0b", R0B, &cpu),
+                "r1l" => print_byte_register("r1l", R1L, &cpu),
+                "r1h" => print_byte_register("r1h", R1H, &cpu),
+                "r2l" => print_byte_register("r2l", R2L, &cpu),
+                "r2h" => print_byte_register("r2h", R2H, &cpu),
+                "r3l" => print_byte_register("r3l", R3L, &cpu),
+                "r3h" => print_byte_register("r3h", R3H, &cpu),
+                "r4l" => print_byte_register("r4l", R4L, &cpu),
+                "r4h" => print_byte_register("r4h", R4H, &cpu),
+                "r5l" => print_byte_register("r5l", R5L, &cpu),
+                "r5h" => print_byte_register("r5h", R5H, &cpu),
+                "r6b" => print_byte_register("r6b", R6B, &cpu),
+                "r7b" => print_byte_register("r7b", R7B, &cpu),
+                "r8b" => print_byte_register("r8b", R8B, &cpu),
+                "r9b" => print_byte_register("r9b", R9B, &cpu),
+                "r10b" => print_byte_register("r10b", R10B, &cpu),
+                "r0" => println!("r0 = {r} 0x{r:04x}", r = cpu.read_wr(R0)),
+                "r1" => println!("r1 = {r} 0x{r:04x}", r = cpu.read_wr(R1)),
+                "r2" => println!("r2 = {r} 0x{r:04x}", r = cpu.read_wr(R2)),
+                "r3" => println!("r3 = {r} 0x{r:04x}", r = cpu.read_wr(R3)),
+                "r4" => println!("r4 = {r} 0x{r:04x}", r = cpu.read_wr(R4)),
+                "r5" => println!("r5 = {r} 0x{r:04x}", r = cpu.read_wr(R5)),
+                "r6" => println!("r6 = {r} 0x{r:04x}", r = cpu.read_wr(R6)),
+                "r7" => println!("r7 = {r} 0x{r:04x}", r = cpu.read_wr(R7)),
+                "r8" => println!("r8 = {r} 0x{r:04x}", r = cpu.read_wr(R8)),
+                "r9" => println!("r9 = {r} 0x{r:04x}", r = cpu.read_wr(R9)),
+                "r10" => println!("r10 = {r} 0x{r:04x}", r = cpu.read_wr(R10)),
+                "rs" => println!("rs = {r} 0x{r:04x}", r = cpu.read_wr(RS)),
+                "rl" => println!("rl = {r} 0x{r:04x}", r = cpu.read_wr(RL)),
+                "rf" => println!("rf = {r} 0x{r:04x}", r = cpu.read_wr(RF)),
+                "rp" => println!("rp = {r} 0x{r:04x}", r = cpu.read_wr(RP)),
+                "rh" => println!("rh = {r} 0x{r:04x}", r = cpu.read_wr(RH)),
+                "rpc" => println!("pc = {pc} 0x{pc:04x}", pc = cpu.program_counter),
                 "flags" => {
                     print!("flags = ");
-                    if cpu.registers.carry {
+                    if cpu.carry {
                         print!("carry ");
                     }
-                    if cpu.registers.overflow {
+                    if cpu.overflow {
                         print!("overflow ");
                     }
-                    if cpu.registers.sign {
+                    if cpu.sign {
                         print!("sign ");
                     }
-                    if cpu.registers.zero {
+                    if cpu.zero {
                         print!("zero ");
                     }
                     println!();
@@ -266,13 +267,13 @@ fn main() -> ExitCode {
                             continue;
                         }
                     };
-                    cpu.registers.program_counter = addr;
+                    cpu.program_counter = addr;
                     continue 'disassemble_loop;
                 }
                 _ => eprintln!("unknown command, type q to quit"),
             }
         };
-        match cpu.run_instruction(&mut mem) {
+        match cpu.execute_instruction(&mut mem) {
             Ok(()) => (),
             Err(e) => {
                 println!("ended with {e:?}");
@@ -285,8 +286,8 @@ fn main() -> ExitCode {
     ExitCode::SUCCESS
 }
 
-fn print_byte_register(name: &str, r: ByteRegister, reg: &Registers) {
-    let val = reg.read_byte(r);
+fn print_byte_register(name: &str, r: ByteRegister, reg: &Blf4) {
+    let val = reg.read_br(r);
     print!("{name} = {val} 0x{val:02x}");
     if let Ok(s) = std::str::from_utf8(&[val]) {
         // TODO: don't rely on debug print here

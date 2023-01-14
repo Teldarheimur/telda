@@ -1,10 +1,10 @@
 pub mod aalv;
-pub mod cpu;
+pub mod blf4;
 pub mod disassemble;
-pub mod isa;
 pub mod mem;
 pub mod source;
 pub mod u4;
+pub mod machine;
 
 pub use self::u4::U4;
 
