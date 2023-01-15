@@ -164,7 +164,10 @@ jb,jc w                | 37     | Conditional jump to w if carry flag is set
 jae,jnc w              | 38     | Conditional jump to w if carry flag is not set
 ja  w                  | 39     | Conditional jump to w if carry flag and zero flag are both not set
 jbe w                  | 3a     | Conditional jump to w if carry flag OR zero flag are set
-...                    | 3b-3e  | funny stuff
+usr                    | 3b     | Enter user mode
+vmon                   | 3c     | Enables virtual memory (using the page table at rp) (requires supervisor mode)
+vmoff                  | 3d     | Disables virtual memory (requires supervisor mode)
+...                    | 3e     | reserved
 ldi br, b              | 3f     | load immediate value into register
 ldi wr, w              | 40     | load immediate value into register (encoded as `ldi wr, r0, w` per the rule about uneven number of registers)
 jmp w                  | 40     | jumps to w (sets program counter to immediate value), encoded as `ldi r0, r1, w`

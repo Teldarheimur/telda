@@ -146,9 +146,9 @@ fn main() -> ExitCode {
     'disassemble_loop: loop {
         let dins = disassemble_instruction(cpu.program_counter, &mut mem, |p| {
             pos_to_labels.get(&p).map(|s| &**s)
-        });
+        }).unwrap();
 
-        if cpu.trap {
+        if false && todo!("is trapping") {
             println!("handled trap encountered!");
             current_nesting += 1;
             target_nesting = current_nesting;
@@ -205,8 +205,8 @@ fn main() -> ExitCode {
                     let mut c = cpu.context(&mut mem);
                     println!(
                         " = 0x{:02x} 0x{:02x} ...",
-                        c.read(addr),
-                        c.read(addr + 1)
+                        c.read(addr).unwrap(),
+                        c.read(addr + 1).unwrap()
                     );
                 }
                 "r0b" => print_byte_register("r0b", R0B, &cpu),
@@ -225,39 +225,24 @@ fn main() -> ExitCode {
                 "r8b" => print_byte_register("r8b", R8B, &cpu),
                 "r9b" => print_byte_register("r9b", R9B, &cpu),
                 "r10b" => print_byte_register("r10b", R10B, &cpu),
-                "r0" => println!("r0 = {r} 0x{r:04x}", r = cpu.read_wr(R0)),
-                "r1" => println!("r1 = {r} 0x{r:04x}", r = cpu.read_wr(R1)),
-                "r2" => println!("r2 = {r} 0x{r:04x}", r = cpu.read_wr(R2)),
-                "r3" => println!("r3 = {r} 0x{r:04x}", r = cpu.read_wr(R3)),
-                "r4" => println!("r4 = {r} 0x{r:04x}", r = cpu.read_wr(R4)),
-                "r5" => println!("r5 = {r} 0x{r:04x}", r = cpu.read_wr(R5)),
-                "r6" => println!("r6 = {r} 0x{r:04x}", r = cpu.read_wr(R6)),
-                "r7" => println!("r7 = {r} 0x{r:04x}", r = cpu.read_wr(R7)),
-                "r8" => println!("r8 = {r} 0x{r:04x}", r = cpu.read_wr(R8)),
-                "r9" => println!("r9 = {r} 0x{r:04x}", r = cpu.read_wr(R9)),
-                "r10" => println!("r10 = {r} 0x{r:04x}", r = cpu.read_wr(R10)),
-                "rs" => println!("rs = {r} 0x{r:04x}", r = cpu.read_wr(RS)),
-                "rl" => println!("rl = {r} 0x{r:04x}", r = cpu.read_wr(RL)),
-                "rf" => println!("rf = {r} 0x{r:04x}", r = cpu.read_wr(RF)),
-                "rp" => println!("rp = {r} 0x{r:04x}", r = cpu.read_wr(RP)),
-                "rh" => println!("rh = {r} 0x{r:04x}", r = cpu.read_wr(RH)),
+                "r0" => println!("r0 = {r} 0x{r:04x}", r = cpu.read_wr(R0).unwrap()),
+                "r1" => println!("r1 = {r} 0x{r:04x}", r = cpu.read_wr(R1).unwrap()),
+                "r2" => println!("r2 = {r} 0x{r:04x}", r = cpu.read_wr(R2).unwrap()),
+                "r3" => println!("r3 = {r} 0x{r:04x}", r = cpu.read_wr(R3).unwrap()),
+                "r4" => println!("r4 = {r} 0x{r:04x}", r = cpu.read_wr(R4).unwrap()),
+                "r5" => println!("r5 = {r} 0x{r:04x}", r = cpu.read_wr(R5).unwrap()),
+                "r6" => println!("r6 = {r} 0x{r:04x}", r = cpu.read_wr(R6).unwrap()),
+                "r7" => println!("r7 = {r} 0x{r:04x}", r = cpu.read_wr(R7).unwrap()),
+                "r8" => println!("r8 = {r} 0x{r:04x}", r = cpu.read_wr(R8).unwrap()),
+                "r9" => println!("r9 = {r} 0x{r:04x}", r = cpu.read_wr(R9).unwrap()),
+                "r10" => println!("r10 = {r} 0x{r:04x}", r = cpu.read_wr(R10).unwrap()),
+                "rs" => println!("rs = {r} 0x{r:04x}", r = cpu.read_wr(RS).unwrap()),
+                "rl" => println!("rl = {r} 0x{r:04x}", r = cpu.read_wr(RL).unwrap()),
+                "rf" => println!("rf = {r} 0x{r:04x}", r = cpu.read_wr(RF).unwrap()),
+                "rp" => println!("rp = {r} 0x{r:04x}", r = cpu.read_wr(RP).unwrap()),
+                "rh" => println!("rh = {r} 0x{r:04x}", r = cpu.read_wr(RH).unwrap()),
                 "rpc" => println!("pc = {pc} 0x{pc:04x}", pc = cpu.program_counter),
-                "flags" => {
-                    print!("flags = ");
-                    if cpu.carry {
-                        print!("carry ");
-                    }
-                    if cpu.overflow {
-                        print!("overflow ");
-                    }
-                    if cpu.sign {
-                        print!("sign ");
-                    }
-                    if cpu.zero {
-                        print!("zero ");
-                    }
-                    println!();
-                }
+                "flags" => println!("flags = {}", cpu.flags),
                 l if l.starts_with("g ") => {
                     let arg = l[2..].trim();
                     let addr = match parse_num(arg) {

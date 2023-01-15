@@ -192,7 +192,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
                 } else {
                     None
                 }
-            });
+            }).unwrap();
 
             if show_relocations {
                 for (&loc, &sym) in relocs.range(location..next_instruction_location) {

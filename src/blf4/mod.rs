@@ -1,6 +1,9 @@
+use std::fmt::{self, Display};
+
 use crate::{
+    machine::Cpu,
     mem::{MainMemory, VIRTUAL_IO_MAPPING_CUTOFF},
-    U4, machine::Cpu,
+    U4,
 };
 
 pub mod isa;
@@ -9,6 +12,101 @@ mod register_type;
 
 pub use self::register_type::*;
 use isa::OP_HANDLERS;
+
+pub type OpRes<T, E = TrapMode> = Result<T, E>;
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Blf4Flags {
+    pub user_mode: bool,
+    pub trap: bool,
+    pub reserved: bool,
+    pub virtual_mode: bool,
+
+    pub carry: bool,
+    pub sign: bool,
+    pub overflow: bool,
+    pub zero: bool,
+}
+
+impl From<Blf4Flags> for u16 {
+    fn from(flags: Blf4Flags) -> Self {
+        let Blf4Flags {
+            user_mode,
+            trap,
+            reserved,
+            virtual_mode,
+            zero,
+            sign,
+            overflow,
+            carry,
+        } = flags;
+
+        ((zero as u16) << 7)
+            | ((overflow as u16) << 6)
+            | ((sign as u16) << 5)
+            | ((carry as u16) << 4)
+            | ((virtual_mode as u16) << 3)
+            | ((reserved as u16) << 2)
+            | ((trap as u16) << 1)
+            | ((user_mode as u16) << 0)
+    }
+}
+
+impl From<u16> for Blf4Flags {
+    fn from(n: u16) -> Self {
+        Blf4Flags {
+            zero: n & (1 << 7) != 0,
+            overflow: n & (1 << 6) != 0,
+            sign: n & (1 << 5) != 0,
+            carry: n & (1 << 4) != 0,
+            virtual_mode: n & (1 << 3) != 0,
+            reserved: n & (1 << 2) != 0,
+            trap: n & (1 << 1) != 0,
+            user_mode: n & (1 << 0) != 0,
+        }
+    }
+}
+
+impl Display for Blf4Flags {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let mut just_zero = true;
+
+        fn os(jz: &mut bool) -> &'static str {
+            if *jz {
+                *jz = false;
+                ""
+            } else {
+                " | "
+            }
+        }
+
+        if self.zero {
+            write!(f, "zero")?;
+            just_zero = false;
+        }
+        if self.overflow {
+            write!(f, "{}overflow", os(&mut just_zero))?;
+        }
+        if self.sign {
+            write!(f, "{}sign", os(&mut just_zero))?;
+        }
+        if self.carry {
+            write!(f, "{}carry", os(&mut just_zero))?;
+        }
+        if self.virtual_mode {
+            write!(f, "{}vm", os(&mut just_zero))?;
+        }
+        if self.user_mode {
+            write!(f, "{}user", os(&mut just_zero))?;
+        }
+
+        if just_zero {
+            write!(f, "0")
+        } else {
+            Ok(())
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct Blf4 {
@@ -21,12 +119,7 @@ pub struct Blf4 {
     pub program_counter: u16,
     /// Zero means no trap handler
     pub trap_handler: u16,
-    pub trap_mode: TrapMode,
-    pub trap: bool,
-    pub zero: bool,
-    pub sign: bool,
-    pub overflow: bool,
-    pub carry: bool,
+    pub flags: Blf4Flags,
 }
 
 impl Blf4 {
@@ -40,20 +133,12 @@ impl Blf4 {
             page: 0,
             frame: VIRTUAL_IO_MAPPING_CUTOFF,
             stack: VIRTUAL_IO_MAPPING_CUTOFF,
-            trap: false,
             trap_handler: 0,
-            trap_mode: TrapMode::default(),
-            zero: false,
-            sign: false,
-            overflow: false,
-            carry: false,
+            flags: Blf4Flags::default(),
         }
     }
     pub fn context<'a, M: MainMemory>(&'a mut self, mem: &'a mut M) -> HandlerContext<'a> {
-        HandlerContext {
-            cpu: self,
-            mem,
-        }
+        HandlerContext { cpu: self, mem }
     }
 
     pub fn read_br(&self, r: ByteRegister) -> u8 {
@@ -89,8 +174,8 @@ impl Blf4 {
             _ => unimplemented!("no such register"),
         }
     }
-    pub fn read_wr(&self, r: WideRegister) -> u16 {
-        match r.0.into() {
+    pub fn read_wr(&self, r: WideRegister) -> OpRes<u16> {
+        Ok(match r.0.into() {
             0 => 0,
             n @ 1..=10 => {
                 let index = (n as usize - 1) << 1;
@@ -100,12 +185,14 @@ impl Blf4 {
             11 => self.stack,
             12 => self.link,
             13 => self.frame,
+
+            14 | 15 if self.flags.user_mode => return Err(TrapMode::IllegalOperation),
             14 => self.page,
             15 => self.trap_handler,
             _ => unimplemented!("no such register"),
-        }
+        })
     }
-    pub fn write_wr(&mut self, r: WideRegister, val: u16) {
+    pub fn write_wr(&mut self, r: WideRegister, val: u16) -> OpRes<()> {
         match r.0.into() {
             0 => (),
             n @ 1..=10 => {
@@ -118,36 +205,34 @@ impl Blf4 {
             11 => self.stack = val,
             12 => self.link = val,
             13 => self.frame = val,
+            14 | 15 if self.flags.user_mode => return Err(TrapMode::IllegalOperation),
             14 => self.page = val,
             15 => self.trap_handler = val,
             _ => unimplemented!("no such register"),
         }
-    }
-    pub fn trap(&mut self, trap_mode: TrapMode) {
-        self.trap = true;
-        self.trap_mode = trap_mode;
+        Ok(())
     }
 }
 
 impl Cpu for Blf4 {
     type TrapMode = TrapMode;
-    fn execute_instruction<M: MainMemory>(&mut self, mem: &mut M) -> Result<(), Self::TrapMode> {
-        let mut ctx = HandlerContext {
-            cpu: self,
-            mem,
-        };
+    fn execute_instruction<M: MainMemory>(&mut self, mem: &mut M) -> OpRes<(), Self::TrapMode> {
+        let mut ctx = HandlerContext { cpu: self, mem };
 
-        let opcode = ctx.fetch();
+        let opcode = ctx.fetch()?;
 
-        OP_HANDLERS[opcode as usize](&mut ctx);
-
-        if ctx.cpu.trap {
-            if ctx.cpu.trap_handler == 0 {
-                return Err(self.trap_mode);
-            } else {
-                ctx.push_registers();
-                self.program_counter = self.trap_handler;
-                self.write_wr(R1, self.trap_mode as u8 as u16);
+        match OP_HANDLERS[opcode as usize](&mut ctx) {
+            Ok(()) => (),
+            Err(tm) => {
+                ctx.cpu.flags.trap = true;
+                ctx.cpu.flags.user_mode = false;
+                if ctx.cpu.trap_handler == 0 {
+                    return Err(tm);
+                } else {
+                    ctx.push_registers()?;
+                    self.program_counter = self.trap_handler;
+                    self.write_wr(R1, tm as u8 as u16)?;
+                }
             }
         }
 
@@ -163,6 +248,8 @@ pub enum TrapMode {
     SysCall = 0x5,
     ZeroDiv = 0x8,
     Halt = 0xa,
+    Level1PageFault = 0xe,
+    Level2PageFault = 0xf,
     IllegalOperation = 0x10,
     IllegalRead = 0x11,
     IllegalWrite = 0x12,
@@ -183,102 +270,158 @@ pub struct HandlerContext<'a> {
 }
 
 impl HandlerContext<'_> {
-    fn addr_resolve(&self, addr: u16, mode: AccessMode) -> Option<u32> {
-        if self.cpu.page == 0 {
-            Some(if addr >= VIRTUAL_IO_MAPPING_CUTOFF {
+    #[must_use = "error must be handled"]
+    fn addr_resolve(&mut self, addr: u16, mode: AccessMode) -> OpRes<u32> {
+        if !self.cpu.flags.virtual_mode {
+            let offset = (self.cpu.page as u32) << 8;
+
+            return Ok(if addr >= VIRTUAL_IO_MAPPING_CUTOFF {
                 0xff_fff0 | (addr as u32 & 0xf)
             } else {
-                addr as u32
-            })
-        } else {
-            todo!("mode: {mode:?}")
+                offset | addr as u32
+            });
         }
+
+        let page_offset = (addr & 0x3f) as u32;
+        let vpn2 = ((addr >> 6) & 0x1f) as u32;
+        let vpn1 = (addr >> 11) as u32;
+
+        let table1_start = self.cpu.page as u32;
+
+        let lvl1_addr = table1_start + (vpn1 << 1);
+        let lvl1_entry = u32::from_le_bytes([
+            self.mem.read(lvl1_addr),
+            self.mem.read(lvl1_addr + 1),
+            self.mem.read(lvl1_addr + 2),
+            0,
+        ]);
+
+        let lvl2_present = lvl1_entry & 1 == 1;
+        if !lvl2_present {
+            return Err(TrapMode::Level1PageFault);
+        }
+        let lvl2_addr = (lvl1_entry >> 1) + (3 * vpn2);
+        let lvl2_entry = u32::from_le_bytes([
+            self.mem.read(lvl2_addr),
+            self.mem.read(lvl2_addr + 1),
+            self.mem.read(lvl2_addr + 2),
+            0,
+        ]);
+
+        let ppn = lvl2_entry >> 6;
+        let flags = lvl2_entry & 0x3f;
+        let page_present = flags & 1 != 0;
+        let dirty = flags & 2 != 0;
+        let supervisor_mode = flags & 4 != 0;
+        let execute = flags & 8 != 0;
+        let write = flags & 16 != 0;
+        let read = flags & 32 != 0;
+
+        if !page_present {
+            return Err(TrapMode::Level2PageFault);
+        }
+
+        if self.cpu.flags.user_mode {
+            if supervisor_mode {
+                return Err(TrapMode::IllegalOperation);
+            }
+
+            match mode {
+                AccessMode::Execute if !execute => return Err(TrapMode::IllegalExecute),
+                AccessMode::Write if !write => return Err(TrapMode::IllegalWrite),
+                AccessMode::Read if !read => return Err(TrapMode::IllegalRead),
+                _ => ()
+            }
+        }
+
+        if matches!(mode, AccessMode::Write if !dirty) {
+            // set dirty flag
+            let new_entry = lvl2_entry | 2;
+            // convert to byte because the dirty flag is in the first byte
+            // and so we can ignore the rest
+            self.mem.write(lvl2_addr, new_entry as u8);
+        }
+
+        let physical_address = (ppn << 6) | page_offset;
+
+        Ok(physical_address)
     }
 
-    pub fn fetch(&mut self) -> u8 {
+    #[must_use = "error must be handled"]
+    pub fn fetch(&mut self) -> OpRes<u8> {
         let addr = self.cpu.program_counter;
         self.cpu.program_counter += 1;
-        let Some(addr) = self.addr_resolve(addr, AccessMode::Execute) else {
-            self.cpu.trap(TrapMode::IllegalExecute);
-            return 0;
-        };
-        self.mem.read(addr)
+        let addr = self.addr_resolve(addr, AccessMode::Execute)?;
+        Ok(self.mem.read(addr))
     }
-    pub fn read(&mut self, addr: u16) -> u8 {
-        let Some(addr) = self.addr_resolve(addr, AccessMode::Read) else {
-            self.cpu.trap(TrapMode::IllegalRead);
-            return 0;
-        };
-        self.mem.read(addr)
+    #[must_use = "error must be handled"]
+    pub fn read(&mut self, addr: u16) -> OpRes<u8> {
+        let addr = self.addr_resolve(addr, AccessMode::Read)?;
+        Ok(self.mem.read(addr))
     }
-    pub fn write(&mut self, addr: u16, val: u8) {
-        let Some(addr) = self.addr_resolve(addr, AccessMode::Write) else {
-            self.cpu.trap(TrapMode::IllegalWrite);
-            return;
-        };
+    #[must_use = "error must be handled"]
+    pub fn write(&mut self, addr: u16, val: u8) -> OpRes<()> {
+        let addr = self.addr_resolve(addr, AccessMode::Write)?;
         self.mem.write(addr, val);
+        Ok(())
     }
-    pub fn read_wide(&mut self, addr: u16) -> u16 {
-        let lower = self.read(addr);
-        let higher = self.read(addr + 1);
+    #[must_use = "error must be handled"]
+    pub fn read_wide(&mut self, addr: u16) -> OpRes<u16> {
+        let lower = self.read(addr)?;
+        let higher = self.read(addr + 1)?;
 
-        u16::from_le_bytes([lower, higher])
+        Ok(u16::from_le_bytes([lower, higher]))
     }
-    pub fn write_wide(&mut self, addr: u16, val: u16) {
+    #[must_use = "error must be handled"]
+    pub fn write_wide(&mut self, addr: u16, val: u16) -> OpRes<()> {
         let [lower, higher] = val.to_le_bytes();
 
-        self.write(addr, lower);
-        self.write(addr + 1, higher);
+        self.write(addr, lower)?;
+        self.write(addr + 1, higher)?;
+
+        Ok(())
     }
 
-
-    pub fn pushw(&mut self, w: u16) {
+    #[must_use = "error must be handled"]
+    pub fn pushw(&mut self, w: u16) -> OpRes<()> {
         self.cpu.stack -= 2;
-        self.write_wide(self.cpu.stack, w);
+        self.write_wide(self.cpu.stack, w)
     }
-    pub fn pushb(&mut self, b: u8) {
+    #[must_use = "error must be handled"]
+    pub fn pushb(&mut self, b: u8) -> OpRes<()> {
         self.cpu.stack -= 1;
-        self.write(self.cpu.stack, b);
+        self.write(self.cpu.stack, b)
     }
-    pub fn popw(&mut self) -> u16 {
-        let w = self.read_wide(self.cpu.stack);
+    #[must_use = "error must be handled"]
+    pub fn popw(&mut self) -> OpRes<u16> {
+        let w = self.read_wide(self.cpu.stack)?;
         self.cpu.stack += 2;
-        w
+        Ok(w)
     }
-    pub fn popb(&mut self) -> u8 {
-        let b = self.read(self.cpu.stack);
+    #[must_use = "error must be handled"]
+    pub fn popb(&mut self) -> OpRes<u8> {
+        let b = self.read(self.cpu.stack)?;
         self.cpu.stack += 1;
-        b
+        Ok(b)
     }
-    pub fn push_registers(&mut self) {
-        let Blf4 {
-            zero,
-            sign,
-            overflow,
-            carry,
-            ..
-        } = *self.cpu;
-
-        let flags = ((zero as u16) << 7)
-            | ((overflow as u16) << 6)
-            | ((sign as u16) << 5)
-            | ((carry as u16) << 4);
-        self.pushw(flags);
+    #[must_use = "error must be handled"]
+    pub fn push_registers(&mut self) -> OpRes<()> {
+        self.pushw(self.cpu.flags.into())?;
         for r in 1..=15 {
-            let w = self.cpu.read_wr(WideRegister(U4::new(r)));
-            self.pushw(w);
+            let w = self.cpu.read_wr(WideRegister(U4::new(r)))?;
+            self.pushw(w)?;
         }
-    }
-    pub fn pop_registers(&mut self) {
-        for r in (1..=15).rev() {
-            let w = self.popw();
-            self.cpu.write_wr(WideRegister(U4::new(r)), w);
-        }
-        let flags = self.popw();
 
-        self.cpu.zero = flags & 0b1000_0000 != 0;
-        self.cpu.overflow = flags & 0b0100_0000 != 0;
-        self.cpu.sign = flags & 0b0010_0000 != 0;
-        self.cpu.carry = flags & 0b0001_0000 != 0;
+        Ok(())
+    }
+    #[must_use = "error must be handled"]
+    pub fn pop_registers(&mut self) -> OpRes<()> {
+        for r in (1..=15).rev() {
+            let w = self.popw()?;
+            self.cpu.write_wr(WideRegister(U4::new(r)), w)?;
+        }
+        self.cpu.flags = self.popw()?.into();
+
+        Ok(())
     }
 }

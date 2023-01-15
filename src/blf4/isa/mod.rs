@@ -31,6 +31,10 @@ pub const JAE: u8 = 0x38;
 pub const JB: u8 = 0x39;
 pub const JBE: u8 = 0x3a;
 
+pub const USR: u8 = 0x3b;
+pub const VMON: u8 = 0x3c;
+pub const VMOFF: u8 = 0x3d;
+
 pub const LDI_B: u8 = 0x3f;
 /// Also jump
 pub const LDI_W: u8 = 0x40;

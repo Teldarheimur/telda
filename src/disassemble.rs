@@ -1,7 +1,7 @@
 use std::{fmt::{self, Display, Write}, convert::identity};
 
 use crate::{
-    U4, mem::{MainMemory, MAIN_IO_MAPPING_CUTOFF}, blf4::{Blf4, ByteRegister, WideRegister, HandlerContext, isa::{arg_pair, arg_imm_wide}, R0},
+    U4, mem::{MainMemory, MAIN_IO_MAPPING_CUTOFF}, blf4::{Blf4, ByteRegister, WideRegister, HandlerContext, isa::{arg_pair, arg_imm_wide}, R0, TrapMode},
 };
 
 struct StrictMemory<'a, M: MainMemory> {
@@ -32,14 +32,14 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
     location: u16,
     memory: &mut M,
     label_lookup: F,
-) -> DisassembledInstruction {
+) -> Result<DisassembledInstruction, TrapMode> {
     use crate::blf4::isa::*;
     let r = &mut Blf4::new(location);
     let m = &mut StrictMemory { inner: memory };
     let mut c = r.context(m);
 
     let addr = c.cpu.program_counter;
-    let opcode = c.fetch();
+    let opcode = c.fetch()?;
 
     let mut op = String::with_capacity(32);
     let f = &mut op;
@@ -64,93 +64,93 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
         }
         NOP => write!(f, "nop").unwrap(),
         PUSH_B => {
-            let (r1, _) = arg_pair(&mut c, ByteRegister, identity);
+            let (r1, _) = arg_pair(&mut c, ByteRegister, identity)?;
             write!(f, "push {r1}").unwrap();
         }
         PUSH_W => {
-            let (r1, _) = arg_pair(&mut c, WideRegister, identity);
+            let (r1, _) = arg_pair(&mut c, WideRegister, identity)?;
             write!(f, "push {r1}").unwrap();
         }
         POP_B => {
-            let (r1, _r2) = arg_pair(&mut c,ByteRegister, identity);
+            let (r1, _r2) = arg_pair(&mut c,ByteRegister, identity)?;
             write!(f, "pop {r1}").unwrap();
         }
         POP_W => {
-            let (r1, _r2) = arg_pair(&mut c, WideRegister, identity);
+            let (r1, _r2) = arg_pair(&mut c, WideRegister, identity)?;
             write!(f, "pop {r1}").unwrap();
         }
         CALL => {
-            let w = Operand::Wide(arg_imm_wide(&mut c)).looked_up(label_lookup);
+            let w = Operand::Wide(arg_imm_wide(&mut c)?).looked_up(label_lookup);
             write!(f, "call {w}").unwrap();
             nesting_difference = 1;
         }
         RET => {
-            let b = arg_imm_byte(&mut c);
+            let b = arg_imm_byte(&mut c)?;
             write!(f, "ret {b}").unwrap();
             nesting_difference = -1;
             ends_block = true;
         }
         STORE_BI => {
-            let (r1, r2) = arg_pair(&mut c, WideRegister, ByteRegister);
-            let offset = Operand::Wide(arg_imm_wide(&mut c)).looked_up(label_lookup);
+            let (r1, r2) = arg_pair(&mut c, WideRegister, ByteRegister)?;
+            let offset = Operand::Wide(arg_imm_wide(&mut c)?).looked_up(label_lookup);
             write!(f, "store {r1}, {offset}, {r2}").unwrap();
         }
         STORE_WI => {
-            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister);
-            let offset = Operand::Wide(arg_imm_wide(&mut c)).looked_up(label_lookup);
+            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister)?;
+            let offset = Operand::Wide(arg_imm_wide(&mut c)?).looked_up(label_lookup);
             write!(f, "store {r1}, {offset}, {r2}").unwrap();
         }
         STORE_BR => {
-            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister);
-            let (r3, _) = arg_pair(&mut c, ByteRegister, identity);
+            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister)?;
+            let (r3, _) = arg_pair(&mut c, ByteRegister, identity)?;
             write!(f, "store {r1}, {r2}, {r3}").unwrap();
         }
         STORE_WR => {
-            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister);
-            let (r3, _) = arg_pair(&mut c, WideRegister, identity);
+            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister)?;
+            let (r3, _) = arg_pair(&mut c, WideRegister, identity)?;
             write!(f, "store {r1}, {r2}, {r3}").unwrap();
         }
         LOAD_BI => {
-            let (r1, r2) = arg_pair(&mut c, ByteRegister, WideRegister);
-            let offset = Operand::Wide(arg_imm_wide(&mut c)).looked_up(label_lookup);
+            let (r1, r2) = arg_pair(&mut c, ByteRegister, WideRegister)?;
+            let offset = Operand::Wide(arg_imm_wide(&mut c)?).looked_up(label_lookup);
             write!(f, "load {r1}, {r2}, {offset}").unwrap();
         }
         LOAD_WI => {
-            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister);
-            let offset = Operand::Wide(arg_imm_wide(&mut c)).looked_up(label_lookup);
+            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister)?;
+            let offset = Operand::Wide(arg_imm_wide(&mut c)?).looked_up(label_lookup);
             write!(f, "load {r1}, {r2}, {offset}").unwrap();
         }
         LOAD_BR => {
-            let (r1, r2) = arg_pair(&mut c, ByteRegister, WideRegister);
-            let (r3, _) = arg_pair(&mut c, WideRegister, identity);
+            let (r1, r2) = arg_pair(&mut c, ByteRegister, WideRegister)?;
+            let (r3, _) = arg_pair(&mut c, WideRegister, identity)?;
             write!(f, "load {r1}, {r2}, {r3}").unwrap();
         }
         LOAD_WR => {
-            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister);
-            let (r3, _) = arg_pair(&mut c, WideRegister, identity);
+            let (r1, r2) = arg_pair(&mut c, WideRegister, WideRegister)?;
+            let (r3, _) = arg_pair(&mut c, WideRegister, identity)?;
             write!(f, "load {r1}, {r2}, {r3}").unwrap();
         }
-        JEZ => cjmp("jez", &mut c, label_lookup, f),
-        JLT => cjmp("jlt", &mut c, label_lookup, f),
-        JLE => cjmp("jle", &mut c, label_lookup, f),
-        JGT => cjmp("jgt", &mut c, label_lookup, f),
-        JGE => cjmp("jge", &mut c, label_lookup, f),
-        JNZ => cjmp("jnz", &mut c, label_lookup, f),
-        JO => cjmp("jo", &mut c, label_lookup, f),
-        JNO => cjmp("jno", &mut c, label_lookup, f),
-        JB => cjmp("jb", &mut c, label_lookup, f),
-        JAE => cjmp("jae", &mut c, label_lookup, f),
-        JA => cjmp("ja", &mut c, label_lookup, f),
-        JBE => cjmp("jbe", &mut c, label_lookup, f),
+        JEZ => cjmp("jez", &mut c, label_lookup, f)?,
+        JLT => cjmp("jlt", &mut c, label_lookup, f)?,
+        JLE => cjmp("jle", &mut c, label_lookup, f)?,
+        JGT => cjmp("jgt", &mut c, label_lookup, f)?,
+        JGE => cjmp("jge", &mut c, label_lookup, f)?,
+        JNZ => cjmp("jnz", &mut c, label_lookup, f)?,
+        JO => cjmp("jo", &mut c, label_lookup, f)?,
+        JNO => cjmp("jno", &mut c, label_lookup, f)?,
+        JB => cjmp("jb", &mut c, label_lookup, f)?,
+        JAE => cjmp("jae", &mut c, label_lookup, f)?,
+        JA => cjmp("ja", &mut c, label_lookup, f)?,
+        JBE => cjmp("jbe", &mut c, label_lookup, f)?,
         LDI_B => {
-            let (r1, _o) = arg_pair(&mut c, ByteRegister, identity);
-            let b = arg_imm_byte(&mut c);
+            let (r1, _o) = arg_pair(&mut c, ByteRegister, identity)?;
+            let b = arg_imm_byte(&mut c)?;
 
             write!(f, "ldi {r1}, {}", Operand::Byte(b)).unwrap();
         }
         LDI_W => {
-            let (r1, o) = arg_pair(&mut c, WideRegister, u8::from);
-            let w = Operand::Wide(arg_imm_wide(&mut c)).looked_up(label_lookup);
+            let (r1, o) = arg_pair(&mut c, WideRegister, u8::from)?;
+            let w = Operand::Wide(arg_imm_wide(&mut c)?).looked_up(label_lookup);
 
             match o {
                 // ldi
@@ -170,26 +170,26 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
                 n => write!(f, "invalid ldi{n}, {r1}, {w}").unwrap(),
             }
         }
-        ADD_B => binop("add", ByteRegister, &mut c, f),
-        ADD_W => binop("add", WideRegister, &mut c, f),
-        SUB_B => binop("sub", ByteRegister, &mut c, f),
-        SUB_W => binop("sub", WideRegister, &mut c, f),
-        AND_B => binop("and", ByteRegister, &mut c, f),
-        AND_W => binop("and", WideRegister, &mut c, f),
-        OR_B => binop("or", ByteRegister, &mut c, f),
-        OR_W => binop("or", WideRegister, &mut c, f),
-        XOR_B => binop("xor", ByteRegister, &mut c, f),
-        XOR_W => binop("xor", WideRegister, &mut c, f),
-        SHL_B => binop("shl", ByteRegister, &mut c, f),
-        SHL_W => binop("shl", WideRegister, &mut c, f),
-        ASR_B => binop("asr", ByteRegister, &mut c, f),
-        ASR_W => binop("asr", WideRegister, &mut c, f),
-        LSR_B => binop("lsr", ByteRegister, &mut c, f),
-        LSR_W => binop("lsr", WideRegister, &mut c, f),
-        DIV_B => binop("div", ByteRegister, &mut c, f),
-        DIV_W => binop("div", WideRegister, &mut c, f),
-        MUL_B => binop("mul", ByteRegister, &mut c, f),
-        MUL_W => binop("mul", WideRegister, &mut c, f),
+        ADD_B => binop("add", ByteRegister, &mut c, f)?,
+        ADD_W => binop("add", WideRegister, &mut c, f)?,
+        SUB_B => binop("sub", ByteRegister, &mut c, f)?,
+        SUB_W => binop("sub", WideRegister, &mut c, f)?,
+        AND_B => binop("and", ByteRegister, &mut c, f)?,
+        AND_W => binop("and", WideRegister, &mut c, f)?,
+        OR_B => binop("or", ByteRegister, &mut c, f)?,
+        OR_W => binop("or", WideRegister, &mut c, f)?,
+        XOR_B => binop("xor", ByteRegister, &mut c, f)?,
+        XOR_W => binop("xor", WideRegister, &mut c, f)?,
+        SHL_B => binop("shl", ByteRegister, &mut c, f)?,
+        SHL_W => binop("shl", WideRegister, &mut c, f)?,
+        ASR_B => binop("asr", ByteRegister, &mut c, f)?,
+        ASR_W => binop("asr", WideRegister, &mut c, f)?,
+        LSR_B => binop("lsr", ByteRegister, &mut c, f)?,
+        LSR_W => binop("lsr", WideRegister, &mut c, f)?,
+        DIV_B => binop("div", ByteRegister, &mut c, f)?,
+        DIV_W => binop("div", WideRegister, &mut c, f)?,
+        MUL_B => binop("mul", ByteRegister, &mut c, f)?,
+        MUL_W => binop("mul", WideRegister, &mut c, f)?,
         b => {
             write!(f, "0x{b:02x}").unwrap();
             ends_block = true;
@@ -203,7 +203,7 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
 
     c.cpu.program_counter = addr;
     for _ in addr..next_instruction_location {
-        write!(&mut annotated_source, " {:02x}", c.fetch()).unwrap();
+        write!(&mut annotated_source, " {:02x}", c.fetch()?).unwrap();
     }
 
     for _ in 0..(4 - (next_instruction_location - addr)) {
@@ -211,12 +211,12 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
     }
     write!(&mut annotated_source, "    {op}").unwrap();
 
-    DisassembledInstruction {
+    Ok(DisassembledInstruction {
         annotated_source,
         next_instruction_location,
         ends_block,
         nesting_difference,
-    }
+    })
 }
 
 fn cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(
@@ -224,13 +224,15 @@ fn cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(
     c: &mut HandlerContext,
     label_lookup: F,
     f: &mut String,
-) {
+) -> Result<(), TrapMode> {
     write!(
         f,
         "{name} {}",
-        Operand::Wide(arg_imm_wide(c)).looked_up(label_lookup)
+        Operand::Wide(arg_imm_wide(c)?).looked_up(label_lookup)
     )
     .unwrap();
+
+    Ok(())
 }
 
 fn binop<T: Display, RF: Fn(U4) -> T>(
@@ -238,10 +240,12 @@ fn binop<T: Display, RF: Fn(U4) -> T>(
     rf: RF,
     c: &mut HandlerContext,
     f: &mut String,
-) {
-    let (r1, r2) = arg_pair(c, &rf, &rf);
-    let (r3, _o) = arg_pair(c, &rf, identity);
+) -> Result<(), TrapMode> {
+    let (r1, r2) = arg_pair(c, &rf, &rf)?;
+    let (r3, _o) = arg_pair(c, &rf, identity)?;
     write!(f, "{name} {r1}, {r2}, {r3}").unwrap();
+
+    Ok(())
 }
 
 enum Operand<'a> {
