@@ -49,32 +49,22 @@ impl<P: Io> MainMemory for LazyMain<P> {
 }
 
 impl<P> LazyMain<P> {
-    pub fn new(ports: P) -> Self {
+    fn new(ports: P) -> Self {
         Self {
             cells: ([(); 256]).map(|()| None),
             ports,
         }
     }
-    pub fn new_with_memory(ports: P, flat_bytes: Vec<u8>) -> Self {
+    /// Loads `flat_bytes` into memory at 0xff_0000 (where direct mode addresses)
+    pub fn new_with(ports: P, flat_bytes: Vec<u8>) -> Self {
         let mut new = Self::new(ports);
 
-        for (chunk, cell) in flat_bytes.chunks(256*256).zip(&mut new.cells) {
-            let mut new_cell = Box::new([0; 256*256]);
-            new_cell[..chunk.len()].copy_from_slice(chunk);
-            *cell = Some(new_cell);
-        }
+        let mut new_cell = Box::new([0; 256*256]);
+        // if `flat_bytes` is bigger that 64K, this will panic
+        new_cell[..flat_bytes.len()].copy_from_slice(&flat_bytes);
+        new.cells[255] = Some(new_cell);
 
         new
-    }
-}
-impl LazyMain<PanickingIO> {
-    pub fn new_panicking() -> Self {
-        Self::new(PanickingIO)
-    }
-}
-impl LazyMain<StdIo> {
-    pub fn new_stdio() -> Self {
-        Self::new(StdIo)
     }
 }
 

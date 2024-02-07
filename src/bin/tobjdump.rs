@@ -123,7 +123,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
     let mut mem;
     let mut pos_to_labels = HashMap::new();
     {
-        mem = LazyMain::new_with_memory(PanickingIO, obj.get_flattened_memory());
+        mem = LazyMain::new_with(PanickingIO, obj.get_flattened_memory());
 
         for (id, s) in obj.symbols.0.iter().enumerate() {
             pos_to_labels.insert(s.location, id);

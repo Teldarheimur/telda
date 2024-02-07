@@ -51,7 +51,7 @@ fn t_main() -> Result<(), Error> {
         (mem, iter, obj.entry.ok_or(Error::NoEntry)?.1)
     };
 
-    let lazy = LazyMain::new_with_memory(StdIo, mem);
+    let lazy = LazyMain::new_with(StdIo, mem);
     let cpu = Blf4::new(start_addr);
 
     let mut machine = Machine::new(lazy, cpu);

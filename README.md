@@ -10,9 +10,12 @@ Following will be some documentation on the telda machine, tools and various oth
 
 Telda is a 16-bit machine with data accesible both in 8-bit and 16-bit. That is,
 general purpose register can be used both as bytes (8-bit) and wides (16-bit), but special purpose
-registers and addresses are wides. Its address space is 2^16 and can so only access 64 kB of memory so far,
-except address 0xffe0-0xffff are mapped to I/O.
-In the future, support will be added for accessing more memory than 64kB using virtual memory pages.
+registers and addresses are wides. Its physical address space is 2^24 and can so access 16 MiB of memory,
+although addresses 0xff_ffe0-0xff_ffff are mapped to I/O. In direct access mode, the 16-bit addresses are understood with
+the upper byte set to 0xff, thus the address space 0xff0000-0xffffff is what's accessible, except through the expensive special instructions
+that access physical memory directly (only in supervisor mode). Using virtual mode, translation to physical addresses is done via page tables instead
+and also allows for control of memory access (see section on virtual memory). In direct mode, since the all registers are only 16-bit, the program counter
+can only point to 0xff_0000-0xff_ffff and thus that is the only executable area.
 
 Instructions are variable size varying between 1 and 4 bytes. The first byte is an opcode and uniquely
 determines the following amount of bytes which encode the operands.
@@ -20,6 +23,49 @@ determines the following amount of bytes which encode the operands.
 Lastly, the machine will sometimes trap (some instructions are meant specifically to trap, others will only do so if something is wrong). If no trap handler is installed, this will make the machine stop (and the 
 emulator will show what trap mode it was). Otherwise, the machine will be able to handle traps itself
 and this can also be used to implement things like syscalls.
+
+## Virtual memory
+
+When virtual mode is turned on the addr will be interpreted thusly:
+`1111_2222 2OOO_OOOO`
+Where `O` is the page offset, `2` is the second virtual page number (identifying the entry in the low-level page table) and `1` is the first page number (identifying the entry in the top-level page table).
+The page offset is 7 bit making a page 128 bytes long. The page tables are meant to fit neatly inside
+these pages with a top-level table taking up half a page and a low-level table taking up one full page.
+Page table entries at both levels are 4 bytes.
+
+The top-level page has 16 entries (why VPN1 is 4 bits) each taking up 4 bytes. These each point to a low-level page table.
+`aaaa_aaaa aaaa_aaaa arrr_rrrr rrUD_XWRP`
+
+The bits marked `a` are the physical address of the next level page table. `r` are reserved for future use and should be 0. The capital letters are flags:
+- `D`, dirty flag, means a child page has this flag set.
+- `U`, user mode flag, means a child page has this flag set.
+- `X`, execute flag, means a child page has this flag set.
+- `W`, write flag, means a child page has this flag set.
+- `R`, read flag, means a child page has this flag set.
+- `P`, present flag, if this is not set, this table entry is not valid and a page fault is triggered. All other bits are ignored and can be used
+by the kernel to know how to deal with the fault.
+
+The flags can used to know whether to go to the child table. E.g. if the CPU is going through this to get the address of the next instruction, the execute
+bit can be checked here to trap early if it is indicated that no child page can be executed.
+
+The low-level page has 32 entries (why VPN2 is 5 bits) each taking up 4 bytes. These contain the physical page offset.
+`nnnn_nnnn nnnn_nnnn nrrr_rrrr rrUD_XWRP`
+
+The 18 bits marked `n` are the Physical Page Number. Appending the 6-bit page offset marked O in the virtual address at the end gives
+the physical address of the mapped memory. `r` are reserved for future use and should be 0. The six bits in capital letters are flags:
+- `D`, dirty flag, if this is set, then a write has been done to the memory in this page.
+- `U`, user mode flag, if this is set, then the page is accessible in user mode (supervisor mode can access all pages).
+- `X`, execute flag, if this is NOT set, an illegal execute trap will be triggered upon trying to execute code in this page (read permission is not necessary).
+- `W`, write flag, if this is NOT set, an illegal write trap will be triggered upon trying to write to memory in this page.
+- `R`, read flag, if this is NOT set, an illegal read trap will be triggered upon trying to read from memory in this page.
+- `P`, present flag, if this is not set, the page entry is not valid and a page fault is triggered. All other bits are ignored and can be used
+by the kernel to know how to deal with the fault.
+
+### Physical addresses
+
+Phyiscal addresses are 24-bit (3 bytes) meaning that 8 MiB are addressable. When virtual memory
+is not turned on, only 64 KiB are accesible, as addresses in telda are only 16-bit. The high byte is
+filled is set to 0xff, thus direct access mode addresses 0xff0000-0xffffff. Note that 0xfffff0-0xffffff map to I/O.
 
 ## The byte registers
 
@@ -71,10 +117,10 @@ a r10   high byte zeroes on byte writes
 b rs    stack pointer
 c rl    link pointer (location of instruction after last `call`)
 d rf    frame pointer (unused for now)
-e rp    page table pointer (unused for now)
+e rp    page table pointer (location of current top-level page table)
 f rh    trap handler pointer
 _ rpc   program counter, not accessible directly and therefore has no number
-_ rflags flags
+_ rflags RRRR_RRRR utRv_zsoc (user mode, trap, reserved, virtual mode; zero, sign, overflow, carry)
 ```
 
 The stack pointer `rs` gets affected by stack operations. Its value is initially `0xffe0` on machine startup, putting it right before the I/O mapped memory. Pushing first decrements this pointer and then writes the value to this new location. Popping will first read the value and then increment the pointer.
@@ -84,7 +130,11 @@ The link pointer `rl` is set by the `call` instruction to be the location of the
 the call instruction. This is used by the `ret` instruction to return from the sub-routine by just setting the program counter to `rl` (and adding some value to `rs` for stack cleanup).
 You will need to `push rl` in a sub-routine before calling another sub-routine in order to be able return again, because otherwise the return location is lost.
 
-`rp` is unused for now but will store the location of the page table. A value of `0` indicates no page table is to be used and instead direct memory access.
+`rp` stores the location of the top-level page table. If the virtual mode flag is set, memory
+access is translated according to the table. If the page entry is not valid, a page trap is
+triggered. This is the only pointer that holds a physical address. The others obey the current addressing mode. This also means that top-level page tables have to exist in the first 64 KiB of
+memory, since `rp` is only 16-bit and is interpreted with the high byte as 0. The size of a top-level
+page table is 128 bytes, so there is space for 512 tables. If there is need for more, they must be moved around.
 
 `rh` has the location of the trap handler, it starts with the value `0` which indicates that no trap handler is set, if it's set to something else, then when a trap is triggered, the program counter will be set to `rh` after having pushed all registers to the stack. The trap mode will be written to `r1`
 so that the trap handler can determine what to do based on this value. The instruction `reth` can be used
@@ -136,7 +186,13 @@ halt                   | 0a     | triggers halt trap
 ctf                    | 0b     | clear trap flag
 ...                    | 0c     | ...
 reth                   | 0d     | returns from trap handler, pops all registers, clears trap flag
-...                    | 0e-1f  | ...
+...                    | 0e-0f  |
+usr                    | 10     | Enter user mode
+vmon                   | 11     | Enables virtual memory (using the page table at rp) (requires supervisor mode)
+vmoff                  | 12     | Disables virtual memory (requires supervisor mode)
+pstore br1, wr, br2    | 13     | Store value of br2 to physical address br1|wr (requires supervisor mode)
+pload br1, br2, wr     | 14     | Load value at physical address br2|wr into br1 (requires supervisor mode)
+...                    | 17-1f  | ...
 nop                    | 20     | no operation; does nothing
 push br                | 21     | push byte value of register to stack (first decrementing `rs` by one and then writing there)
 push wr                | 22     | push wide value of register to stack (first decrementing `rs` by two and then writin there)
@@ -164,10 +220,7 @@ jb,jc w                | 37     | Conditional jump to w if carry flag is set
 jae,jnc w              | 38     | Conditional jump to w if carry flag is not set
 ja  w                  | 39     | Conditional jump to w if carry flag and zero flag are both not set
 jbe w                  | 3a     | Conditional jump to w if carry flag OR zero flag are set
-usr                    | 3b     | Enter user mode
-vmon                   | 3c     | Enables virtual memory (using the page table at rp) (requires supervisor mode)
-vmoff                  | 3d     | Disables virtual memory (requires supervisor mode)
-...                    | 3e     | reserved
+...                    | 3b-3e  | reserved
 ldi br, b              | 3f     | load immediate value into register
 ldi wr, w              | 40     | load immediate value into register (encoded as `ldi wr, r0, w` per the rule about uneven number of registers)
 jmp w                  | 40     | jumps to w (sets program counter to immediate value), encoded as `ldi r0, r1, w`

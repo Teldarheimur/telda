@@ -38,6 +38,13 @@ pub static OP_HANDLERS: [OpHandler; 256] = {
     handlers[HALT as usize] = halt;
     handlers[CTF as usize] = ctf;
     handlers[RETH as usize] = reth;
+
+    handlers[USR as usize] = usr;
+    handlers[VMON as usize] = vmon;
+    handlers[VMOFF as usize] = vmoff;
+    handlers[PSTORE as usize] = pstore;
+    handlers[PLOAD as usize] = pload;
+
     handlers[NOP as usize] = nop;
     handlers[PUSH_B as usize] = push_b;
     handlers[PUSH_W as usize] = push_w;
@@ -65,10 +72,6 @@ pub static OP_HANDLERS: [OpHandler; 256] = {
     handlers[JAE as usize] = jae;
     handlers[JA as usize] = ja;
     handlers[JBE as usize] = jbe;
-
-    handlers[USR as usize] = usr;
-    handlers[VMON as usize] = vmon;
-    handlers[VMOFF as usize] = vmoff;
 
     handlers[LDI_B as usize] = ldi_b;
     handlers[LDI_W as usize] = ldi_w;
@@ -138,6 +141,43 @@ fn vmoff(c: &mut HandlerContext) -> OpRes {
         return Err(TrapMode::IllegalOperation);
     }
     c.cpu.flags.virtual_mode = false;
+
+    Ok(())
+}
+fn pstore(c: &mut HandlerContext) -> OpRes {
+    if c.cpu.flags.user_mode {
+        return Err(TrapMode::IllegalOperation);
+    }
+    let (br1, wr) = arg_pair(c, Br, Wr)?;
+    let (br2, zero) = arg_pair(c, Br, u8::from)?;
+
+    if zero != 0 {
+        return Err(TrapMode::Invalid);
+    }
+
+    let high_byte = c.cpu.read_br(br1);
+    let low_wide = c.cpu.read_wr(wr)?;
+    let addr = low_wide as u32 | ((high_byte as u32) << 16);
+
+    c.physical_write(addr, c.cpu.read_br(br2))
+}
+fn pload(c: &mut HandlerContext) -> OpRes {
+    if c.cpu.flags.user_mode {
+        return Err(TrapMode::IllegalOperation);
+    }
+    let (br1, br2) = arg_pair(c, Br, Br)?;
+    let (wr, zero) = arg_pair(c, Wr, u8::from)?;
+
+    if zero != 0 {
+        return Err(TrapMode::Invalid);
+    }
+
+    let high_byte = c.cpu.read_br(br2);
+    let low_wide = c.cpu.read_wr(wr)?;
+    let addr = low_wide as u32 | ((high_byte as u32) << 16);
+
+    let val = c.physical_read(addr)?;
+    c.cpu.write_br(br1, val);
 
     Ok(())
 }

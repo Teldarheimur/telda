@@ -3,6 +3,12 @@ pub const HALT: u8 = 0x0a;
 pub const CTF: u8 = 0x0b;
 pub const RETH: u8 = 0x0d;
 
+pub const USR: u8 = 0x10;
+pub const VMON: u8 = 0x11;
+pub const VMOFF: u8 = 0x12;
+pub const PSTORE: u8 = 0x13;
+pub const PLOAD: u8 = 0x14;
+
 pub const NOP: u8 = 0x20;
 pub const PUSH_B: u8 = 0x21;
 pub const PUSH_W: u8 = 0x22;
@@ -30,10 +36,6 @@ pub const JA: u8 = 0x37;
 pub const JAE: u8 = 0x38;
 pub const JB: u8 = 0x39;
 pub const JBE: u8 = 0x3a;
-
-pub const USR: u8 = 0x3b;
-pub const VMON: u8 = 0x3c;
-pub const VMOFF: u8 = 0x3d;
 
 pub const LDI_B: u8 = 0x3f;
 /// Also jump

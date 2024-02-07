@@ -257,7 +257,7 @@ pub enum TrapMode {
     IllegalHandlerReturn = 0x1f,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 enum AccessMode {
     Read,
     Write,
@@ -269,80 +269,112 @@ pub struct HandlerContext<'a> {
     mem: &'a mut dyn MainMemory,
 }
 
+struct Entry {
+    /// PPN shifted so the last 7 bits are zero
+    addr: u32,
+    /// If the entry was not dirty, this is used to set the dirty bit.
+    byte_with_dirty_flag: Option<u8>,
+}
+
 impl HandlerContext<'_> {
-    #[must_use = "error must be handled"]
-    fn addr_resolve(&mut self, addr: u16, mode: AccessMode) -> OpRes<u32> {
-        if !self.cpu.flags.virtual_mode {
-            let offset = (self.cpu.page as u32) << 8;
-
-            return Ok(if addr >= VIRTUAL_IO_MAPPING_CUTOFF {
-                0xff_fff0 | (addr as u32 & 0xf)
-            } else {
-                offset | addr as u32
-            });
-        }
-
-        let page_offset = (addr & 0x3f) as u32;
-        let vpn2 = ((addr >> 6) & 0x1f) as u32;
-        let vpn1 = (addr >> 11) as u32;
-
-        let table1_start = self.cpu.page as u32;
-
-        let lvl1_addr = table1_start + (vpn1 << 1);
-        let lvl1_entry = u32::from_le_bytes([
-            self.mem.read(lvl1_addr),
-            self.mem.read(lvl1_addr + 1),
-            self.mem.read(lvl1_addr + 2),
-            0,
+    fn read_entry(&mut self, addr: u32, in_user_mode: bool, mode: AccessMode) -> OpRes<Entry> {
+        let raw_entry = u32::from_le_bytes([
+            self.mem.read(addr),
+            self.mem.read(addr + 1),
+            self.mem.read(addr + 2),
+            self.mem.read(addr + 3),
         ]);
 
-        let lvl2_present = lvl1_entry & 1 == 1;
-        if !lvl2_present {
-            return Err(TrapMode::Level1PageFault);
-        }
-        let lvl2_addr = (lvl1_entry >> 1) + (3 * vpn2);
-        let lvl2_entry = u32::from_le_bytes([
-            self.mem.read(lvl2_addr),
-            self.mem.read(lvl2_addr + 1),
-            self.mem.read(lvl2_addr + 2),
-            0,
-        ]);
-
-        let ppn = lvl2_entry >> 6;
-        let flags = lvl2_entry & 0x3f;
-        let page_present = flags & 1 != 0;
-        let dirty = flags & 2 != 0;
-        let supervisor_mode = flags & 4 != 0;
-        let execute = flags & 8 != 0;
-        let write = flags & 16 != 0;
-        let read = flags & 32 != 0;
-
-        if !page_present {
+        let present = raw_entry & 1 == 1;
+        if !present {
             return Err(TrapMode::Level2PageFault);
         }
 
-        if self.cpu.flags.user_mode {
-            if supervisor_mode {
-                return Err(TrapMode::IllegalOperation);
-            }
+        let _reserved = (raw_entry >> 6) & 0x100;
 
-            match mode {
-                AccessMode::Execute if !execute => return Err(TrapMode::IllegalExecute),
-                AccessMode::Write if !write => return Err(TrapMode::IllegalWrite),
-                AccessMode::Read if !read => return Err(TrapMode::IllegalRead),
-                _ => ()
+        let f_user_mode = raw_entry & 0b0010_0000 != 0;
+        let f_dirty = raw_entry & 0b0001_0000 != 0;
+        let f_execute = raw_entry & 0b0000_1000 != 0;
+        let f_write = raw_entry & 0b0000_0100 != 0;
+        let f_read = raw_entry & 0b0000_0010 != 0;
+
+        // if the user_mode flag is NOT set, this page is
+        // illegal if we are in user mode
+        if in_user_mode && !f_user_mode {
+            return Err(TrapMode::IllegalOperation);
+        }
+
+        match mode {
+            AccessMode::Execute if !f_execute => return Err(TrapMode::IllegalExecute),
+            AccessMode::Write if !f_write => return Err(TrapMode::IllegalWrite),
+            AccessMode::Read if !f_read => return Err(TrapMode::IllegalRead),
+            _ => ()
+        }
+
+        Ok(Entry {
+            // the first 17 bits are the PPN (32-17 = 15)
+            // shift 7 bits back to make room for the offset
+            // and make it a physical address at the beginning of the page
+            addr: (raw_entry >> 15) << 7,
+            byte_with_dirty_flag: (!f_dirty).then_some((raw_entry & 0xff) as u8),
+        })
+    }
+
+    #[must_use = "error must be handled"]
+    fn addr_resolve(&mut self, addr: u16, mode: AccessMode) -> OpRes<u32> {
+        if !self.cpu.flags.virtual_mode {
+            // set all bits in the high byte when in direct addressing mode
+            // note that this also puts the I/O mapped area inside the addressable space
+            return Ok(0xff_0000 | addr as u32);
+        }
+
+        const fn entry_addr(table_start: u32, number: u32) -> u32 {
+            table_start + number<<2
+        }
+
+        // split address into the two levels of virtual page numbers and the offset
+        let page_offset = (addr & 0x7f) as u32;
+        let vpn2 = ((addr >> 7) & 0x1f) as u32;
+        let vpn1 = (addr >> 12) as u32;
+
+        // coerce into u32 meaning the page table pointer points to 0x00_xxxx
+        let table1_start = self.cpu.page as u32;
+
+        let in_user_mode = self.cpu.flags.user_mode;
+
+        // The level one entry is located at this address
+        let lvl1_entry_addr = entry_addr(table1_start, vpn1);
+        let lvl1_entry = self.read_entry(lvl1_entry_addr, in_user_mode, mode)
+            .map_err(|tm| if let TrapMode::Level2PageFault = tm { TrapMode::Level1PageFault } else { tm })?;
+
+        let table2_start = lvl1_entry.addr;
+
+        let lvl2_entry_addr = entry_addr(table2_start, vpn2);
+        let lvl2_entry = self.read_entry(lvl2_entry_addr, in_user_mode, mode)?;
+
+        let ppn_shifted = lvl2_entry.addr;
+
+        // set dirty bit to any entry that isn't marked as dirty, if the access mode is write
+        if matches!(mode, AccessMode::Write) {
+            let dirty_iter = [lvl1_entry_addr, lvl2_entry_addr]
+                .into_iter()
+                .zip(
+                    lvl1_entry
+                        .byte_with_dirty_flag
+                        .into_iter()
+                        .chain(lvl2_entry.byte_with_dirty_flag)
+                );
+
+            for (addr, undirty_byte) in dirty_iter {
+                // set dirty flag
+                let new_dirty_byte = undirty_byte | 0b0001_0000;
+                // convert to byte because the dirty flag is in the first byte
+                // and so we can ignore the rest
+                self.mem.write(addr, new_dirty_byte as u8);
             }
         }
 
-        if matches!(mode, AccessMode::Write if !dirty) {
-            // set dirty flag
-            let new_entry = lvl2_entry | 2;
-            // convert to byte because the dirty flag is in the first byte
-            // and so we can ignore the rest
-            self.mem.write(lvl2_addr, new_entry as u8);
-        }
-
-        let physical_address = (ppn << 6) | page_offset;
+        let physical_address = ppn_shifted | page_offset;
 
         Ok(physical_address)
     }
@@ -380,6 +412,13 @@ impl HandlerContext<'_> {
         self.write(addr + 1, higher)?;
 
         Ok(())
+    }
+
+    pub fn physical_read(&mut self, physical_addr: u32) -> OpRes<u8> {
+        Ok(self.mem.read(physical_addr))
+    }
+    pub fn physical_write(&mut self, physical_addr: u32, val: u8) -> OpRes<()> {
+        Ok(self.mem.write(physical_addr, val))
     }
 
     #[must_use = "error must be handled"]
