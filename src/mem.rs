@@ -1,4 +1,4 @@
-use std::io::{stdin, stdout, Read, Write};
+use std::{io::{Read, Write}, os::fd::IntoRawFd};
 
 /// Memory below this address is used for IO mapping
 pub const IO_MAPPING_CUTOFF: u16 = 0xffe0;
@@ -41,15 +41,53 @@ impl Io for PanickingIO {
     }
 }
 pub struct StdIo;
+#[cfg(not(target_os = "linux"))]
 impl Io for StdIo {
     fn read(&mut self, _addr: u8) -> u8 {
+        use std::io::{stdin, Read};
         // TODO: use the address
         let mut buf = [0];
         stdin().read_exact(&mut buf).expect("stdin failed");
         buf[0]
     }
     fn write(&mut self, _addr: u8, val: u8) {
+        use std::io::{stdout, Write};
         stdout().write_all(&[val]).expect("stdout failed")
+    }
+}
+#[cfg(target_os = "linux")]
+use std::os::fd::RawFd;
+#[cfg(target_os = "linux")]
+extern "C" {
+    // TODO: probably use a proper wrapper instead
+    fn fcntl(fd: RawFd, cmd: RawFd, ...) -> RawFd;
+}
+#[cfg(target_os = "linux")]
+#[inline]
+fn addr_to_file(addr: u8) -> std::fs::File {
+    use std::{fs::File, os::fd::FromRawFd};
+    let fd = addr as RawFd;
+    unsafe {
+        if fcntl(fd, 1) < 0 { panic!("invalid file descriptor {fd}") }
+        File::from_raw_fd(fd)
+    }
+}
+#[cfg(target_os = "linux")]
+impl Io for StdIo {
+    fn read(&mut self, addr: u8) -> u8 {
+        let mut f = addr_to_file(addr);
+        
+        let mut buf = [0];
+        f.read_exact(&mut buf).expect("stdin failed");
+        f.into_raw_fd();
+        
+        buf[0]
+    }
+    fn write(&mut self, addr: u8, val: u8) {
+        let mut f = addr_to_file(addr);
+
+        f.write_all(&[val]).expect("stdout failed");
+        f.into_raw_fd();
     }
 }
 
@@ -78,7 +116,7 @@ impl<I: Io> Memory for Lazy<I> {
         if addr < IO_MAPPING_CUTOFF {
             self.mem.get(addr as usize).copied().unwrap_or(0)
         } else {
-            self.io.read(addr as u8)
+            self.io.read((0xffff-addr) as u8)
         }
     }
     fn write(&mut self, addr: u16, val: u8) {
@@ -88,7 +126,7 @@ impl<I: Io> Memory for Lazy<I> {
             }
             self.mem[addr as usize] = val;
         } else {
-            self.io.write(addr as u8, val);
+            self.io.write((0xffff-addr) as u8, val);
         }
     }
 }
