@@ -1,9 +1,7 @@
 use std::fmt::{self, Display};
 
 use crate::{
-    machine::Cpu,
-    mem::{MainMemory, VIRTUAL_IO_MAPPING_CUTOFF},
-    U4,
+    machine::Cpu, mem::{self, MainMemory, VIRTUAL_IO_MAPPING_CUTOFF}, U4
 };
 
 pub mod isa;
@@ -276,14 +274,13 @@ struct Entry {
     byte_with_dirty_flag: Option<u8>,
 }
 
+const fn entry_addr(table_start: u32, number: u32) -> u32 {
+    table_start + (number<<2)
+}
+
 impl HandlerContext<'_> {
     fn read_entry(&mut self, addr: u32, in_user_mode: bool, mode: AccessMode) -> OpRes<Entry> {
-        let raw_entry = u32::from_le_bytes([
-            self.mem.read(addr),
-            self.mem.read(addr + 1),
-            self.mem.read(addr + 2),
-            self.mem.read(addr + 3),
-        ]);
+        let raw_entry = u32::from_le_bytes(mem::read_n(self.mem, addr));
 
         let present = raw_entry & 1 == 1;
         if !present {
@@ -326,10 +323,6 @@ impl HandlerContext<'_> {
             // set all bits in the high byte when in direct addressing mode
             // note that this also puts the I/O mapped area inside the addressable space
             return Ok(0xff_0000 | addr as u32);
-        }
-
-        const fn entry_addr(table_start: u32, number: u32) -> u32 {
-            table_start + number<<2
         }
 
         // split address into the two levels of virtual page numbers and the offset
@@ -377,6 +370,81 @@ impl HandlerContext<'_> {
         let physical_address = ppn_shifted | page_offset;
 
         Ok(physical_address)
+    }
+    pub fn print_mmap(&mut self) {
+        if !self.cpu.flags.virtual_mode {
+            println!("PPP_ => ffPPP_ (U XWR)");
+            return;
+        }
+
+        for vpn1 in 0..=0b1111 {
+            let table1_start = self.cpu.page as u32;
+
+            let lvl1_entry_addr = entry_addr(table1_start, vpn1);
+            let lvl1_entry = u32::from_le_bytes(mem::read_n(self.mem, lvl1_entry_addr));
+            if lvl1_entry & 1 == 0 {
+                continue;
+            }
+
+            let f_user_mode_1 = lvl1_entry & 0b0010_0000 != 0;
+            let f_execute_1 = lvl1_entry & 0b0000_1000 != 0;
+            let f_write_1 = lvl1_entry & 0b0000_0100 != 0;
+            let f_read_1 = lvl1_entry & 0b0000_0010 != 0;
+
+            for vpn2 in 0..=0b1_1111 {
+                let table2_start = (lvl1_entry >> 15) << 7;
+
+                let lvl2_entry_addr = entry_addr(table2_start, vpn2);
+                let lvl2_entry = u32::from_le_bytes(mem::read_n(self.mem, lvl2_entry_addr));
+                if lvl2_entry & 1 == 0 {
+                    continue;
+                }
+
+                let ppn_shifted = (lvl2_entry >> 15) << 7;
+
+                let f_user_mode = lvl2_entry & 0b0010_0000 != 0;
+                let f_execute = lvl2_entry & 0b0000_1000 != 0;
+                let f_write = lvl2_entry & 0b0000_0100 != 0;
+                let f_read = lvl2_entry & 0b0000_0010 != 0;
+
+                let addr = (vpn1 << 12) | (vpn2 << 7);
+
+                print!("{:03x}_ => {:05x}_ (", addr >> 4, ppn_shifted >> 4);
+                if f_user_mode {
+                    print!("U ");
+                    if !f_user_mode_1 {
+                        print!("!");
+                    }
+                } else if f_user_mode_1 {
+                    print!("u ");
+                }
+                if f_execute {
+                    print!("X");
+                    if !f_execute_1 {
+                        print!("!");
+                    }
+                } else if f_execute_1 {
+                    print!("x");
+                }
+                if f_write {
+                    print!("W");
+                    if !f_write_1 {
+                        print!("!");
+                    }
+                } else if f_write_1 {
+                    print!("w");
+                }
+                if f_read {
+                    print!("R");
+                    if !f_read_1 {
+                        print!("!");
+                    }
+                } else if f_read_1 {
+                    print!("r");
+                }
+                println!(")");
+            }
+        }
     }
 
     #[must_use = "error must be handled"]

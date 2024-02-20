@@ -131,7 +131,7 @@ fn main() -> ExitCode {
         in_buf: VecDeque::new(),
         out_buf: Vec::new(),
     };
-    let mut mem = LazyMain::new_with(io, flat_mem);
+    let mut mem = LazyMain::new(io).with_ff_seg(flat_mem);
     let Some(start) = ep else {
         eprintln!("no _entry section in binary, cannot start");
         eprintln!("help: you can set a custom one with -E");

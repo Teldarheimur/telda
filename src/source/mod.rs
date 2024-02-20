@@ -10,8 +10,8 @@ use crate::{
     aalv::obj::Entry,
     blf4::{ByteRegister as BReg, WideRegister as WReg, *},
     aalv::obj::SegmentType,
-    align,
-    SEGMENT_ALIGNMENT,
+    align_end,
+    PAGE_SIZE,
     U4,
 };
 
@@ -397,9 +397,9 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
 
     let ProcessState { mut dls, entry } = state;
 
-    let mut last_end = SEGMENT_ALIGNMENT;
+    let mut last_end = PAGE_SIZE;
     for s in dls.values_mut() {
-        s.start = align(last_end, SEGMENT_ALIGNMENT);
+        s.start = align_end(last_end, PAGE_SIZE);
         last_end = s.start + s.size;
     }
 

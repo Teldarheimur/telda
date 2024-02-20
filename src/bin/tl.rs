@@ -14,7 +14,7 @@ use telda2::{
     aalv::obj::{
         Entry, Object, RelocationEntry, RelocationTable, SegmentType, SymbolDefinition, SymbolTable,
     },
-    align, SEGMENT_ALIGNMENT,
+    align_end,
 };
 
 #[derive(Parser)]
@@ -41,6 +41,11 @@ struct Cli {
     /// Erase internal symbols
     #[arg(short = 'S', long)]
     strip_internal: bool,
+
+    /// A 2^n value which segments will be aligned to, i.e. segments will start on an address
+    /// that is a multiple f this value
+    #[arg(short = 'A', long = "alignment", default_value = "128")]
+    segment_alignment: u16,
 
     /// Makes the output file an executable binary which
     /// disallows undefined references
@@ -82,6 +87,7 @@ fn tl_main() -> Result<(), Error> {
         set_entry,
         strip_internal,
         executable,
+        segment_alignment,
     } = Cli::parse();
 
     let objects: Vec<_> = input_files
@@ -101,10 +107,10 @@ fn tl_main() -> Result<(), Error> {
             }
         }
         let mut last_end = lengths.remove(&SegmentType::Zero).unwrap_or(0);
-        last_end = last_end.max(SEGMENT_ALIGNMENT);
+        last_end = last_end.max(segment_alignment);
 
         for (st, size) in lengths {
-            let start = align(last_end, SEGMENT_ALIGNMENT);
+            let start = align_end(last_end, segment_alignment);
             segs_out.insert(st, (start, Vec::with_capacity(size as usize)));
             last_end = start + size;
         }

@@ -34,9 +34,9 @@ these pages with a top-level table taking up half a page and a low-level table t
 Page table entries at both levels are 4 bytes.
 
 The top-level page has 16 entries (why VPN1 is 4 bits) each taking up 4 bytes. These each point to a low-level page table.
-`aaaa_aaaa aaaa_aaaa arrr_rrrr rrUD_XWRP`
+`aaaa_aaaa aaaa_aaaa a000_0000 rrUD_XWRP`
 
-The bits marked `a` are the physical address of the next level page table. `r` are reserved for future use and should be 0. The capital letters are flags:
+The bits marked `a` are the physical page number of the next level page table. `r` are reserved for future use and should be 0. The capital letters are flags:
 - `D`, dirty flag, means a child page has this flag set.
 - `U`, user mode flag, means a child page has this flag set.
 - `X`, execute flag, means a child page has this flag set.
@@ -49,7 +49,7 @@ The flags can used to know whether to go to the child table. E.g. if the CPU is 
 bit can be checked here to trap early if it is indicated that no child page can be executed.
 
 The low-level page has 32 entries (why VPN2 is 5 bits) each taking up 4 bytes. These contain the physical page offset.
-`nnnn_nnnn nnnn_nnnn nrrr_rrrr rrUD_XWRP`
+`nnnn_nnnn nnnn_nnnn n000_0000 rrUD_XWRP`
 
 The 18 bits marked `n` are the Physical Page Number. Appending the 6-bit page offset marked O in the virtual address at the end gives
 the physical address of the mapped memory. `r` are reserved for future use and should be 0. The six bits in capital letters are flags:
