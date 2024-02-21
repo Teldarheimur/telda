@@ -58,6 +58,9 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
         CTF => {
             write!(f, "ctf").unwrap();
         }
+        SYSCALL => {
+            write!(f, "syscall").unwrap();
+        }
         RETH => {
             write!(f, "reth").unwrap();
             ends_block = true;

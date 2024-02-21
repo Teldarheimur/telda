@@ -37,6 +37,7 @@ pub static OP_HANDLERS: [OpHandler; 256] = {
     handlers[NULL as usize] = n;
     handlers[HALT as usize] = halt;
     handlers[CTF as usize] = ctf;
+    handlers[SYSCALL as usize] = syscall;
     handlers[RETH as usize] = reth;
 
     handlers[USR as usize] = usr;
@@ -106,6 +107,9 @@ fn n(_c: &mut HandlerContext) -> OpRes {
 }
 fn halt(_c: &mut HandlerContext) -> OpRes {
     Err(TrapMode::Halt)
+}
+fn syscall(_c: &mut HandlerContext) -> OpRes {
+    Err(TrapMode::SysCall)
 }
 
 fn ctf(c: &mut HandlerContext) -> OpRes {

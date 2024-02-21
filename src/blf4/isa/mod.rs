@@ -1,6 +1,7 @@
 pub const NULL: u8 = 0x00;
 pub const HALT: u8 = 0x0a;
 pub const CTF: u8 = 0x0b;
+pub const SYSCALL: u8 = 0xc;
 pub const RETH: u8 = 0x0d;
 
 pub const USR: u8 = 0x10;

@@ -609,6 +609,7 @@ fn parse_ins(
         "null" => (NULL, O::parse_nothing(ops).ok_or("no operands")?),
         "halt" => (HALT, O::parse_nothing(ops).ok_or("no operands")?),
         "ctf" => (CTF, O::parse_nothing(ops).ok_or("no operands")?),
+        "syscall" => (SYSCALL, O::parse_nothing(ops).ok_or("no operands")?),
         "reth" => (RETH, O::parse_nothing(ops).ok_or("no operands")?),
         "nop" => (NOP, O::parse_nothing(ops).ok_or("no operands")?),
         "push" => {

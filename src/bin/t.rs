@@ -10,9 +10,9 @@ use telda2::{
     },
     align_end,
     align_start,
-    blf4::{Blf4, TrapMode},
-    machine::Machine,
-    mem::{LazyMain, StdIo},
+    blf4::{Blf4, TrapMode, R1, R2},
+    machine::{EmulatedKernel, Machine},
+    mem::{LazyMain, MainMemory, StdIo},
     PAGE_SIZE,
 };
 
@@ -84,7 +84,6 @@ fn t_main() -> Result<(), Error> {
                     },
                     Heap => {
                         heap = true;
-                        eprintln!("mapping heap");
                         PERM_R | PERM_W
                     }
                     // zero segment and unknown segments should have all permissions just in case
@@ -99,8 +98,6 @@ fn t_main() -> Result<(), Error> {
                 }
             }
 
-            
-            eprintln!("mapping stack");
             // map space for I/O and stack
             let stack_size = obj.stack_size.unwrap_or_default().0;
             let stack_start = align_start(0xffff-stack_size.saturating_sub(1), PAGE_SIZE);
@@ -116,16 +113,17 @@ fn t_main() -> Result<(), Error> {
 
     let mut cpu = Blf4::new(start_addr);
 
-    if user_mode {
-        cpu.flags.user_mode = true;
-    }
     if virtual_mode {
         cpu.page = 0;
         cpu.flags.virtual_mode = true;
-        cpu.context(&mut lazy).print_mmap();
     }
 
     let mut machine = Machine::new(lazy, cpu);
+    if user_mode {
+        machine.cpu.flags.user_mode = true;
+        machine.install_emulated_kernel(EKernel { error_handler: 0 });
+    }
+
     let tm = machine.run_until_abort();
 
     if termination_point {
@@ -146,9 +144,44 @@ fn t_main() -> Result<(), Error> {
         }
         println!("Ended with {tm:?} at <{closest}+{diff:02X}>");
     } else if tm != TrapMode::Halt {
-        eprintln!("{:#04x?}", machine.cpu);
         return Err(Error::Trap(tm));
     }
 
     Ok(())
+}
+
+/// Standard emulated kernel
+///
+/// syscall R1=15 to set error handler with R2 as address
+/// error handler cannot return and should either halt or run a new program
+struct EKernel {
+    error_handler: u16,
+}
+
+impl EmulatedKernel<Blf4> for EKernel {
+    fn handle_trap(&mut self, tm: TrapMode, cpu: &mut Blf4, _mem: &mut dyn MainMemory) -> Result<(), TrapMode> {
+        match tm {
+            TrapMode::SysCall => {
+                let sys_n = cpu.read_wr(R1)?;
+
+                match sys_n {
+                    // error handler vector
+                    15 => {
+                        self.error_handler = cpu.read_wr(R2)?;
+                    }
+                    _ => return Err(TrapMode::SysCall),
+                }
+            },
+            TrapMode::Halt => return Err(TrapMode::Halt),
+            e if self.error_handler != 0 => {
+                cpu.write_wr(R1, e as u8 as u16)?;
+                cpu.program_counter = self.error_handler;
+            }
+            e => return Err(e)
+        }
+
+        cpu.flags.trap = false;
+        cpu.flags.user_mode = true;
+        Ok(())
+    }
 }

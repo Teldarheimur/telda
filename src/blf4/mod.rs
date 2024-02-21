@@ -241,6 +241,7 @@ impl Cpu for Blf4 {
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, Default)]
 pub enum TrapMode {
+    // TODO: remodel trap modes,
     #[default]
     Invalid = 0,
     SysCall = 0x5,

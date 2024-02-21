@@ -138,7 +138,6 @@ impl<P: Io> MmapBuilder<'_, P> {
         write_n(self.inner, 0xff_0000 | offset as u32, &bytes);
     }
     fn map(&mut self, virt: u16, flags_byte: u8, paddr: u32) {
-        eprintln!("{virt:04x} => {paddr:06x}");
         assert_eq!(virt & (PAGE_SIZE - 1), 0, "virtual address should be page aligned");
         assert_eq!(flags_byte & 1, 1, "page should be present");
         assert_eq!(flags_byte & 0xc0, 0, "reserved flag bits should be 0");
