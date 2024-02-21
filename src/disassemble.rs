@@ -1,7 +1,7 @@
 use std::{fmt::{self, Display, Write}, convert::identity};
 
 use crate::{
-    U4, mem::{MainMemory, MAIN_IO_MAPPING_CUTOFF}, blf4::{Blf4, ByteRegister, WideRegister, HandlerContext, isa::{arg_pair, arg_imm_wide}, R0, TrapMode},
+    blf4::{isa::{arg_imm_wide, arg_pair}, Blf4, ByteRegister, HandlerContext, TrapMode, WideRegister, R0}, machine::Machine, mem::MainMemory, PAGE_SIZE_P, U4
 };
 
 struct StrictMemory<'a, M: MainMemory> {
@@ -10,17 +10,17 @@ struct StrictMemory<'a, M: MainMemory> {
 
 impl<M: MainMemory> MainMemory for StrictMemory<'_, M> {
     fn read(&mut self, addr: u32) -> u8 {
-        if addr < MAIN_IO_MAPPING_CUTOFF {
-            self.inner.read(addr)
-        } else {
-            unimplemented!("no I/O for strict memory")
+        if addr < PAGE_SIZE_P {
+            unimplemented!("no I/O for strict memory");
         }
+        self.inner.read(addr)
     }
     fn write(&mut self, _addr: u32, _val: u8) {
         unimplemented!("no writing to strict memory")
     }
 }
 
+#[derive(Debug)]
 pub struct DisassembledInstruction {
     pub annotated_source: String,
     pub ends_block: bool,
@@ -29,14 +29,12 @@ pub struct DisassembledInstruction {
 }
 
 pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a str>>(
-    location: u16,
-    memory: &mut M,
+    machine: &mut Machine<M, Blf4>,
     label_lookup: F,
 ) -> Result<DisassembledInstruction, TrapMode> {
     use crate::blf4::isa::*;
-    let r = &mut Blf4::new(location);
-    let m = &mut StrictMemory { inner: memory };
-    let mut c = r.context(m);
+    let m = &mut StrictMemory { inner: &mut machine.memory };
+    let mut c = machine.cpu.context(m);
 
     let addr = c.cpu.program_counter;
     let opcode = c.fetch()?;
@@ -208,6 +206,8 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
     for _ in addr..next_instruction_location {
         write!(&mut annotated_source, " {:02x}", c.fetch()?).unwrap();
     }
+    // restore rpc
+    c.cpu.program_counter = addr;
 
     for _ in 0..(4 - (next_instruction_location - addr)) {
         write!(&mut annotated_source, "   ").unwrap();

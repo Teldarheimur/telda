@@ -1,26 +1,29 @@
-use std::{io, path::PathBuf, process::ExitCode};
+use std::{fs::File, io::{self, Read}, mem::replace, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use telda2::{
     aalv::obj::{
-        Flags,
         Object,
-        SegmentType,
-        SymbolDefinition
+        SymbolDefinition, SymbolTable
     },
-    align_end,
-    align_start,
-    blf4::{Blf4, TrapMode, R1, R2},
-    machine::{EmulatedKernel, Machine},
-    mem::{LazyMain, MainMemory, StdIo},
-    PAGE_SIZE,
+    blf4::{Blf4, TrapMode},
+    machine::Machine,
+    mem::{write_n, LazyMain, StdIo},
 };
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Binary file
+    ///
+    /// By default this is an object file that will be loaded in as a user program with memory mapping
     binary: PathBuf,
+
+    /// If set, the binary is interpreted as raw binary data rather than an object file and is loaded in at 0x01_0000
+    /// No kernel or anything will be present and the cpu will go through normal startup, the CPU will start execution at 0x0000 in direct
+    /// mode which is where the binary is loaded
+    #[arg(short, long)]
+    raw_binary: bool,
 
     /// Whether the termination point should be displayed
     #[arg(short, long)]
@@ -47,82 +50,30 @@ pub fn main() -> ExitCode {
     }
 }
 
-const PERM_X: u8 = 0b1000;
-const PERM_W: u8 = 0b0100;
-const PERM_R: u8 = 0b0010;
-
-// TODO: URGENT port this to other binaries, test all telda binaries with this new system, ...
-
 fn t_main() -> Result<(), Error> {
     let Cli {
         binary,
+        raw_binary,
         termination_point,
     } = Cli::parse();
 
-    let mut lazy = LazyMain::new(StdIo);
+    let mut machine = Machine::new(LazyMain::new(StdIo), Blf4::new());
 
-    let (symbols, start_addr, user_mode, virtual_mode) = {
-        let obj = Object::from_file(binary).map_err(Error::IoError)?;
-        let Flags {
-            user_mode,
-            virtual_mode,
-            readable_text,
-        } = obj.flags.unwrap_or_default();
+    let mut symbols = SymbolTable::default();
+    if raw_binary {
+        let mut file = File::open(binary).map_err(Error::IoError)?;
+        let mut raw_binary_data = Vec::new();
+        file.read_to_end(&mut raw_binary_data).map_err(Error::IoError)?;
 
-        if virtual_mode {
-            let mut mmbuilder = lazy.with_memory_mapping();
-            for (seg, (offset, bytes)) in obj.segs {
-                let mut heap = false;
-                use self::SegmentType::*;
-                let permissions = match seg {
-                    Data => PERM_W | PERM_R,
-                    RoData => PERM_R,
-                    Text => if readable_text {
-                        PERM_X | PERM_R
-                    } else {
-                        PERM_X
-                    },
-                    Heap => {
-                        heap = true;
-                        PERM_R | PERM_W
-                    }
-                    // zero segment and unknown segments should have all permissions just in case
-                    Zero | Unknown => PERM_X | PERM_W | PERM_R
-                };
-
-                mmbuilder.add_segment(permissions, offset, &bytes);
-                if heap {
-                    let heap = align_end(offset, PAGE_SIZE);
-                    let size = obj.heap_size.unwrap_or_default().0 - bytes.len() as u16;
-                    mmbuilder.map_wr_pages(heap, size, 0xff_0000 | heap as u32);
-                }
-            }
-
-            // map space for I/O and stack
-            let stack_size = obj.stack_size.unwrap_or_default().0;
-            let stack_start = align_start(0xffff-stack_size.saturating_sub(1), PAGE_SIZE);
-            mmbuilder.map_wr_pages(stack_start, stack_size, 0xff_0000 | stack_start as u32);
-        } else {
-            lazy = lazy.with_ff_seg(obj.get_flattened_memory());
-        }
-
-        let iter = obj.symbols.into_iter();
-
-        (iter, obj.entry.ok_or(Error::NoEntry)?.1, user_mode, virtual_mode)
-    };
-
-    let mut cpu = Blf4::new(start_addr);
-
-    if virtual_mode {
-        cpu.page = 0;
-        cpu.flags.virtual_mode = true;
+        write_n(&mut machine.memory, 0x01_0000, &raw_binary_data);
+    } else {
+        let mut obj = Object::from_file(binary).map_err(Error::IoError)?;
+        // error if there is no entry
+        obj.entry.is_some().then(|| ()).ok_or(Error::NoEntry)?;
+        symbols = replace(&mut obj.symbols, symbols);
+        machine.load_user_binary(&obj);
     }
-
-    let mut machine = Machine::new(lazy, cpu);
-    if user_mode {
-        machine.cpu.flags.user_mode = true;
-        machine.install_emulated_kernel(EKernel { error_handler: 0 });
-    }
+    let symbols = symbols.into_iter();
 
     let tm = machine.run_until_abort();
 
@@ -148,40 +99,4 @@ fn t_main() -> Result<(), Error> {
     }
 
     Ok(())
-}
-
-/// Standard emulated kernel
-///
-/// syscall R1=15 to set error handler with R2 as address
-/// error handler cannot return and should either halt or run a new program
-struct EKernel {
-    error_handler: u16,
-}
-
-impl EmulatedKernel<Blf4> for EKernel {
-    fn handle_trap(&mut self, tm: TrapMode, cpu: &mut Blf4, _mem: &mut dyn MainMemory) -> Result<(), TrapMode> {
-        match tm {
-            TrapMode::SysCall => {
-                let sys_n = cpu.read_wr(R1)?;
-
-                match sys_n {
-                    // error handler vector
-                    15 => {
-                        self.error_handler = cpu.read_wr(R2)?;
-                    }
-                    _ => return Err(TrapMode::SysCall),
-                }
-            },
-            TrapMode::Halt => return Err(TrapMode::Halt),
-            e if self.error_handler != 0 => {
-                cpu.write_wr(R1, e as u8 as u16)?;
-                cpu.program_counter = self.error_handler;
-            }
-            e => return Err(e)
-        }
-
-        cpu.flags.trap = false;
-        cpu.flags.user_mode = true;
-        Ok(())
-    }
 }

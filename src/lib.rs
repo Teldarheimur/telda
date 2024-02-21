@@ -10,6 +10,7 @@ pub use self::u4::U4;
 
 /// The size of a page
 pub const PAGE_SIZE: u16 = 128;
+pub const PAGE_SIZE_P: u32 = PAGE_SIZE as u32;
 
 pub const fn align_start(addr: u16, alignment: u16) -> u16 {
     let mask = !(alignment - 1);

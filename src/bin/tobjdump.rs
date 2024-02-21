@@ -10,8 +10,7 @@ use telda2::{
     aalv::{
         obj::{Object, SegmentType, SymbolTable},
         Section,
-    },
-    disassemble::{disassemble_instruction, DisassembledInstruction}, mem::{LazyMain, PanickingIO},
+    }, blf4::Blf4, disassemble::{disassemble_instruction, DisassembledInstruction}, machine::Machine, mem::{LazyMain, PanickingIO}
 };
 
 #[derive(Parser)]
@@ -120,10 +119,11 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
     }
 
     println!("disassembly:");
-    let mut mem;
+    let mut machine;
     let mut pos_to_labels = HashMap::new();
     {
-        mem = LazyMain::new(PanickingIO).with_ff_seg(obj.get_flattened_memory());
+        machine = Machine::new(LazyMain::new(PanickingIO), Blf4::new());
+        machine.load_user_binary(obj);
 
         for (id, s) in obj.symbols.0.iter().enumerate() {
             pos_to_labels.insert(s.location, id);
@@ -175,12 +175,13 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
 
         'labelled_block: loop {
             let mut label_name = Cow::Borrowed("");
+            machine.cpu.program_counter = location;
             let DisassembledInstruction {
                 annotated_source,
                 ends_block,
                 nesting_difference: _,
                 next_instruction_location,
-            } = disassemble_instruction(location, &mut mem, |p| {
+            } = disassemble_instruction(&mut machine, |p| {
                 let l = pos_to_labels.get(&p).copied();
                 if let Some(l) = l {
                     if !printed_labels.contains(&l) {

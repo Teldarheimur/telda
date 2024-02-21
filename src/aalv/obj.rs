@@ -114,6 +114,7 @@ impl Object {
         Ok(())
     }
 
+    #[deprecated = "Load segmented instead"]
     pub fn get_flattened_memory(&self) -> Vec<u8> {
         let size = self
             .segs
@@ -150,16 +151,12 @@ impl Section for Entry {
 
 #[derive(Debug, Clone, Copy)]
 pub struct Flags {
-    pub virtual_mode: bool,
-    pub user_mode: bool,
     pub readable_text: bool,
 }
 
 impl Default for Flags {
     fn default() -> Self {
         Flags {
-            user_mode: true,
-            virtual_mode: true,
             readable_text: false,
         }
     }
@@ -171,16 +168,10 @@ impl Section for Flags {
         let mut buf = String::new();
         reader.read_to_string(&mut buf)?;
 
-        let mut flags = Flags {
-            user_mode: false,
-            virtual_mode: false,
-            readable_text: false,
-        };
+        let mut flags = Flags::default();
 
         for c in buf.chars() {
             match c {
-                'U' => flags.user_mode = true,
-                'V' => flags.virtual_mode = true,
                 'R' => flags.readable_text = true,
                 _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unrecognised flag"))
             }
@@ -190,17 +181,9 @@ impl Section for Flags {
     }
     fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         let &Flags {
-            user_mode,
-            virtual_mode,
             readable_text,
         } = self;
 
-        if user_mode {
-            write!(writer, "U")?;
-        }
-        if virtual_mode {
-            write!(writer, "V")?;
-        }
         if readable_text {
             write!(writer, "R")?;
         }

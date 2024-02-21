@@ -1,15 +1,25 @@
 use std::fmt::{self, Display};
 
+use rand::{thread_rng, Rng};
+
 use crate::{
-    machine::Cpu, mem::{self, MainMemory, VIRTUAL_IO_MAPPING_CUTOFF}, U4
+    machine::Cpu, mem::{self, MainMemory}, U4
 };
 
 pub mod isa;
 
 mod register_type;
+mod std_kernel;
 
 pub use self::register_type::*;
 use isa::OP_HANDLERS;
+
+pub const PERM_U: u8 = 0b0010_0000;
+pub const FLAG_D: u8 = 0b0001_0000;
+pub const PERM_X: u8 = 0b1000;
+pub const PERM_W: u8 = 0b0100;
+pub const PERM_R: u8 = 0b0010;
+pub const FLAG_P: u8 = 0b0001;
 
 pub type OpRes<T, E = TrapMode> = Result<T, E>;
 
@@ -111,31 +121,36 @@ pub struct Blf4 {
     general_purposes: [u8; 20],
 
     pub stack: u16,
+    /// Inits to 0x01_0000
     pub link: u16,
     pub frame: u16,
     pub page: u16,
+    /// Inits to 0x01_0000
     pub program_counter: u16,
-    /// Zero means no trap handler
+    /// Zero means no trap handler, inits to zero
     pub trap_handler: u16,
     pub flags: Blf4Flags,
 }
 
 impl Blf4 {
-    pub fn new(start: u16) -> Self {
-        let seed = (0b1001_1100 ^ (!start)) as u8;
+    /// Starts the processor with most registers randomly initialised
+    pub fn new() -> Self {
+        let mut rng = thread_rng();
         // Pseudo-randomise starting registers so that they cannot be relied on
         Blf4 {
-            general_purposes: [seed; 20],
-            program_counter: start,
+            program_counter: 0,
             link: 0,
-            page: 0,
-            frame: VIRTUAL_IO_MAPPING_CUTOFF,
-            stack: VIRTUAL_IO_MAPPING_CUTOFF,
             trap_handler: 0,
             flags: Blf4Flags::default(),
+
+            general_purposes: std::array::from_fn(|_| rng.gen()),
+            page: rng.gen(),
+            frame: rng.gen(),
+            stack: rng.gen(),
         }
     }
-    pub fn context<'a, M: MainMemory>(&'a mut self, mem: &'a mut M) -> HandlerContext<'a> {
+    #[inline]
+    pub fn context<'a>(&'a mut self, mem: &'a mut dyn MainMemory) -> HandlerContext<'a> {
         HandlerContext { cpu: self, mem }
     }
 
@@ -322,8 +337,8 @@ impl HandlerContext<'_> {
     fn addr_resolve(&mut self, addr: u16, mode: AccessMode) -> OpRes<u32> {
         if !self.cpu.flags.virtual_mode {
             // set all bits in the high byte when in direct addressing mode
-            // note that this also puts the I/O mapped area inside the addressable space
-            return Ok(0xff_0000 | addr as u32);
+            // note that this does not put the I/O mapped area inside the addressable space
+            return Ok(0x01_0000 | addr as u32);
         }
 
         // split address into the two levels of virtual page numbers and the offset
