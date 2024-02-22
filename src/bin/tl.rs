@@ -263,7 +263,7 @@ fn tl_main() -> Result<(), Error> {
         if let SegmentType::Unknown = symdef.segment_type {
             if executable {
                 eprintln!(
-                    "undefined reference to {} at 0x{:02x}",
+                    "undefined reference to {} (0x{:03x}) at 0x{reference_location:04x}",
                     symdef.name, symdef.location
                 );
                 failure = true;
