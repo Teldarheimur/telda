@@ -29,6 +29,7 @@ fn one_one(s: &str) -> Result<u16, &'static str> {
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Input telda object files
+    #[arg(required = true)]
     input_files: Vec<PathBuf>,
 
     /// Sets the output path, otherwise a.out is used
