@@ -136,7 +136,7 @@ You will need to `push rl` in a sub-routine before calling another sub-routine i
 access is translated according to the table. If the page entry is not valid, a page trap is
 triggered. This is the only pointer that holds a physical address. The others obey the current addressing mode. This also means that top-level page tables have to exist in the first 64 KiB of
 memory, since `rp` is only 16-bit and is interpreted with the high byte as 0. The size of a top-level
-page table is 128 bytes, so there is space for 512 tables. If there is need for more, they must be moved around.
+page table is 64 bytes, so theorectically there is space for 1024 tables. If there is need for more, they must be moved around.
 
 `rh` has the location of the trap handler, it starts with the value `0` which indicates that no trap handler is set, if it's set to something else, then when a trap is triggered, the program counter will be set to `rh` after having pushed all registers to the stack. The trap mode will be written to `r1`
 so that the trap handler can determine what to do based on this value. The instruction `reth` can be used
