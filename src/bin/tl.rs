@@ -61,6 +61,14 @@ struct Cli {
     /// Errors if no entry-point is defined in input files or with -E
     #[arg(short = 'e', long)]
     executable: bool,
+    /// Output as raw binary skipping the first 128 bytes (IO-mapped) bytes
+    /// putting non-writeable (both readable and executable) segments in ROM (0x80-0x7fff)
+    /// and any writeable data in RAM (0x8000-0xffff)
+    ///
+    /// The output will not be an object file and instead just raw binary data runnable with `t -r`
+    /// thus all symbols are discarded
+    #[arg(short, long, conflicts_with = "executable")]
+    raw_binary: bool,
 }
 
 fn main() -> ExitCode {
@@ -96,6 +104,7 @@ fn tl_main() -> Result<(), Error> {
         strip_internal,
         executable,
         segment_alignment,
+        raw_binary,
     } = Cli::parse();
 
     let objects: Vec<_> = input_files
@@ -103,6 +112,10 @@ fn tl_main() -> Result<(), Error> {
         .map(|p| Object::from_file(&p).map(|o| (p, o)))
         .collect_result()
         .map_err(Error::Io)?;
+
+    if raw_binary {
+        unimplemented!("unsupported rn :3");
+    }
 
     let mut segs_out = BTreeMap::new();
 
