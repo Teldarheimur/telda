@@ -1,7 +1,16 @@
-use std::{fmt::{self, Display, Write}, convert::identity};
+use std::{
+    convert::identity,
+    fmt::{self, Display, Write},
+};
 
 use crate::{
-    blf4::{isa::{arg_imm_wide, arg_pair}, Blf4, ByteRegister, HandlerContext, TrapMode, WideRegister, R0}, machine::Machine, mem::MainMemory, PAGE_SIZE_P, U4
+    blf4::{
+        isa::{arg_imm_wide, arg_pair},
+        Blf4, ByteRegister, HandlerContext, TrapMode, WideRegister, R0,
+    },
+    machine::Machine,
+    mem::MainMemory,
+    PAGE_SIZE_P, U4,
 };
 
 struct StrictMemory<'a, M: MainMemory> {
@@ -33,7 +42,9 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
     label_lookup: F,
 ) -> Result<DisassembledInstruction, TrapMode> {
     use crate::blf4::isa::*;
-    let m = &mut StrictMemory { inner: &mut machine.memory };
+    let m = &mut StrictMemory {
+        inner: &mut machine.memory,
+    };
     let mut c = machine.cpu.context(m);
 
     let addr = c.cpu.program_counter;
@@ -73,7 +84,7 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
             write!(f, "push {r1}").unwrap();
         }
         POP_B => {
-            let (r1, _r2) = arg_pair(&mut c,ByteRegister, identity)?;
+            let (r1, _r2) = arg_pair(&mut c, ByteRegister, identity)?;
             write!(f, "pop {r1}").unwrap();
         }
         POP_W => {

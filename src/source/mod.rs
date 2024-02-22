@@ -8,11 +8,10 @@ use std::{
 
 use crate::{
     aalv::obj::Entry,
-    blf4::{ByteRegister as BReg, WideRegister as WReg, *},
     aalv::obj::SegmentType,
     align_end,
-    PAGE_SIZE,
-    U4,
+    blf4::{ByteRegister as BReg, WideRegister as WReg, *},
+    PAGE_SIZE, U4,
 };
 
 mod err;
@@ -493,13 +492,7 @@ fn inner_process<B: BufRead>(
                     "rodata" => SegmentType::RoData,
                     "text" => SegmentType::Text,
                     "heap" => SegmentType::Heap,
-                    seg => {
-                        return Err(Error::new(
-                            src,
-                            ln,
-                            ErrorType::UnknownSegment(seg.into()),
-                        ))
-                    }
+                    seg => return Err(Error::new(src, ln, ErrorType::UnknownSegment(seg.into()))),
                 };
 
                 *current_segment = new_seg;
@@ -515,10 +508,15 @@ fn inner_process<B: BufRead>(
                 symbols.set_label(&s, addr, SourceLocation::new(src, ln))?;
             }
             SourceLine::Ins(s, ops) => {
-                let Some((opcode, dat_op)) = parse_ins(&s, ops, symbols, SourceLocation::new(src, ln))
-                    .map_err(|e| Error::new(src, ln, ErrorType::IncorrectOperands(e)))?
+                let Some((opcode, dat_op)) =
+                    parse_ins(&s, ops, symbols, SourceLocation::new(src, ln))
+                        .map_err(|e| Error::new(src, ln, ErrorType::IncorrectOperands(e)))?
                 else {
-                    return Err(Error::new(src, ln, ErrorType::UnknownInstruction(s.into_boxed_str())));
+                    return Err(Error::new(
+                        src,
+                        ln,
+                        ErrorType::UnknownInstruction(s.into_boxed_str()),
+                    ));
                 };
                 state.add_line(
                     *current_segment,

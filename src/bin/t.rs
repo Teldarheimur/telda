@@ -1,11 +1,14 @@
-use std::{fs::File, io::{self, Read}, mem::replace, path::PathBuf, process::ExitCode};
+use std::{
+    fs::File,
+    io::{self, Read},
+    mem::replace,
+    path::PathBuf,
+    process::ExitCode,
+};
 
 use clap::Parser;
 use telda2::{
-    aalv::obj::{
-        Object,
-        SymbolDefinition, SymbolTable
-    },
+    aalv::obj::{Object, SymbolDefinition, SymbolTable},
     blf4::{Blf4, TrapMode},
     machine::Machine,
     mem::{LazyMain, StdIo},
@@ -64,7 +67,8 @@ fn t_main() -> Result<(), Error> {
     if raw_binary {
         let mut file = File::open(binary).map_err(Error::IoError)?;
         let mut raw_binary_data = Vec::new();
-        file.read_to_end(&mut raw_binary_data).map_err(Error::IoError)?;
+        file.read_to_end(&mut raw_binary_data)
+            .map_err(Error::IoError)?;
 
         machine.memory = machine.memory.with_rom(&raw_binary_data);
     } else {

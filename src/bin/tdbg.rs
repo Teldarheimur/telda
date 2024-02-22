@@ -6,7 +6,11 @@ use std::{
 };
 
 use telda2::{
-    aalv::obj::{Object, SymbolDefinition}, blf4::*, disassemble::disassemble_instruction, machine::Machine, mem::{Io, LazyMain}
+    aalv::obj::{Object, SymbolDefinition},
+    blf4::*,
+    disassemble::disassemble_instruction,
+    machine::Machine,
+    mem::{Io, LazyMain},
 };
 
 struct DbgIo {
@@ -73,10 +77,13 @@ fn main() -> ExitCode {
             }
         };
 
-        machine = Machine::new(LazyMain::new(DbgIo {
-            in_buf: VecDeque::new(),
-            out_buf: Vec::new(),
-        }), Blf4::new());
+        machine = Machine::new(
+            LazyMain::new(DbgIo {
+                in_buf: VecDeque::new(),
+                out_buf: Vec::new(),
+            }),
+            Blf4::new(),
+        );
         machine.load_user_binary(&obj);
 
         if let Some(entry) = entry {
@@ -142,9 +149,8 @@ fn tdbg_loop(mut machine: Machine<LazyMain<DbgIo>, Blf4>, pos_to_labels: HashMap
     let mut current_nesting = 0;
 
     'disassemble_loop: loop {
-        let dins = disassemble_instruction(&mut machine, |p| {
-            pos_to_labels.get(&p).map(|s| &**s)
-        }).unwrap();
+        let dins =
+            disassemble_instruction(&mut machine, |p| pos_to_labels.get(&p).map(|s| &**s)).unwrap();
 
         if false && todo!("is trapping") {
             println!("handled trap encountered!");

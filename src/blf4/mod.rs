@@ -3,7 +3,9 @@ use std::fmt::{self, Display};
 use rand::{thread_rng, Rng};
 
 use crate::{
-    machine::Cpu, mem::{self, MainMemory}, PAGE_SIZE, U4
+    machine::Cpu,
+    mem::{self, MainMemory},
+    PAGE_SIZE, U4,
 };
 
 pub mod isa;
@@ -291,7 +293,7 @@ struct Entry {
 }
 
 const fn entry_addr(table_start: u32, number: u32) -> u32 {
-    table_start + (number<<2)
+    table_start + (number << 2)
 }
 
 impl HandlerContext<'_> {
@@ -321,7 +323,7 @@ impl HandlerContext<'_> {
             AccessMode::Execute if !f_execute => return Err(TrapMode::IllegalExecute),
             AccessMode::Write if !f_write => return Err(TrapMode::IllegalWrite),
             AccessMode::Read if !f_read => return Err(TrapMode::IllegalRead),
-            _ => ()
+            _ => (),
         }
 
         Ok(Entry {
@@ -353,8 +355,15 @@ impl HandlerContext<'_> {
 
         // The level one entry is located at this address
         let lvl1_entry_addr = entry_addr(table1_start, vpn1);
-        let lvl1_entry = self.read_entry(lvl1_entry_addr, in_user_mode, mode)
-            .map_err(|tm| if let TrapMode::Level2PageFault = tm { TrapMode::Level1PageFault } else { tm })?;
+        let lvl1_entry = self
+            .read_entry(lvl1_entry_addr, in_user_mode, mode)
+            .map_err(|tm| {
+                if let TrapMode::Level2PageFault = tm {
+                    TrapMode::Level1PageFault
+                } else {
+                    tm
+                }
+            })?;
 
         let table2_start = lvl1_entry.addr;
 
@@ -365,14 +374,12 @@ impl HandlerContext<'_> {
 
         // set dirty bit to any entry that isn't marked as dirty, if the access mode is write
         if matches!(mode, AccessMode::Write) {
-            let dirty_iter = [lvl1_entry_addr, lvl2_entry_addr]
-                .into_iter()
-                .zip(
-                    lvl1_entry
-                        .byte_with_dirty_flag
-                        .into_iter()
-                        .chain(lvl2_entry.byte_with_dirty_flag)
-                );
+            let dirty_iter = [lvl1_entry_addr, lvl2_entry_addr].into_iter().zip(
+                lvl1_entry
+                    .byte_with_dirty_flag
+                    .into_iter()
+                    .chain(lvl2_entry.byte_with_dirty_flag),
+            );
 
             for (addr, undirty_byte) in dirty_iter {
                 // set dirty flag

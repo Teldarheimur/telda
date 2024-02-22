@@ -10,7 +10,11 @@ use telda2::{
     aalv::{
         obj::{Object, SegmentType, SymbolTable},
         Section,
-    }, blf4::Blf4, disassemble::{disassemble_instruction, DisassembledInstruction}, machine::Machine, mem::{LazyMain, PanickingIO}
+    },
+    blf4::Blf4,
+    disassemble::{disassemble_instruction, DisassembledInstruction},
+    machine::Machine,
+    mem::{LazyMain, PanickingIO},
 };
 
 #[derive(Parser)]
@@ -193,7 +197,8 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
                 } else {
                     None
                 }
-            }).unwrap();
+            })
+            .unwrap();
 
             if show_relocations {
                 for (&loc, &sym) in relocs.range(location..next_instruction_location) {

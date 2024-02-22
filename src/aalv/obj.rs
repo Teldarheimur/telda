@@ -173,16 +173,19 @@ impl Section for Flags {
         for c in buf.chars() {
             match c {
                 'R' => flags.readable_text = true,
-                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unrecognised flag"))
+                _ => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        "unrecognised flag",
+                    ))
+                }
             }
         }
 
         Ok(flags)
     }
     fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
-        let &Flags {
-            readable_text,
-        } = self;
+        let &Flags { readable_text } = self;
 
         if readable_text {
             write!(writer, "R")?;
@@ -219,7 +222,7 @@ impl Default for HeapSize {
 }
 impl Section for HeapSize {
     const NAME: &'static str = "_heap_size";
-   fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+    fn read<R: Read>(mut reader: R) -> io::Result<Self> {
         let mut buf = [0; 2];
         reader.read_exact(&mut buf)?;
         Ok(HeapSize(u16::from_le_bytes(buf)))
@@ -238,7 +241,6 @@ pub enum SegmentType {
     RoData = 0x18,
     Text = 0x20,
     Heap = 0x70,
-
     // new layout:
     // zero (), text (x), rodata (r), data (rw), heap (rw)
 }

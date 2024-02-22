@@ -1,13 +1,15 @@
 use crate::{
     aalv::obj::{Flags, Object, SegmentType},
-    align_end,
-    align_start,
-    mem::MainMemory,
+    align_end, align_start,
     machine::Machine,
+    mem::MainMemory,
     PAGE_SIZE,
 };
 
-use super::{super::{Blf4, PERM_R, PERM_W, PERM_X}, EKernel};
+use super::{
+    super::{Blf4, PERM_R, PERM_W, PERM_X},
+    EKernel,
+};
 
 impl<M: MainMemory> Machine<M, Blf4> {
     pub fn load_user_binary(&mut self, obj: &Object) {
@@ -18,9 +20,7 @@ impl<M: MainMemory> Machine<M, Blf4> {
 
         let mut mmbuilder = ekernel.mmapper(&mut self.memory, page_table1);
 
-        let Flags {
-            readable_text,
-        } = obj.flags.unwrap_or_default();
+        let Flags { readable_text } = obj.flags.unwrap_or_default();
         let heap_size = obj.heap_size.unwrap_or_default().0;
         let stack_size = obj.stack_size.unwrap_or_default().0;
 
@@ -30,17 +30,19 @@ impl<M: MainMemory> Machine<M, Blf4> {
             let permissions = match seg {
                 Data => PERM_W | PERM_R,
                 RoData => PERM_R,
-                Text => if readable_text {
-                    PERM_X | PERM_R
-                } else {
-                    PERM_X
-                },
+                Text => {
+                    if readable_text {
+                        PERM_X | PERM_R
+                    } else {
+                        PERM_X
+                    }
+                }
                 Heap => {
                     heap = true;
                     PERM_R | PERM_W
                 }
                 // zero segment and unknown segments should have all permissions just in case
-                Zero | Unknown => PERM_X | PERM_W | PERM_R
+                Zero | Unknown => PERM_X | PERM_W | PERM_R,
             };
 
             mmbuilder.add_segment(permissions, offset, bytes);
@@ -52,7 +54,7 @@ impl<M: MainMemory> Machine<M, Blf4> {
         }
 
         // map space for stack
-        let stack_start = align_start(0xffff-stack_size.saturating_sub(1), PAGE_SIZE);
+        let stack_start = align_start(0xffff - stack_size.saturating_sub(1), PAGE_SIZE);
         mmbuilder.map_wr_pages(stack_start, stack_size);
 
         self.cpu.flags.virtual_mode = true;

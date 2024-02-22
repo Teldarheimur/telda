@@ -1,5 +1,8 @@
 use crate::{
-    align_start, machine::EmulatedKernel, mem::{read_n, write_n, MainMemory, HALF_CELL}, PAGE_SIZE, PAGE_SIZE_P
+    align_start,
+    machine::EmulatedKernel,
+    mem::{read_n, write_n, MainMemory, HALF_CELL},
+    PAGE_SIZE, PAGE_SIZE_P,
 };
 
 use super::{Blf4, TrapMode, R1, R1L, R2, R2L};
@@ -24,9 +27,13 @@ impl EKernel {
             next_free: None,
         }
     }
-    fn mmapper<'a, M: MainMemory>(&'a mut self, mem: &'a mut M, page_table1: u32) -> MmapBuilder<M> {
+    fn mmapper<'a, M: MainMemory>(
+        &'a mut self,
+        mem: &'a mut M,
+        page_table1: u32,
+    ) -> MmapBuilder<M> {
         MmapBuilder {
-            page_table1, 
+            page_table1,
             kernel: self,
             mem,
         }
@@ -54,7 +61,7 @@ impl EKernel {
     }
     #[allow(dead_code)]
     pub fn free_page<M: MainMemory>(&mut self, addr: u32, mem: &mut M) {
-        assert_eq!(addr & (PAGE_SIZE_P-1), 0, "page addr should be aligned");
+        assert_eq!(addr & (PAGE_SIZE_P - 1), 0, "page addr should be aligned");
         let old_free;
         if let Some(next_free) = self.next_free.take() {
             old_free = next_free;
@@ -70,7 +77,12 @@ impl EKernel {
 }
 
 impl EmulatedKernel<Blf4> for EKernel {
-    fn handle_trap(&mut self, tm: TrapMode, cpu: &mut Blf4, mem: &mut dyn MainMemory) -> Result<(), TrapMode> {
+    fn handle_trap(
+        &mut self,
+        tm: TrapMode,
+        cpu: &mut Blf4,
+        mem: &mut dyn MainMemory,
+    ) -> Result<(), TrapMode> {
         match tm {
             TrapMode::SysCall => {
                 let mut ctx = cpu.context(mem);
@@ -97,13 +109,13 @@ impl EmulatedKernel<Blf4> for EKernel {
                     }
                     _ => return Err(TrapMode::SysCall),
                 }
-            },
+            }
             TrapMode::Halt => return Err(TrapMode::Halt),
             e if self.error_handler != 0 => {
                 cpu.write_wr(R1, e as u8 as u16)?;
                 cpu.program_counter = self.error_handler;
             }
-            e => return Err(e)
+            e => return Err(e),
         }
 
         cpu.flags.trap = false;
@@ -128,17 +140,17 @@ impl<M: MainMemory> MmapBuilder<'_, M> {
         // let mut bytes = bytes;
         // map all pages the segment overlaps with
         let start_vpage = align_start(offset, PAGE_SIZE);
-        let range = start_vpage .. offset+bytes.len() as u16;
+        let range = start_vpage..offset + bytes.len() as u16;
         for vaddr in range.step_by(PAGE_SIZE as usize) {
             let paddr = self.map(vaddr, perm_bits);
 
             // write page to memory
             if vaddr < offset {
-                let page_offset = offset-vaddr;
-                let end = ((PAGE_SIZE-page_offset) as usize).min(bytes.len());
+                let page_offset = offset - vaddr;
+                let end = ((PAGE_SIZE - page_offset) as usize).min(bytes.len());
                 write_n(self.mem, paddr + page_offset as u32, &bytes[..end]);
             } else {
-                let start = (vaddr-offset) as usize;
+                let start = (vaddr - offset) as usize;
                 let end = (start + PAGE_SIZE as usize).min(bytes.len());
                 write_n(self.mem, paddr, &bytes[start..end]);
             }
@@ -172,7 +184,7 @@ impl<M: MainMemory> MmapBuilder<'_, M> {
         if pte2 & 1 == 0 {
             let paddr = self.new_page();
             // entry not present, write it
-            pte2 = (paddr<<8) | (flags_byte as u32);
+            pte2 = (paddr << 8) | (flags_byte as u32);
 
             write_n(self.mem, pte2_addr, &pte2.to_le_bytes());
             paddr
@@ -183,7 +195,7 @@ impl<M: MainMemory> MmapBuilder<'_, M> {
                 self.mem.write(pte2_addr, perm_byte | flags_byte);
             }
 
-            (pte2>>8) & 0xff_ff80
+            (pte2 >> 8) & 0xff_ff80
         }
     }
     #[inline]

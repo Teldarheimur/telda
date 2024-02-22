@@ -6,7 +6,10 @@ pub use self::ekernel::*;
 pub trait Cpu {
     type TrapMode;
 
-    fn execute_instruction<M: MainMemory>(&mut self, main_memory: &mut M) -> Result<(), Self::TrapMode>;
+    fn execute_instruction<M: MainMemory>(
+        &mut self,
+        main_memory: &mut M,
+    ) -> Result<(), Self::TrapMode>;
 }
 
 pub struct Machine<M, C> {
@@ -18,7 +21,11 @@ pub struct Machine<M, C> {
 
 impl<M, C> Machine<M, C> {
     pub fn new(memory: M, cpu: C) -> Self {
-        Machine { memory, cpu, ekernel: None }
+        Machine {
+            memory,
+            cpu,
+            ekernel: None,
+        }
     }
 }
 
