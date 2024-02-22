@@ -8,10 +8,10 @@ use std::{
 use clap::{ArgGroup, Parser};
 use telda2::{
     aalv::{
-        obj::{Object, SegmentType, SymbolTable},
+        obj::{Object, SegmentType, SymbolDefinition, SymbolTable},
         Section,
     },
-    blf4::Blf4,
+    blf4::{Blf4, TrapMode},
     disassemble::{disassemble_instruction, DisassembledInstruction},
     machine::Machine,
     mem::{LazyMain, PanickingIO},
@@ -76,16 +76,25 @@ fn main() -> ExitCode {
 fn symbols(obj: &Object) {
     if !obj.symbols.0.is_empty() {
         println!("{}:", SymbolTable::NAME);
+
+        let max_name_len = obj.symbols.0.iter().map(|s| s.name.len()).max().unwrap_or_default();
+
         for sym_def in &obj.symbols.0 {
-            print!("    ");
-            if sym_def.is_global {
-                print!("GLOBAL ");
+            let &SymbolDefinition {
+                ref name,
+                is_global,
+                segment_type,
+                location,
+            } = sym_def;
+
+            if is_global {
+                print!("  GLOBAL  ");
+            } else {
+                print!("  local   ");
             }
-            match sym_def.segment_type {
-                SegmentType::Unknown => {
-                    println!("{} = UNDEFINED ({:02x})", sym_def.name, sym_def.location)
-                }
-                stype => println!("{} = {:02x} in {:?}", sym_def.name, sym_def.location, stype),
+            match segment_type {
+                SegmentType::Unknown => println!("{name:max_name_len$} = UNDEFINED (0x{location:04x})"),
+                stype => println!("{name:max_name_len$} = 0x{location:04x} in {stype}"),
             }
         }
         println!();
@@ -180,12 +189,7 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
         'labelled_block: loop {
             let mut label_name = Cow::Borrowed("");
             machine.cpu.program_counter = location;
-            let DisassembledInstruction {
-                annotated_source,
-                ends_block,
-                nesting_difference: _,
-                next_instruction_location,
-            } = disassemble_instruction(&mut machine, |p| {
+            let res = disassemble_instruction(&mut machine, |p| {
                 let l = pos_to_labels.get(&p).copied();
                 if let Some(l) = l {
                     if !printed_labels.contains(&l) {
@@ -197,8 +201,30 @@ fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: boo
                 } else {
                     None
                 }
-            })
-            .unwrap();
+            });
+
+            let DisassembledInstruction {
+                annotated_source,
+                ends_block,
+                nesting_difference: _,
+                next_instruction_location,
+            } = match res {
+                Ok(di) => di,
+                Err(t) => {
+                    match t {
+                        TrapMode::IllegalExecute => {
+                            println!("  data");
+                        },
+                        TrapMode::Level1PageFault | TrapMode::Level2PageFault => {
+                            println!("  unmapped data");
+                        },
+                        _ => {
+                            println!("  ERROR!");
+                        }
+                    }
+                    break 'labelled_block;
+                }
+            };
 
             if show_relocations {
                 for (&loc, &sym) in relocs.range(location..next_instruction_location) {
