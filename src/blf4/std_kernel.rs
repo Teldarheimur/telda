@@ -135,11 +135,11 @@ impl<M: MainMemory> MmapBuilder<'_, M> {
             // write page to memory
             if vaddr < offset {
                 let page_offset = offset-vaddr;
-                let end = ((PAGE_SIZE-page_offset) as usize).min(bytes.len() as usize);
+                let end = ((PAGE_SIZE-page_offset) as usize).min(bytes.len());
                 write_n(self.mem, paddr + page_offset as u32, &bytes[..end]);
             } else {
                 let start = (vaddr-offset) as usize;
-                let end = (start + PAGE_SIZE as usize).min(bytes.len() as usize);
+                let end = (start + PAGE_SIZE as usize).min(bytes.len());
                 write_n(self.mem, paddr, &bytes[start..end]);
             }
         }

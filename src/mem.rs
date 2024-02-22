@@ -13,7 +13,7 @@ pub fn read_n<M: MainMemory + ?Sized, const N: usize>(m: &mut M, addr: u32) -> [
     })
 }
 pub fn write_n<M: MainMemory + ?Sized>(m: &mut M, addr: u32, data: &[u8]) {
-    data.into_iter()
+    data.iter()
         .enumerate()
         .for_each(|(i, &b)| {
             m.write(addr+i as u32, b)

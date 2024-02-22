@@ -479,7 +479,7 @@ fn inner_process<B: BufRead>(
     symbols: &mut Symbols,
 ) -> Option<Error> {
     fn inner_process_line(
-        src: &Box<str>,
+        src: &str,
         ln: u32,
         line: SourceLine,
         current_segment: &mut SegmentType,
@@ -495,7 +495,7 @@ fn inner_process<B: BufRead>(
                     "heap" => SegmentType::Heap,
                     seg => {
                         return Err(Error::new(
-                            src.clone(),
+                            src,
                             ln,
                             ErrorType::UnknownSegment(seg.into()),
                         ))
@@ -506,19 +506,19 @@ fn inner_process<B: BufRead>(
             }
             SourceLine::DirEntry => {
                 if state.entry.is_some() {
-                    return Err(Error::new(src.clone(), ln, ErrorType::DoubleEntry));
+                    return Err(Error::new(src, ln, ErrorType::DoubleEntry));
                 }
                 state.entry = Some(Address(*current_segment, state.get_size(*current_segment)));
             }
             SourceLine::Label(s) => {
                 let addr = Address(*current_segment, state.get_size(*current_segment));
-                symbols.set_label(&s, addr, SourceLocation::new(&src, ln))?;
+                symbols.set_label(&s, addr, SourceLocation::new(src, ln))?;
             }
             SourceLine::Ins(s, ops) => {
-                let Some((opcode, dat_op)) = parse_ins(&s, ops, symbols, SourceLocation::new(&src, ln))
-                    .map_err(|e| Error::new(src.clone(), ln, ErrorType::IncorrectOperands(e)))?
+                let Some((opcode, dat_op)) = parse_ins(&s, ops, symbols, SourceLocation::new(src, ln))
+                    .map_err(|e| Error::new(src, ln, ErrorType::IncorrectOperands(e)))?
                 else {
-                    return Err(Error::new(src.clone(), ln, ErrorType::UnknownInstruction(s.into_boxed_str())));
+                    return Err(Error::new(src, ln, ErrorType::UnknownInstruction(s.into_boxed_str())));
                 };
                 state.add_line(
                     *current_segment,
@@ -532,7 +532,7 @@ fn inner_process<B: BufRead>(
             SourceLine::DirWide(w) => {
                 let wide = match w {
                     Ok(w) => Wide::Number(w),
-                    Err(l) => Wide::Label(symbols.get_label(&l, SourceLocation::new(&src, ln))),
+                    Err(l) => Wide::Label(symbols.get_label(&l, SourceLocation::new(src, ln))),
                 };
                 state.add_line(*current_segment, DataLine::Wide(wide), 2);
             }
@@ -546,7 +546,7 @@ fn inner_process<B: BufRead>(
                 let path = if let Some(path) = path.strip_prefix('/') {
                     Path::new(path)
                 } else {
-                    pth_buf = Path::new(&**src).with_file_name("").join(&path);
+                    pth_buf = Path::new(&src).with_file_name("").join(&path);
                     &pth_buf
                 };
 
@@ -556,11 +556,11 @@ fn inner_process<B: BufRead>(
                 }
             }
             SourceLine::DirGlobal(l) => {
-                let id = symbols.get_label(&l, SourceLocation::new(&src, ln));
+                let id = symbols.get_label(&l, SourceLocation::new(src, ln));
                 symbols.set_global(id);
             }
             SourceLine::DirReference(l) => {
-                let id = symbols.get_label(&l, SourceLocation::new(&src, ln));
+                let id = symbols.get_label(&l, SourceLocation::new(src, ln));
                 symbols.set_reference(id);
             }
             SourceLine::Comment => (),
@@ -568,7 +568,7 @@ fn inner_process<B: BufRead>(
 
         if state.unknown_defined() {
             return Err(Error::new(
-                src.clone(),
+                src,
                 ln,
                 ErrorType::Other("no segment was started".to_string().into_boxed_str()),
             ));

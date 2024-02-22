@@ -56,7 +56,7 @@ impl From<Blf4Flags> for u16 {
             | ((virtual_mode as u16) << 3)
             | ((reserved as u16) << 2)
             | ((trap as u16) << 1)
-            | ((user_mode as u16) << 0)
+            | (user_mode as u16)
     }
 }
 
@@ -379,7 +379,7 @@ impl HandlerContext<'_> {
                 let new_dirty_byte = undirty_byte | 0b0001_0000;
                 // convert to byte because the dirty flag is in the first byte
                 // and so we can ignore the rest
-                self.mem.write(addr, new_dirty_byte as u8);
+                self.mem.write(addr, new_dirty_byte);
             }
         }
 
@@ -502,7 +502,8 @@ impl HandlerContext<'_> {
         Ok(self.mem.read(physical_addr))
     }
     pub fn physical_write(&mut self, physical_addr: u32, val: u8) -> OpRes<()> {
-        Ok(self.mem.write(physical_addr, val))
+        self.mem.write(physical_addr, val);
+        Ok(())
     }
 
     #[must_use = "error must be handled"]
