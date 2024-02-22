@@ -14,8 +14,16 @@ use telda2::{
     aalv::obj::{
         Entry, Object, RelocationEntry, RelocationTable, SegmentType, SymbolDefinition, SymbolTable,
     },
-    align, SEGMENT_ALIGNMENT,
+    align_end, PAGE_SIZE,
 };
+
+fn one_one(s: &str) -> Result<u16, &'static str> {
+    let i: u16 = s.parse().map_err(|_| "malformed number")?;
+    if i.count_ones() != 1 {
+        return Err("number is not power of 2");
+    }
+    Ok(i)
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -42,12 +50,25 @@ struct Cli {
     #[arg(short = 'S', long)]
     strip_internal: bool,
 
+    /// A 2^n value which segments will be aligned to, i.e. segments will start on an address
+    /// that is a multiple f this value
+    #[arg(short = 'A', long = "alignment", default_value = "128", value_parser = one_one)]
+    segment_alignment: u16,
+
     /// Makes the output file an executable binary which
     /// disallows undefined references
     ///
     /// Errors if no entry-point is defined in input files or with -E
     #[arg(short = 'e', long)]
     executable: bool,
+    /// Output as raw binary skipping the first 128 bytes (IO-mapped) bytes
+    /// putting non-writeable (both readable and executable) segments in ROM (0x80-0x7fff)
+    /// and any writeable data in RAM (0x8000-0xffff)
+    ///
+    /// The output will not be an object file and instead just raw binary data runnable with `t -r`
+    /// thus all symbols are discarded
+    #[arg(short, long, conflicts_with = "executable")]
+    raw_binary: bool,
 }
 
 fn main() -> ExitCode {
@@ -82,6 +103,8 @@ fn tl_main() -> Result<(), Error> {
         set_entry,
         strip_internal,
         executable,
+        segment_alignment,
+        raw_binary,
     } = Cli::parse();
 
     let objects: Vec<_> = input_files
@@ -89,6 +112,10 @@ fn tl_main() -> Result<(), Error> {
         .map(|p| Object::from_file(&p).map(|o| (p, o)))
         .collect_result()
         .map_err(Error::Io)?;
+
+    if raw_binary {
+        unimplemented!("unsupported rn :3");
+    }
 
     let mut segs_out = BTreeMap::new();
 
@@ -101,10 +128,10 @@ fn tl_main() -> Result<(), Error> {
             }
         }
         let mut last_end = lengths.remove(&SegmentType::Zero).unwrap_or(0);
-        last_end = last_end.max(SEGMENT_ALIGNMENT);
+        last_end = last_end.max(PAGE_SIZE);
 
         for (st, size) in lengths {
-            let start = align(last_end, SEGMENT_ALIGNMENT);
+            let start = align_end(last_end, segment_alignment);
             segs_out.insert(st, (start, Vec::with_capacity(size as usize)));
             last_end = start + size;
         }

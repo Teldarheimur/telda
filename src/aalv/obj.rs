@@ -13,6 +13,9 @@ pub const AALV_OBJECT_EXT: &str = "to";
 pub struct Object {
     pub file_offset: u64,
     pub entry: Option<Entry>,
+    pub flags: Option<Flags>,
+    pub stack_size: Option<StackSize>,
+    pub heap_size: Option<HeapSize>,
     pub segs: BTreeMap<SegmentType, (u16, Vec<u8>)>,
     pub symbols: SymbolTable,
     pub relocation_table: RelocationTable,
@@ -42,6 +45,9 @@ impl Object {
         let obj = Object {
             file_offset: aalvur.file_offset,
             entry: aalvur.read_section().transpose()?,
+            flags: aalvur.read_section().transpose()?,
+            stack_size: aalvur.read_section().transpose()?,
+            heap_size: aalvur.read_section().transpose()?,
             segs,
             symbols: aalvur
                 .read_section()
@@ -69,6 +75,9 @@ impl Object {
         let Object {
             file_offset,
             entry,
+            flags,
+            stack_size,
+            heap_size,
             segs,
             symbols,
             relocation_table,
@@ -78,6 +87,15 @@ impl Object {
 
         if let Some(entry) = entry {
             aalvur.write_section(entry)?;
+        }
+        if let Some(flags) = flags {
+            aalvur.write_section(flags)?;
+        }
+        if let Some(stack_size) = stack_size {
+            aalvur.write_section(stack_size)?;
+        }
+        if let Some(heap_size) = heap_size {
+            aalvur.write_section(heap_size)?;
         }
         for (&stype, &(offset, ref bytes)) in segs {
             aalvur.write_section(&BinarySegment {
@@ -96,6 +114,7 @@ impl Object {
         Ok(())
     }
 
+    #[deprecated = "Load segmented instead"]
     pub fn get_flattened_memory(&self) -> Vec<u8> {
         let size = self
             .segs
@@ -130,6 +149,86 @@ impl Section for Entry {
     }
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct Flags {
+    pub readable_text: bool,
+}
+
+impl Default for Flags {
+    fn default() -> Self {
+        Flags {
+            readable_text: false,
+        }
+    }
+}
+
+impl Section for Flags {
+    const NAME: &'static str = "_flags";
+    fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let mut buf = String::new();
+        reader.read_to_string(&mut buf)?;
+
+        let mut flags = Flags::default();
+
+        for c in buf.chars() {
+            match c {
+                'R' => flags.readable_text = true,
+                _ => return Err(io::Error::new(io::ErrorKind::InvalidData, "unrecognised flag"))
+            }
+        }
+
+        Ok(flags)
+    }
+    fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        let &Flags {
+            readable_text,
+        } = self;
+
+        if readable_text {
+            write!(writer, "R")?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct StackSize(pub u16);
+impl Default for StackSize {
+    fn default() -> Self {
+        Self(0x180)
+    }
+}
+impl Section for StackSize {
+    const NAME: &'static str = "_heap_size";
+    fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let mut buf = [0; 2];
+        reader.read_exact(&mut buf)?;
+        Ok(StackSize(u16::from_le_bytes(buf)))
+    }
+    fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        writer.write_all(&self.0.to_le_bytes())
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct HeapSize(pub u16);
+impl Default for HeapSize {
+    fn default() -> Self {
+        Self(0x400)
+    }
+}
+impl Section for HeapSize {
+    const NAME: &'static str = "_heap_size";
+   fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let mut buf = [0; 2];
+        reader.read_exact(&mut buf)?;
+        Ok(HeapSize(u16::from_le_bytes(buf)))
+    }
+    fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        writer.write_all(&self.0.to_le_bytes())
+    }
+}
+
 #[repr(u8)]
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum SegmentType {
@@ -139,6 +238,9 @@ pub enum SegmentType {
     RoData = 0x18,
     Text = 0x20,
     Heap = 0x70,
+
+    // new layout:
+    // zero (), text (x), rodata (r), data (rw), heap (rw)
 }
 
 impl Display for SegmentType {

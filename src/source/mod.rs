@@ -8,9 +8,12 @@ use std::{
 
 use crate::{
     aalv::obj::Entry,
-    cpu::{ByteRegister as BReg, WideRegister as WReg},
+    blf4::{ByteRegister as BReg, WideRegister as WReg, *},
+    aalv::obj::SegmentType,
+    align_end,
+    PAGE_SIZE,
+    U4,
 };
-use crate::{aalv::obj::SegmentType, align, cpu::*, isa, SEGMENT_ALIGNMENT, U4};
 
 mod err;
 pub use self::err::*;
@@ -394,9 +397,9 @@ pub fn process<B: BufRead>(lines: SourceLines<B>) -> Result<ProcessedSource> {
 
     let ProcessState { mut dls, entry } = state;
 
-    let mut last_end = SEGMENT_ALIGNMENT;
+    let mut last_end = PAGE_SIZE;
     for s in dls.values_mut() {
-        s.start = align(last_end, SEGMENT_ALIGNMENT);
+        s.start = align_end(last_end, PAGE_SIZE);
         last_end = s.start + s.size;
     }
 
@@ -606,6 +609,7 @@ fn parse_ins(
         "null" => (NULL, O::parse_nothing(ops).ok_or("no operands")?),
         "halt" => (HALT, O::parse_nothing(ops).ok_or("no operands")?),
         "ctf" => (CTF, O::parse_nothing(ops).ok_or("no operands")?),
+        "syscall" => (SYSCALL, O::parse_nothing(ops).ok_or("no operands")?),
         "reth" => (RETH, O::parse_nothing(ops).ok_or("no operands")?),
         "nop" => (NOP, O::parse_nothing(ops).ok_or("no operands")?),
         "push" => {

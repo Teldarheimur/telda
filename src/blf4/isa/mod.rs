@@ -1,7 +1,14 @@
 pub const NULL: u8 = 0x00;
 pub const HALT: u8 = 0x0a;
 pub const CTF: u8 = 0x0b;
+pub const SYSCALL: u8 = 0xc;
 pub const RETH: u8 = 0x0d;
+
+pub const USR: u8 = 0x10;
+pub const VMON: u8 = 0x11;
+pub const VMOFF: u8 = 0x12;
+pub const PSTORE: u8 = 0x13;
+pub const PLOAD: u8 = 0x14;
 
 pub const NOP: u8 = 0x20;
 pub const PUSH_B: u8 = 0x21;

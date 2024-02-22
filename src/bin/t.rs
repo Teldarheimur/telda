@@ -1,17 +1,30 @@
-use std::{io, path::PathBuf, process::ExitCode};
+use std::{fs::File, io::{self, Read}, mem::replace, path::PathBuf, process::ExitCode};
 
 use clap::Parser;
 use telda2::{
-    aalv::obj::{Object, SymbolDefinition},
-    cpu::{Cpu, TrapMode},
-    mem::Lazy,
+    aalv::obj::{
+        Object,
+        SymbolDefinition, SymbolTable
+    },
+    blf4::{Blf4, TrapMode},
+    machine::Machine,
+    mem::{LazyMain, StdIo},
 };
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Cli {
     /// Binary file
+    ///
+    /// By default this is an object file that will be loaded in as a user program with memory mapping
     binary: PathBuf,
+
+    /// If set, the binary is interpreted as raw binary data rather than an object file and is loaded in at 0x00_0080 (ROM)
+    ///
+    /// No emulated kernel will be present and the cpu will go through normal startup,
+    // the CPU will start execution at 0x0080 in direct where the binary is loaded
+    #[arg(short, long)]
+    raw_binary: bool,
 
     /// Whether the termination point should be displayed
     #[arg(short, long)]
@@ -41,25 +54,32 @@ pub fn main() -> ExitCode {
 fn t_main() -> Result<(), Error> {
     let Cli {
         binary,
+        raw_binary,
         termination_point,
     } = Cli::parse();
 
-    let (mem, symbols, start_addr) = {
-        let obj = Object::from_file(binary).map_err(Error::IoError)?;
-        let mem = obj.get_flattened_memory();
+    let mut machine = Machine::new(LazyMain::new(StdIo), Blf4::new());
 
-        let iter = obj.symbols.into_iter();
+    let mut symbols = SymbolTable::default();
+    if raw_binary {
+        let mut file = File::open(binary).map_err(Error::IoError)?;
+        let mut raw_binary_data = Vec::new();
+        file.read_to_end(&mut raw_binary_data).map_err(Error::IoError)?;
 
-        (mem, iter, obj.entry.ok_or(Error::NoEntry)?.1)
-    };
+        machine.memory = machine.memory.with_rom(&raw_binary_data);
+    } else {
+        let mut obj = Object::from_file(binary).map_err(Error::IoError)?;
+        // error if there is no entry
+        obj.entry.is_some().then(|| ()).ok_or(Error::NoEntry)?;
+        symbols = replace(&mut obj.symbols, symbols);
+        machine.load_user_binary(&obj);
+    }
+    let symbols = symbols.into_iter();
 
-    let mut lazy = Lazy::new_stdio(mem);
-
-    let mut cpu = Cpu::new(start_addr);
-    let tm = cpu.run_until_abort(&mut lazy);
+    let tm = machine.run_until_abort();
 
     if termination_point {
-        let pc = cpu.registers.program_counter;
+        let pc = machine.cpu.program_counter;
         let mut diff = pc;
         let mut closest = "".into();
         for SymbolDefinition { name, location, .. } in symbols {

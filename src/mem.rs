@@ -1,31 +1,100 @@
 use std::io::{stdin, stdout, Read, Write};
 
-/// Memory below this address is used for IO mapping
-pub const IO_MAPPING_CUTOFF: u16 = 0xffe0;
+use crate::PAGE_SIZE_P;
 
-/// A memory request handler
-///
-/// Addresses up to `IO_MAPPING_CUTOFF` should be guaranteed to stay consistent between reads and writes with no side-effects.
-///
-/// Addresses from `IO_MAPPING_CUTOFF` have no such guarantees and should be used to map to I/O (such as to peripherals or just STDIO).
-pub trait Memory {
-    fn read(&mut self, addr: u16) -> u8;
-    fn write(&mut self, addr: u16, val: u8);
+pub trait MainMemory {
+    fn read(&mut self, addr: u32) -> u8;
+    fn write(&mut self, addr: u32, byte: u8);
+}
 
-    fn read_wide(&mut self, addr: u16) -> u16 {
-        let lower = self.read(addr);
-        let higher = self.read(addr + 1);
+pub fn read_n<M: MainMemory + ?Sized, const N: usize>(m: &mut M, addr: u32) -> [u8; N] {
+    std::array::from_fn(|i| {
+        m.read(addr+i as u32)
+    })
+}
+pub fn write_n<M: MainMemory + ?Sized>(m: &mut M, addr: u32, data: &[u8]) {
+    data.into_iter()
+        .enumerate()
+        .for_each(|(i, &b)| {
+            m.write(addr+i as u32, b)
+        });
+}
 
-        u16::from_le_bytes([lower, higher])
+pub const ROM_SIZE: usize = HALF_CELL - PAGE_SIZE_P as usize;
+pub const HALF_CELL: usize = 0x01_0000 / 2;
+
+#[derive(Debug, Clone)]
+pub struct LazyMain<P> {
+    rom: Option<[u8; ROM_SIZE]>,
+    ram0: [u8; HALF_CELL],
+    cells: [Option<Box<[u8; 256*256]>>; 255],
+    ports: P,
+}
+
+impl<P: Io> MainMemory for LazyMain<P> {
+    fn read(&mut self, addr: u32) -> u8 {
+        let cell_index = (addr >> 16) as usize;
+        if cell_index != 0 {
+            let Some(cell) = &self.cells[cell_index-1] else {
+                return 0;
+            };
+
+            let index = (addr & 0xffff) as usize;
+            cell[index]
+        } else if addr < PAGE_SIZE_P {
+            self.ports.read(addr as u8)
+        } else if addr < HALF_CELL as u32 {
+            self.rom
+                .map(|a| a[(addr - PAGE_SIZE_P) as usize])
+                .unwrap_or(0)
+        } else {
+            self.ram0[addr as usize - HALF_CELL]
+        }
     }
-    fn write_wide(&mut self, addr: u16, val: u16) {
-        let [lower, higher] = val.to_le_bytes();
+    fn write(&mut self, addr: u32, byte: u8) {
+        if addr < PAGE_SIZE_P {
+            self.ports.write(addr as u8, byte);
+            return;
+        } else if addr < HALF_CELL as u32 {
+            // ROM, cannot write (error?)
+            return;
+        } else if addr < 0x01_0000 {
+            self.ram0[addr as usize - HALF_CELL] = byte;
+            return;
+        }
 
-        self.write(addr, lower);
-        self.write(addr + 1, higher);
+        let cell_index = (addr >> 16) as usize - 1;
+        let index = (addr & 0xffff) as usize;
+        match &mut self.cells[cell_index] {
+            Some(cell) => cell[index] = byte,
+            opt @ None => {
+                let mut cell = Box::new([0; 256*256]);
+                cell[index] = byte;
+                *opt = Some(cell);
+            }
+        }
     }
 }
 
+impl<P> LazyMain<P> {
+    pub fn new(ports: P) -> Self {
+        Self {
+            rom: None,
+            ram0: [0; HALF_CELL],
+            ports,
+            cells: ([(); 255]).map(|()| None),
+        }
+    }
+    pub fn with_rom(mut self, bytes: &[u8]) -> Self {
+        assert!(bytes.len() <= ROM_SIZE, "bytes cannot be bigger than ROM");
+        self.rom = Some(
+            std::array::from_fn(
+                |i| bytes[i] 
+            )
+        );
+        self
+    }
+}
 pub trait Io {
     fn read(&mut self, addr: u8) -> u8;
     fn write(&mut self, addr: u8, val: u8);
@@ -50,56 +119,5 @@ impl Io for StdIo {
     }
     fn write(&mut self, _addr: u8, val: u8) {
         stdout().write_all(&[val]).expect("stdout failed")
-    }
-}
-
-#[derive(Debug, Clone)]
-pub struct Lazy<I> {
-    pub mem: Vec<u8>,
-    pub io: I,
-}
-
-impl Lazy<PanickingIO> {
-    pub fn new_panicking(mem: Vec<u8>) -> Self {
-        Self {
-            mem,
-            io: PanickingIO,
-        }
-    }
-}
-impl Lazy<StdIo> {
-    pub fn new_stdio(mem: Vec<u8>) -> Self {
-        Self { mem, io: StdIo }
-    }
-}
-
-impl<I: Io> Memory for Lazy<I> {
-    fn read(&mut self, addr: u16) -> u8 {
-        if addr < IO_MAPPING_CUTOFF {
-            self.mem.get(addr as usize).copied().unwrap_or(0)
-        } else {
-            self.io.read(addr as u8)
-        }
-    }
-    fn write(&mut self, addr: u16, val: u8) {
-        if addr < IO_MAPPING_CUTOFF {
-            if self.mem.len() <= addr as usize {
-                self.mem.resize(addr as usize + 1, 0);
-            }
-            self.mem[addr as usize] = val;
-        } else {
-            self.io.write(addr as u8, val);
-        }
-    }
-}
-
-impl Memory for [u8] {
-    // No I/O
-    fn read(&mut self, addr: u16) -> u8 {
-        self[addr as usize]
-    }
-    // No I/O
-    fn write(&mut self, addr: u16, val: u8) {
-        self[addr as usize] = val;
     }
 }

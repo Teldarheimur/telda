@@ -1,16 +1,22 @@
 pub mod aalv;
-pub mod cpu;
+pub mod blf4;
 pub mod disassemble;
-pub mod isa;
 pub mod mem;
 pub mod source;
 pub mod u4;
+pub mod machine;
 
 pub use self::u4::U4;
 
-pub const SEGMENT_ALIGNMENT: u16 = 0x04;
+/// The size of a page
+pub const PAGE_SIZE: u16 = 128;
+pub const PAGE_SIZE_P: u32 = PAGE_SIZE as u32;
 
-pub const fn align(addr: u16, alignment: u16) -> u16 {
+pub const fn align_start(addr: u16, alignment: u16) -> u16 {
+    let mask = !(alignment - 1);
+    addr & mask
+}
+pub const fn align_end(addr: u16, alignment: u16) -> u16 {
     let mask = alignment - 1;
     let next_aligned = (addr + alignment) & !mask;
 
@@ -24,11 +30,19 @@ pub const fn align(addr: u16, alignment: u16) -> u16 {
 
 #[test]
 fn test_align() {
-    assert_eq!(align(0x124, SEGMENT_ALIGNMENT), 0x130);
-    assert_eq!(align(0x120, SEGMENT_ALIGNMENT), 0x120);
-    assert_eq!(align(0x000, SEGMENT_ALIGNMENT), 0x000);
-    assert_eq!(align(0x411, SEGMENT_ALIGNMENT), 0x420);
-    assert_eq!(align(0x456, SEGMENT_ALIGNMENT), 0x460);
-    assert_eq!(align(0x63f, SEGMENT_ALIGNMENT), 0x640);
-    assert_eq!(align(0x630, SEGMENT_ALIGNMENT), 0x630);
+    assert_eq!(align_end(0x124, PAGE_SIZE), 0x180);
+    assert_eq!(align_end(0x180, PAGE_SIZE), 0x180);
+    assert_eq!(align_end(0x000, PAGE_SIZE), 0x000);
+    assert_eq!(align_end(0x479, PAGE_SIZE), 0x480);
+    assert_eq!(align_end(0x401, PAGE_SIZE), 0x480);
+    assert_eq!(align_end(0x63f, PAGE_SIZE), 0x680);
+    assert_eq!(align_end(0x684, PAGE_SIZE), 0x700);
+
+    assert_eq!(align_start(0x124, PAGE_SIZE), 0x100);
+    assert_eq!(align_start(0x180, PAGE_SIZE), 0x180);
+    assert_eq!(align_start(0x000, PAGE_SIZE), 0x000);
+    assert_eq!(align_start(0x479, PAGE_SIZE), 0x400);
+    assert_eq!(align_start(0x401, PAGE_SIZE), 0x400);
+    assert_eq!(align_start(0x63f, PAGE_SIZE), 0x600);
+    assert_eq!(align_start(0x684, PAGE_SIZE), 0x680);
 }
