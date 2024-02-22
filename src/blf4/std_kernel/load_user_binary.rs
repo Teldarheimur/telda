@@ -47,13 +47,13 @@ impl<M: MainMemory> Machine<M, Blf4> {
             if heap {
                 let heap = align_end(offset, PAGE_SIZE);
                 let size = heap_size - bytes.len() as u16;
-                mmbuilder.map_wr_pages(heap, size, 0xff_0000 | heap as u32);
+                mmbuilder.map_wr_pages(heap, size);
             }
         }
 
         // map space for stack
         let stack_start = align_start(0xffff-stack_size.saturating_sub(1), PAGE_SIZE);
-        mmbuilder.map_wr_pages(stack_start, stack_size, 0xff_0000 | stack_start as u32);
+        mmbuilder.map_wr_pages(stack_start, stack_size);
 
         self.cpu.flags.virtual_mode = true;
         self.cpu.flags.user_mode = true;

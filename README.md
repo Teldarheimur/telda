@@ -11,16 +11,16 @@ Following will be some documentation on the telda machine, tools and various oth
 Telda is a 16-bit machine with data accesible both in 8-bit and 16-bit. That is,
 general purpose register can be used both as bytes (8-bit) and wides (16-bit), but special purpose
 registers and addresses are wides. Its physical address space is 2^24 and can so access 16 MiB of memory,
-although addresses 0xff_ffe0-0xff_ffff are mapped to I/O. In direct access mode, the 16-bit addresses are understood with
-the upper byte set to 0xff, thus the address space 0xff0000-0xffffff is what's accessible, except through the expensive special instructions
+although addresses 0-0x80 are mapped to I/O and 0x80-0x8000 is usually ROM.
+In direct access mode, the 16-bit addresses only address the first 64 KiB of memory, thus the address space 0x00_0000-0x00_ffff is what's accessible, except through the special expensive instructions
 that access physical memory directly (only in supervisor mode). Using virtual mode, translation to physical addresses is done via page tables instead
 and also allows for control of memory access (see section on virtual memory). In direct mode, since the all registers are only 16-bit, the program counter
-can only point to 0xff_0000-0xff_ffff and thus that is the only executable area.
+can only point to 0x00_0000-0x00_ffff and thus that is the only executable area.
 
 Instructions are variable size varying between 1 and 4 bytes. The first byte is an opcode and uniquely
 determines the following amount of bytes which encode the operands.
 
-Lastly, the machine will sometimes trap (some instructions are meant specifically to trap, others will only do so if something is wrong). If no trap handler is installed, this will make the machine stop (and the 
+Lastly, the machine will sometimes trap (some instructions are meant specifically to trap, others will only do so if something is wrong). If no trap handler is installed, this will make the machine stop (and the
 emulator will show what trap mode it was). Otherwise, the machine will be able to handle traps itself
 and this can also be used to implement things like syscalls.
 
@@ -37,6 +37,7 @@ The top-level page has 16 entries (why VPN1 is 4 bits) each taking up 4 bytes. T
 `aaaa_aaaa aaaa_aaaa a000_0000 rrUD_XWRP`
 
 The bits marked `a` are the physical page number of the next level page table. `r` are reserved for future use and should be 0. The capital letters are flags:
+
 - `D`, dirty flag, means a child page has this flag set.
 - `U`, user mode flag, means a child page has this flag set.
 - `X`, execute flag, means a child page has this flag set.
@@ -53,6 +54,7 @@ The low-level page has 32 entries (why VPN2 is 5 bits) each taking up 4 bytes. T
 
 The 18 bits marked `n` are the Physical Page Number. Appending the 6-bit page offset marked O in the virtual address at the end gives
 the physical address of the mapped memory. `r` are reserved for future use and should be 0. The six bits in capital letters are flags:
+
 - `D`, dirty flag, if this is set, then a write has been done to the memory in this page.
 - `U`, user mode flag, if this is set, then the page is accessible in user mode (supervisor mode can access all pages).
 - `X`, execute flag, if this is NOT set, an illegal execute trap will be triggered upon trying to execute code in this page (read permission is not necessary).
@@ -78,7 +80,7 @@ Lastly, the special (still general purpose) register `r0` only takes `r0b` as a 
 
 The following is a table of their encodings and names:
 
-```
+```text
 0 r0b   constant zero
 1 r1l   correspond to least significant portion of r1
 2 r1h   correspond to most  significant portion of r1
@@ -102,7 +104,7 @@ f r10b  least significant portion of r10, most significant portion zeroes on wri
 The wide registers include the same general purpose registers `r0`-`r10` accesible as byte registers,
 as well as the special purpose registers of which 5 are accesible through instructions (and therefore have an encoding).
 
-```
+```text
 0 r0    zero
 1 r1    byte portions fully accessible
 2 r2    byte portions fully accessible
@@ -162,7 +164,7 @@ if it's a byte, then byte order does not matter, haha).
 Below is a table of the operand types, their sizes and what they mean. Use this as a legend for the
 instruction table that will come in the next section.
 
-```
+```text
 OPERAND | SIZE | PURPOSE
 br      | 4 b  | a byte register, (can be followed by another r)
 wr      | 4 b  | a wide register, (can be followed by another r)
@@ -178,7 +180,7 @@ determines the operand types, this leads to no problems.
 
 Below will just be table of all instructions and a description of what they do:
 
-```
+```text
 INSTRUCTION            | OPCODE | DESCRIPTION
 null                   | 00     | invalid instruction, triggers invalid opcode trap (so do all opcodes not mentioned here)
 ...                    | 01-09  | ...
@@ -252,7 +254,6 @@ mul wr1, wr2, wr3, wr4 | 54     | wr2, wr1 = wr3 * wr4 (wr2 has the upper bytes)
 - Traps: what trap modes exist, what triggers each of them
 - Telda object file format (álvur2)
 - Flags: which flags are there, what sets them
-
 
 ## Tools
 

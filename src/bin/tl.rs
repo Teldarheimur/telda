@@ -14,8 +14,16 @@ use telda2::{
     aalv::obj::{
         Entry, Object, RelocationEntry, RelocationTable, SegmentType, SymbolDefinition, SymbolTable,
     },
-    align_end,
+    align_end, PAGE_SIZE,
 };
+
+fn one_one(s: &str) -> Result<u16, &'static str> {
+    let i: u16 = s.parse().map_err(|_| "malformed number")?;
+    if i.count_ones() != 1 {
+        return Err("number is not power of 2");
+    }
+    Ok(i)
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -44,7 +52,7 @@ struct Cli {
 
     /// A 2^n value which segments will be aligned to, i.e. segments will start on an address
     /// that is a multiple f this value
-    #[arg(short = 'A', long = "alignment", default_value = "128")]
+    #[arg(short = 'A', long = "alignment", default_value = "128", value_parser = one_one)]
     segment_alignment: u16,
 
     /// Makes the output file an executable binary which
@@ -107,7 +115,7 @@ fn tl_main() -> Result<(), Error> {
             }
         }
         let mut last_end = lengths.remove(&SegmentType::Zero).unwrap_or(0);
-        last_end = last_end.max(segment_alignment);
+        last_end = last_end.max(PAGE_SIZE);
 
         for (st, size) in lengths {
             let start = align_end(last_end, segment_alignment);

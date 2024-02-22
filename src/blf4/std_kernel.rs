@@ -1,9 +1,5 @@
 use crate::{
-    align_start,
-    mem::{read_n, write_n, MainMemory},
-    machine::EmulatedKernel,
-    PAGE_SIZE,
-    PAGE_SIZE_P,
+    align_start, machine::EmulatedKernel, mem::{read_n, write_n, MainMemory, HALF_CELL}, PAGE_SIZE, PAGE_SIZE_P
 };
 
 use super::{Blf4, TrapMode, R1, R1L, R2, R2L};
@@ -24,7 +20,7 @@ impl EKernel {
     pub fn new() -> Self {
         Self {
             error_handler: 0,
-            page_bumper: PAGE_SIZE_P,
+            page_bumper: HALF_CELL as u32,
             next_free: None,
         }
     }
@@ -81,6 +77,10 @@ impl EmulatedKernel<Blf4> for EKernel {
                 let sys_n = ctx.cpu.read_wr(R1)?;
 
                 match sys_n {
+                    // show mmap (various debug syscalls)
+                    0 => {
+                        ctx.print_mmap();
+                    }
                     // read
                     3 => {
                         let b = ctx.physical_read(1)?;
@@ -125,19 +125,30 @@ impl<M: MainMemory> MmapBuilder<'_, M> {
         // set user and present bit (they might've been set by the caller too)
         let perm_bits = permissions | 0b10_0001;
 
+        // let mut bytes = bytes;
         // map all pages the segment overlaps with
-        let range = align_start(offset, PAGE_SIZE) .. offset+bytes.len() as u16;
-        for p in range.step_by(PAGE_SIZE as usize) {
-            self.map(p, perm_bits, 0xff_0000 | p as u32);
-        }
+        let start_vpage = align_start(offset, PAGE_SIZE);
+        let range = start_vpage .. offset+bytes.len() as u16;
+        for vaddr in range.step_by(PAGE_SIZE as usize) {
+            let paddr = self.map(vaddr, perm_bits);
 
-        write_n(self.mem, 0xff_0000 | offset as u32, &bytes);
+            // write page to memory
+            if vaddr < offset {
+                let page_offset = offset-vaddr;
+                let end = ((PAGE_SIZE-page_offset) as usize).min(bytes.len() as usize);
+                write_n(self.mem, paddr + page_offset as u32, &bytes[..end]);
+            } else {
+                let start = (vaddr-offset) as usize;
+                let end = (start + PAGE_SIZE as usize).min(bytes.len() as usize);
+                write_n(self.mem, paddr, &bytes[start..end]);
+            }
+        }
     }
-    fn map(&mut self, virt: u16, flags_byte: u8, paddr: u32) {
+    #[must_use]
+    fn map(&mut self, virt: u16, flags_byte: u8) -> u32 {
         assert_eq!(virt & (PAGE_SIZE - 1), 0, "virtual address should be page aligned");
         assert_eq!(flags_byte & 1, 1, "page should be present");
         assert_eq!(flags_byte & 0xc0, 0, "reserved flag bits should be 0");
-        assert_eq!(paddr & (PAGE_SIZE as u32 - 1), 0, "physical address should be page aligned");
         let vpn1 = virt >> 12;
         let vpn2 = (virt >> 7) & 0b1_1111;
 
@@ -159,25 +170,27 @@ impl<M: MainMemory> MmapBuilder<'_, M> {
         let pte2_addr = ((pte1 >> 8) & 0xff_ff80) + (vpn2 << 2) as u32;
         let mut pte2 = u32::from_le_bytes(read_n(self.mem, pte2_addr));
         if pte2 & 1 == 0 {
+            let paddr = self.new_page();
             // entry not present, write it
             pte2 = (paddr<<8) | (flags_byte as u32);
 
             write_n(self.mem, pte2_addr, &pte2.to_le_bytes());
+            paddr
         } else {
-            assert_eq!((pte2>>8) & 0xff_ff80, paddr, "remapping of existing mapping should have same address");
             let perm_byte = pte2 as u8;
             if perm_byte & flags_byte != flags_byte {
                 // add extra permissions
                 self.mem.write(pte2_addr, perm_byte | flags_byte);
             }
+
+            (pte2>>8) & 0xff_ff80
         }
     }
     #[inline]
-    pub fn map_wr_pages(&mut self, virt: u16, size: u16, paddr: u32) {
+    pub fn map_wr_pages(&mut self, virt: u16, size: u16) {
         assert_eq!(virt & (PAGE_SIZE - 1), 0, "virtual address should be page aligned");
-        assert_eq!(paddr & (PAGE_SIZE as u32 - 1), 0, "physical address should be page aligned");
         for p in (virt.. virt.saturating_add(size)).step_by(PAGE_SIZE as usize) {
-            self.map(p, 0b11_0111, paddr | p as u32);
+            let _ = self.map(p, 0b11_0111);
         }
     }
     #[inline]

@@ -8,7 +8,7 @@ use telda2::{
     },
     blf4::{Blf4, TrapMode},
     machine::Machine,
-    mem::{write_n, LazyMain, StdIo},
+    mem::{LazyMain, StdIo},
 };
 
 #[derive(Parser)]
@@ -19,9 +19,10 @@ struct Cli {
     /// By default this is an object file that will be loaded in as a user program with memory mapping
     binary: PathBuf,
 
-    /// If set, the binary is interpreted as raw binary data rather than an object file and is loaded in at 0x01_0000
-    /// No kernel or anything will be present and the cpu will go through normal startup, the CPU will start execution at 0x0000 in direct
-    /// mode which is where the binary is loaded
+    /// If set, the binary is interpreted as raw binary data rather than an object file and is loaded in at 0x00_0080 (ROM)
+    ///
+    /// No emulated kernel will be present and the cpu will go through normal startup,
+    // the CPU will start execution at 0x0080 in direct where the binary is loaded
     #[arg(short, long)]
     raw_binary: bool,
 
@@ -65,7 +66,7 @@ fn t_main() -> Result<(), Error> {
         let mut raw_binary_data = Vec::new();
         file.read_to_end(&mut raw_binary_data).map_err(Error::IoError)?;
 
-        write_n(&mut machine.memory, 0x01_0000, &raw_binary_data);
+        machine.memory = machine.memory.with_rom(&raw_binary_data);
     } else {
         let mut obj = Object::from_file(binary).map_err(Error::IoError)?;
         // error if there is no entry

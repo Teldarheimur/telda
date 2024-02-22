@@ -3,7 +3,7 @@ use std::fmt::{self, Display};
 use rand::{thread_rng, Rng};
 
 use crate::{
-    machine::Cpu, mem::{self, MainMemory}, U4
+    machine::Cpu, mem::{self, MainMemory}, PAGE_SIZE, U4
 };
 
 pub mod isa;
@@ -121,11 +121,11 @@ pub struct Blf4 {
     general_purposes: [u8; 20],
 
     pub stack: u16,
-    /// Inits to 0x01_0000
+    /// Inits to 128
     pub link: u16,
     pub frame: u16,
     pub page: u16,
-    /// Inits to 0x01_0000
+    /// Inits to 128
     pub program_counter: u16,
     /// Zero means no trap handler, inits to zero
     pub trap_handler: u16,
@@ -138,8 +138,8 @@ impl Blf4 {
         let mut rng = thread_rng();
         // Pseudo-randomise starting registers so that they cannot be relied on
         Blf4 {
-            program_counter: 0,
-            link: 0,
+            program_counter: PAGE_SIZE,
+            link: PAGE_SIZE,
             trap_handler: 0,
             flags: Blf4Flags::default(),
 
@@ -336,9 +336,9 @@ impl HandlerContext<'_> {
     #[must_use = "error must be handled"]
     fn addr_resolve(&mut self, addr: u16, mode: AccessMode) -> OpRes<u32> {
         if !self.cpu.flags.virtual_mode {
-            // set all bits in the high byte when in direct addressing mode
-            // note that this does not put the I/O mapped area inside the addressable space
-            return Ok(0x01_0000 | addr as u32);
+            // direct mode addresses the 0 block, which is usually ROM except
+            // the first 128 bytes (page) which are mapped to IO ports
+            return Ok(addr as u32);
         }
 
         // split address into the two levels of virtual page numbers and the offset

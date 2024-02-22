@@ -20,33 +20,50 @@ pub fn write_n<M: MainMemory + ?Sized>(m: &mut M, addr: u32, data: &[u8]) {
         });
 }
 
+pub const ROM_SIZE: usize = HALF_CELL - PAGE_SIZE_P as usize;
+pub const HALF_CELL: usize = 0x01_0000 / 2;
+
 #[derive(Debug, Clone)]
 pub struct LazyMain<P> {
-    cells: [Option<Box<[u8; 256*256]>>; 256],
+    rom: Option<[u8; ROM_SIZE]>,
+    ram0: [u8; HALF_CELL],
+    cells: [Option<Box<[u8; 256*256]>>; 255],
     ports: P,
 }
 
 impl<P: Io> MainMemory for LazyMain<P> {
     fn read(&mut self, addr: u32) -> u8 {
-        if addr < PAGE_SIZE_P {
-            return self.ports.read((addr & 0xf) as u8);
-        }
-
         let cell_index = (addr >> 16) as usize;
-        if let Some(cell) = &self.cells[cell_index] {
+        if cell_index != 0 {
+            let Some(cell) = &self.cells[cell_index-1] else {
+                return 0;
+            };
+
             let index = (addr & 0xffff) as usize;
             cell[index]
+        } else if addr < PAGE_SIZE_P {
+            self.ports.read(addr as u8)
+        } else if addr < HALF_CELL as u32 {
+            self.rom
+                .map(|a| a[(addr - PAGE_SIZE_P) as usize])
+                .unwrap_or(0)
         } else {
-            0
+            self.ram0[addr as usize - HALF_CELL]
         }
     }
     fn write(&mut self, addr: u32, byte: u8) {
         if addr < PAGE_SIZE_P {
-            self.ports.write((addr & 0xf) as u8, byte);
+            self.ports.write(addr as u8, byte);
+            return;
+        } else if addr < HALF_CELL as u32 {
+            // ROM, cannot write (error?)
+            return;
+        } else if addr < 0x01_0000 {
+            self.ram0[addr as usize - HALF_CELL] = byte;
             return;
         }
 
-        let cell_index = (addr >> 16) as usize;
+        let cell_index = (addr >> 16) as usize - 1;
         let index = (addr & 0xffff) as usize;
         match &mut self.cells[cell_index] {
             Some(cell) => cell[index] = byte,
@@ -62,9 +79,20 @@ impl<P: Io> MainMemory for LazyMain<P> {
 impl<P> LazyMain<P> {
     pub fn new(ports: P) -> Self {
         Self {
-            cells: ([(); 256]).map(|()| None),
+            rom: None,
+            ram0: [0; HALF_CELL],
             ports,
+            cells: ([(); 255]).map(|()| None),
         }
+    }
+    pub fn with_rom(mut self, bytes: &[u8]) -> Self {
+        assert!(bytes.len() <= ROM_SIZE, "bytes cannot be bigger than ROM");
+        self.rom = Some(
+            std::array::from_fn(
+                |i| bytes[i] 
+            )
+        );
+        self
     }
 }
 pub trait Io {
