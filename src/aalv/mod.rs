@@ -6,6 +6,9 @@ use std::{
 
 const AALV_MAGIC: &str = "álvur2\n";
 
+mod savn;
+pub use self::savn::*;
+
 pub fn read_aalv_file<P: AsRef<Path>>(path: P) -> Result<AalvReader<BufReader<File>>> {
     let f = BufReader::new(File::open(path)?);
     AalvReader::new(f)
@@ -28,6 +31,7 @@ pub struct AalvReader<F> {
     pub file_offset: u64,
     file: F,
     sections: Vec<(Box<str>, u64, u16)>,
+    file_end: u64,
 }
 
 impl<F: BufRead + Seek> AalvReader<F> {
@@ -35,6 +39,7 @@ impl<F: BufRead + Seek> AalvReader<F> {
         let mut new = Self {
             file_offset: file.stream_position()?,
             file,
+            file_end: 0,
             sections: Vec::new(),
         };
         new.read_magic().map_err(|e| {
@@ -107,6 +112,7 @@ impl<F: BufRead + Seek> AalvReader<F> {
             let name: Box<str> = String::from_utf8_lossy(&name_buf).into();
 
             if name.len() == 0 {
+                self.file_end = self.file.stream_position()?;
                 break;
             }
 
@@ -123,6 +129,19 @@ impl<F: BufRead + Seek> AalvReader<F> {
         }
 
         Ok(())
+    }
+
+    #[must_use]
+    pub fn end(self) -> Result<F> {
+        let Self {
+            mut file,
+            file_end,
+            file_offset: _,
+            sections: _,
+        } = self;
+
+        file.seek(SeekFrom::Start(file_end))?;
+        Ok(file)
     }
 }
 

@@ -1,19 +1,13 @@
 use std::{
-    collections::{BTreeMap, HashMap},
-    fs::{self, File},
-    io::{self, Seek, Write},
-    num::ParseIntError,
-    os::unix::prelude::PermissionsExt,
-    path::PathBuf,
-    process::ExitCode,
+    collections::{BTreeMap, HashMap}, fs::{self, File}, io::{self, Seek, Write}, num::ParseIntError, ops::Deref, os::unix::prelude::PermissionsExt, path::PathBuf, process::ExitCode
 };
 
 use clap::Parser;
 use collect_result::CollectResult;
 use telda2::{
-    aalv::obj::{
+    aalv::{obj::{
         Entry, Object, RelocationEntry, RelocationTable, SegmentType, SymbolDefinition, SymbolTable,
-    },
+    }, read_archive},
     align_end, PAGE_SIZE,
 };
 
@@ -56,6 +50,10 @@ struct Cli {
     #[arg(short = 'A', long = "alignment", default_value = "128", value_parser = one_one)]
     segment_alignment: u16,
 
+    /// Print extra information about what the linker does
+    #[arg(short, long)]
+    verbose: bool,
+
     /// Makes the output file an executable binary which
     /// disallows undefined references
     ///
@@ -70,6 +68,9 @@ struct Cli {
     /// thus all symbols are discarded
     #[arg(short, long, conflicts_with = "executable")]
     raw_binary: bool,
+    /// Link to archive using only objects with global symbols refernenced in by the input objects
+    #[arg(short = 'l', value_name = "ARCHIVE")]
+    archives: Vec<PathBuf>,
 }
 
 fn main() -> ExitCode {
@@ -106,13 +107,19 @@ fn tl_main() -> Result<(), Error> {
         executable,
         segment_alignment,
         raw_binary,
+        archives,
+        verbose,
     } = Cli::parse();
 
     let objects: Vec<_> = input_files
         .into_iter()
-        .map(|p| Object::from_file(&p).map(|o| (p, o)))
+        .map(|p| Object::from_file(&p).map(|o| (p.display().to_string(), o)))
         .collect_result()
         .map_err(Error::Io)?;
+
+    let lib_objects = read_archives(verbose, archives, objects.iter().map(|no| &no.1)).map_err(Error::Io)?;
+
+    let objects: Vec<_> = objects.into_iter().chain(lib_objects).collect();
 
     if raw_binary {
         unimplemented!("unsupported rn :3");
@@ -135,6 +142,10 @@ fn tl_main() -> Result<(), Error> {
             let start = align_end(last_end, segment_alignment);
             segs_out.insert(st, (start, Vec::with_capacity(size as usize)));
             last_end = start + size;
+
+            if verbose {
+                println!("segment {st} @ 0x{start:04x} w/ {} bytes (0x{0:02x})", size);
+            }
         }
     }
 
@@ -184,7 +195,7 @@ fn tl_main() -> Result<(), Error> {
                             } else {
                                 eprintln!("global symbol {} defined in {} but was already defined in a previous file at location 0x{:02x} in {}",
                                     symdef.name,
-                                    input_file.display(),
+                                    input_file,
                                     symdef.location,
                                     symdef.segment_type,
                                 );
@@ -332,4 +343,98 @@ fn tl_main() -> Result<(), Error> {
     }
 
     Ok(())
+}
+
+#[repr(transparent)]
+struct DefinedMap(HashMap<Box<str>, bool>);
+
+impl DefinedMap {
+    fn add_symbol(&mut self, sym: Box<str>, defined: bool) {
+        self.0.entry(sym).and_modify(|d| *d |= defined).or_insert(defined);
+    }
+    fn is(&self, sym: &str, defined: bool) -> bool {
+        self.0.get(sym).map(|&d| d == defined).unwrap_or(false)
+    }
+    #[inline(always)]
+    fn iter(&self) -> impl Iterator<Item=(&str, bool)> {
+        self.0.iter().map(|(s, &b)| (s.deref(), b))
+    }
+
+    /// Add all undefined symbols from `df` that are not already defined in `self`
+    fn extend_undefineds(&mut self, df: DefinedMap) {
+        for (sym, defined) in df.0.into_iter() {
+            if !defined {
+                self.add_symbol(sym, defined);
+            }
+        }
+    }
+}
+
+impl FromIterator<(Box<str>, bool)> for DefinedMap {
+    fn from_iter<T: IntoIterator<Item = (Box<str>, bool)>>(iter: T) -> Self {
+        let mut ret = Self(HashMap::new());
+        for (symbol, defined) in iter {
+            ret.add_symbol(symbol, defined);
+        }
+        ret
+    }
+}
+
+fn name_and_defined_if_global(sd: &SymbolDefinition) -> Option<(Box<str>, bool)> {
+    sd.is_global.then_some((sd.name.clone(), sd.segment_type != SegmentType::Unknown))
+}
+
+fn read_archives<'a, I: 'a + Iterator<Item=&'a Object>>(verbose: bool, archives: Vec<PathBuf>, objs: I) -> Result<Vec<(String, Object)>, io::Error> {
+    let input_globals: DefinedMap = objs
+        .flat_map(|o| o.symbols.iter())
+        .filter_map(name_and_defined_if_global)
+        .collect();
+
+    let mut a_objs = Vec::new();
+    for arch_path in archives {
+        let mut arch = read_archive(&arch_path)?;
+        let mut i = 0;
+        while let Some(obj) = arch.next(Object::from_aalv_reader)? {
+            i += 1;
+            let o_glbls: DefinedMap = obj.symbols
+                .iter()
+                .filter_map(name_and_defined_if_global)
+                .collect();
+
+            a_objs.push((format!("{}.{i}", arch_path.display()), obj, o_glbls));
+        }
+    }
+
+    let mut cur_globals = input_globals;
+    let mut objs = Vec::new();
+
+    loop {
+        let mut archived_object_to_include = None;
+        'a_obj_loop: for (i, (oname, _, glbls)) in a_objs.iter().enumerate() {
+            for (sym, defined_in_aobj) in glbls.iter() {
+                // include the object if the library has either
+                // - a defined symbol that is referenced by any input objects or recently included objects
+                // - an undefined symbol defined by the input objects (but NOT by included objects)
+                // that is the definedness of the symbol differs between the current objects and the library object
+                if cur_globals.is(sym, !defined_in_aobj) {
+                    if verbose {
+                        println!("including {oname} because {sym} {}", if defined_in_aobj { "is defined in archive" } else { "is defined in inputs objects"});
+                    }
+                    archived_object_to_include = Some(i);
+                    break 'a_obj_loop;
+                }
+            }
+        }
+
+        let Some(i) = archived_object_to_include else {
+            break;
+        };
+        let (oname, obj, glbs) = a_objs.remove(i);
+
+        // Add undefined references from this newly included object to the current map
+        cur_globals.extend_undefineds(glbs);
+        objs.push((oname, obj));
+    }
+
+    Ok(objs)
 }

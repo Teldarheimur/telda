@@ -1,15 +1,11 @@
 use std::{
-    borrow::Cow,
-    collections::{BTreeMap, HashMap, HashSet, VecDeque},
-    path::PathBuf,
-    process::ExitCode,
+    borrow::Cow, collections::{BTreeMap, HashMap, HashSet, VecDeque}, path::PathBuf, process::ExitCode
 };
 
 use clap::{ArgGroup, Parser};
 use telda2::{
     aalv::{
-        obj::{Object, SegmentType, SymbolDefinition, SymbolTable},
-        Section,
+        obj::{Object, SegmentType, SymbolDefinition, SymbolTable}, read_archive, Section
     },
     blf4::{Blf4, TrapMode},
     disassemble::{disassemble_instruction, DisassembledInstruction},
@@ -20,14 +16,15 @@ use telda2::{
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 #[command(group(
-            ArgGroup::new("show")
-                .required(true)
-                .multiple(true)
-                .args(["disassemble", "show_symbols"]),
-        ))]
+    ArgGroup::new("show")
+        .required(true)
+        .multiple(true)
+        .args(["disassemble", "show_symbols"]),
+))]
 struct Cli {
     /// Input telda object file
-    input_file: PathBuf,
+    #[arg(required = true)]
+    input_files: Vec<PathBuf>,
 
     /// Disassemble symbols in .text. If -D is not set, disassembles from all global symbols
     #[arg(short, long, group = "show")]
@@ -45,30 +42,56 @@ struct Cli {
     show_relocations: bool,
 }
 
+fn read_objs(ret: &mut ExitCode, input_file: PathBuf) -> impl Iterator<Item=(String, Object)> {
+    let e = 'miav: {
+        if let Ok(mut ar) = read_archive(&input_file) {
+            let mut objs = Vec::new();
+            let mut i = 0;
+
+            while let Some(obj) = ar.next(Object::from_aalv_reader).transpose() {
+                i += 1;
+                match obj {
+                    Ok(o) => objs.push((format!("{}.{i}", input_file.display()), o)),
+                    Err(e) => {
+                        break 'miav e;
+                    }
+                }
+            }
+    
+            return objs.into_iter();
+        }
+    
+        match Object::from_file(&input_file) {
+            Ok(o) => return vec![(format!("{}", input_file.display()), o)].into_iter(),
+            Err(e) => break 'miav e,
+        }
+    };
+
+    eprintln!("could not read object file: {e}");
+    *ret = ExitCode::FAILURE;
+    Vec::new().into_iter()
+}
+
 fn main() -> ExitCode {
     let Cli {
-        input_file,
+        input_files,
         disassemble,
         disassemble_from: dissasemble_from,
         show_symbols,
         show_relocations,
     } = Cli::parse();
 
-    let obj = match Object::from_file(input_file) {
-        Ok(o) => o,
-        Err(e) => {
-            eprintln!("could not read object file: {e}");
+    let mut ret = ExitCode::SUCCESS;
 
-            return ExitCode::FAILURE;
+    for (f, obj) in input_files.into_iter().flat_map(|p| read_objs(&mut ret, p)) {
+        println!("{f}:");
+        if show_symbols {
+            symbols(&obj);
         }
-    };
-
-    if show_symbols {
-        symbols(&obj);
-    }
-    if disassemble {
-        disassembly(&obj, dissasemble_from, show_relocations);
-    }
+        if disassemble {
+            disassembly(&obj, &dissasemble_from, show_relocations);
+        }
+    } 
 
     ExitCode::SUCCESS
 }
@@ -101,7 +124,7 @@ fn symbols(obj: &Object) {
     }
 }
 
-fn disassembly(obj: &Object, start_symbol: Option<String>, show_relocations: bool) {
+fn disassembly(obj: &Object, start_symbol: &Option<String>, show_relocations: bool) {
     let syms = &obj.symbols.0;
 
     let symbols: VecDeque<usize>;

@@ -1,11 +1,11 @@
 use std::{
     collections::BTreeMap,
     fmt::{self, Display},
-    io,
+    io::{self, BufRead, Seek},
     path::Path,
 };
 
-use super::{read_aalv_file, write_aalv_file_with_offset, Section};
+use super::{read_aalv_file, write_aalv_file_with_offset, AalvReader, Section};
 
 mod sec_impl;
 
@@ -24,9 +24,7 @@ pub struct Object {
 }
 
 impl Object {
-    pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
-        let mut aalvur = read_aalv_file(path)?;
-
+    pub fn from_aalv_reader<F: BufRead + Seek>(aalvur: &mut AalvReader<F>) -> io::Result<Self> {
         let mut segs = BTreeMap::new();
 
         while let Some(seg) = aalvur.read_section() {
@@ -66,6 +64,13 @@ impl Object {
         } else {
             Ok(obj)
         }
+    }
+}
+
+impl Object {
+    #[inline]
+    pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+        Self::from_aalv_reader(&mut read_aalv_file(path)?)
     }
     pub fn zero_offset(self) -> Self {
         Self {
@@ -241,6 +246,9 @@ impl SymbolTable {
         {
             f(name, is_global, segment_type, location);
         }
+    }
+    pub fn iter(&self) -> impl Iterator<Item=&SymbolDefinition> {
+        self.0.iter()
     }
 }
 
