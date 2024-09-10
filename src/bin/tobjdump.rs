@@ -5,7 +5,7 @@ use std::{
 use clap::{ArgGroup, Parser};
 use telda2::{
     aalv::{
-        obj::{Object, SegmentType, SymbolDefinition, SymbolTable}, read_archive, Section
+        obj::{BinarySegment, HeapSize, Object, SegmentType, StackSize, SymbolDefinition, SymbolTable}, read_archive, Section
     },
     blf4::{Blf4, TrapMode},
     disassemble::{disassemble_instruction, DisassembledInstruction},
@@ -19,7 +19,7 @@ use telda2::{
     ArgGroup::new("show")
         .required(true)
         .multiple(true)
-        .args(["disassemble", "show_symbols"]),
+        .args(["disassemble", "show_symbols", "show_segments"]),
 ))]
 struct Cli {
     /// Input telda object file
@@ -40,6 +40,10 @@ struct Cli {
     /// Shows relocations in disassembly
     #[arg(short = 'R', long, requires = "disassemble")]
     show_relocations: bool,
+
+    /// Show segment mappings
+    #[arg(short = 'S', long, group = "show")]
+    show_segments: bool,
 }
 
 fn read_objs(ret: &mut ExitCode, input_file: PathBuf) -> impl Iterator<Item=(String, Object)> {
@@ -79,12 +83,16 @@ fn main() -> ExitCode {
         disassemble_from: dissasemble_from,
         show_symbols,
         show_relocations,
+        show_segments,
     } = Cli::parse();
 
     let mut ret = ExitCode::SUCCESS;
 
     for (f, obj) in input_files.into_iter().flat_map(|p| read_objs(&mut ret, p)) {
         println!("{f}:");
+        if show_segments {
+            segments(&obj);
+        }
         if show_symbols {
             symbols(&obj);
         }
@@ -94,6 +102,18 @@ fn main() -> ExitCode {
     } 
 
     ExitCode::SUCCESS
+}
+
+fn segments(obj: &Object) {
+    for (seg_type, (addr, bytes)) in &obj.segs {
+        println!("{}: {seg_type}: 0x{addr:03x} ({} bytes)", BinarySegment::NAME, bytes.len());
+    }
+    if let Some(stack_size) = obj.stack_size {
+        println!("{}: {}", StackSize::NAME, stack_size.0);
+    }
+    if let Some(heap_size) = obj.heap_size {
+        println!("{}: {}", HeapSize::NAME, heap_size.0);
+    }
 }
 
 fn symbols(obj: &Object) {
