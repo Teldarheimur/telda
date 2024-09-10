@@ -5,7 +5,7 @@ use crate::{
     PAGE_SIZE, PAGE_SIZE_P,
 };
 
-use super::{Blf4, TrapMode, R1, R1L, R2, R2L};
+use super::{Blf4, TrapMode, R1, R1L, R2, R2L, R3L};
 
 mod load_user_binary;
 
@@ -27,7 +27,7 @@ impl EKernel {
             next_free: None,
         }
     }
-    fn mmapper<'a, M: MainMemory>(
+    fn mmapper<'a, M: ?Sized + MainMemory>(
         &'a mut self,
         mem: &'a mut M,
         page_table1: u32,
@@ -38,7 +38,7 @@ impl EKernel {
             mem,
         }
     }
-    pub fn allocate_page<M: MainMemory>(&mut self, mem: &mut M) -> u32 {
+    pub fn allocate_page<M: ?Sized + MainMemory>(&mut self, mem: &mut M) -> u32 {
         // Use page_bumper if free list is empty
         if let Some(next_free) = self.next_free.take() {
             let ret = next_free;
@@ -60,7 +60,7 @@ impl EKernel {
         }
     }
     #[allow(dead_code)]
-    pub fn free_page<M: MainMemory>(&mut self, addr: u32, mem: &mut M) {
+    pub fn free_page<M: ?Sized + MainMemory>(&mut self, addr: u32, mem: &mut M) {
         assert_eq!(addr & (PAGE_SIZE_P - 1), 0, "page addr should be aligned");
         let old_free;
         if let Some(next_free) = self.next_free.take() {
@@ -103,6 +103,22 @@ impl EmulatedKernel<Blf4> for EKernel {
                         let b = ctx.cpu.read_br(R2L);
                         ctx.physical_write(1, b)?;
                     }
+                    // TODO: use a better mechanism for these
+                    // reserve page
+                    5 => {
+                        let addr = ctx.cpu.read_wr(R2).unwrap();
+                        let flags = ctx.cpu.read_br(R3L);
+                        let mut mmapper = self.mmapper(&mut *ctx.mem, ctx.cpu.page as u32);
+                        let phys_addr = mmapper.map(addr, flags);
+                        ctx.cpu.write_wr(R1, phys_addr as u16).unwrap();
+                        ctx.cpu.write_wr(R2, (phys_addr >> 16) as u16).unwrap();
+                    }
+                    // free page
+                    6 => {
+                        let addr = ctx.cpu.read_wr(R2).unwrap();
+                        let mut mmapper = self.mmapper(&mut *ctx.mem, ctx.cpu.page as u32);
+                        mmapper.unmap(addr);
+                    }
                     // error handler vector
                     15 => {
                         self.error_handler = ctx.cpu.read_wr(R2)?;
@@ -124,13 +140,13 @@ impl EmulatedKernel<Blf4> for EKernel {
     }
 }
 
-pub struct MmapBuilder<'a, M: MainMemory> {
+pub struct MmapBuilder<'a, M: ?Sized + MainMemory> {
     page_table1: u32,
     kernel: &'a mut EKernel,
     mem: &'a mut M,
 }
 
-impl<M: MainMemory> MmapBuilder<'_, M> {
+impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
     pub fn add_segment(&mut self, permissions: u8, offset: u16, bytes: &[u8]) {
         // 0bUD_XWRP
         assert_eq!(permissions & 0b1100_0000, 0, "reserved bits should not be set");
@@ -153,6 +169,40 @@ impl<M: MainMemory> MmapBuilder<'_, M> {
                 let start = (vaddr - offset) as usize;
                 let end = (start + PAGE_SIZE as usize).min(bytes.len());
                 write_n(self.mem, paddr, &bytes[start..end]);
+            }
+        }
+    }
+    fn unmap(&mut self, virt: u16) {
+        // TODO: check permissions and fail if page already doesn't exist
+        assert_eq!(virt & (PAGE_SIZE - 1), 0, "address should be page aligned");
+        let vpn1 = virt >> 12;
+        let vpn2 = (virt >> 7) & 0b1_1111;
+
+        let pte1_addr = self.page_table1 + (vpn1 << 2) as u32;
+        let pte1 = u32::from_le_bytes(read_n(self.mem, pte1_addr));
+        if pte1 & 1 == 0 {
+            // entry not present, bad unmap
+            panic!("Tried to unmap non-existant virtual page");
+        } else {
+            let perm_byte = pte1 as u8;
+            let _ = perm_byte;
+        }
+        // clear reserved bits, although they should be zero already
+        let pte2_addr = ((pte1 >> 8) & 0xff_ff80) + (vpn2 << 2) as u32;
+        let pte2 = u32::from_le_bytes(read_n(self.mem, pte2_addr));
+        if pte2 & 1 == 0 {
+            // entry not present, bad unmap
+            panic!("Tried to unmap non-existant virtual page");
+        } else {
+            let perm_byte = pte2 as u8;
+            if perm_byte & 1 == 0 {
+                panic!("Tried to unnmap non-existant virtual page");
+            } else {
+                // clear the page
+                self.mem.write(pte2_addr, 0);
+                let paddr = (pte2 >> 8) & 0xff_ff80;
+
+                self.release_page(paddr);
             }
         }
     }
@@ -208,5 +258,9 @@ impl<M: MainMemory> MmapBuilder<'_, M> {
     #[inline]
     fn new_page(&mut self) -> u32 {
         self.kernel.allocate_page(self.mem)
+    }
+    #[inline]
+    fn release_page(&mut self, addr: u32) {
+        self.kernel.free_page(addr, self.mem)
     }
 }

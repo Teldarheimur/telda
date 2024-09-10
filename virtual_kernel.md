@@ -11,11 +11,13 @@ arguments to syscalls are put in registers, like you would do with calling a fun
 you want. `r2`-`r4` hold arguments and the syscall might use those registers to return values back to you.
 
 ```text
-SYSCALL  | NO | ARGS | DESCRIPTION
-dbg      | 00 |      | Various debugging, right now it prints the memory mapping
-cin      | 03 | >r1l | Reads one byte from STDIN (or an in port) to r1l
-cout     | 04 | r2l  | Writes one byte from r2l to STDOUT (or an out port)
-errhandl | 15 | r2   | Installs an error handler. The kernel will jump to the location in r2 to handle errors. See the section on error handling
+SYSCALL  | NO | ARGS  | DESCRIPTION
+dbg      | 00 |       | Various debugging, right now it prints the memory mapping
+cin      | 03 | >r1l  | Reads one byte from STDIN (or an in port) to r1l
+cout     | 04 | r2l   | Writes one byte from r2l to STDOUT (or an out port)
+pmap     | 05 | r2,r3l| Request mapping memory at virtual address in r2 with permission flags in r3l (0b00U0_XWR1, usually U=1)
+punmap   | 06 | r2    | Release mapping at virtual address in r2
+errhandl | 15 | r2    | Installs an error handler. The kernel will jump to the location in r2 to handle errors. See the section on error handling
 ...
 ```
 
