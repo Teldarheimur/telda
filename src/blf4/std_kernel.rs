@@ -93,12 +93,12 @@ impl EmulatedKernel<Blf4> for EKernel {
                     0 => {
                         ctx.print_mmap();
                     }
-                    // read
+                    // cin
                     3 => {
                         let b = ctx.physical_read(1)?;
                         ctx.cpu.write_br(R1L, b);
                     }
-                    // write
+                    // cout
                     4 => {
                         let b = ctx.cpu.read_br(R2L);
                         ctx.physical_write(1, b)?;

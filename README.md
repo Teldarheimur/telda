@@ -259,7 +259,7 @@ mul wr1, wr2, wr3, wr4 | 54     | wr2, wr1 = wr3 * wr4 (wr2 has the upper bytes)
 
 All tools take various options using `clap`, run them `-h` for help and (possibly) more information.
 
-- `t` the emulator or telda binary object file runner. Runs objects with an entry point until they halt.
+- `t` the emulator or telda binary object file runner. Runs objects with an entry point until they halt. Binaries will be loaded with a virtual kernel[virtual kernel](virtual_kernel.md).
 - `tc` the compiler/assembler, takes a `.telda` source file and compiles in into an object file with extension `.to`.
 - `tl` the linker, combines several object files into one object resolving global symbols (included undefined ones (references)).
 - `tobjdump` shows information about an object file like disassembly of its code, the symbol table and relocation entries in the disassembly.
