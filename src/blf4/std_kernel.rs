@@ -1,9 +1,10 @@
 use crate::{
-    align_start,
-    machine::EmulatedKernel,
-    mem::{read_n, write_n, MainMemory, HALF_CELL},
-    PAGE_SIZE, PAGE_SIZE_P,
+    align_start, machine::EmulatedKernel, mem::{read_n, write_n, MainMemory, HALF_CELL}, PAGE_SIZE, PAGE_SIZE_P
 };
+#[cfg(feature = "monitor")]
+use crate::monitor::cables::{MONITOR_DRAW_C_ADDR, MONITOR_X_ADDR, MONITOR_Y_ADDR};
+#[cfg(feature = "monitor")]
+use super::{R2H, R3H, R4L};
 
 use super::{Blf4, TrapMode, R1, R1L, R2, R2L, R3L};
 
@@ -93,6 +94,20 @@ impl EmulatedKernel<Blf4> for EKernel {
                     0 => {
                         ctx.print_mmap();
                     }
+                    #[cfg(feature = "monitor")]
+                    // setp
+                    2 => {
+                        let xh = ctx.cpu.read_br(R2H);
+                        let xl = ctx.cpu.read_br(R2L);
+                        let yh = ctx.cpu.read_br(R3H);
+                        let yl = ctx.cpu.read_br(R3L);
+                        let c = ctx.cpu.read_br(R4L);
+                        ctx.physical_write(MONITOR_X_ADDR as u32, xh).unwrap();
+                        ctx.physical_write(MONITOR_X_ADDR as u32, xl).unwrap();
+                        ctx.physical_write(MONITOR_Y_ADDR as u32, yh).unwrap();
+                        ctx.physical_write(MONITOR_Y_ADDR as u32, yl).unwrap();
+                        ctx.physical_write(MONITOR_DRAW_C_ADDR as u32, c).unwrap();
+                    }
                     // cin
                     3 => {
                         let b = ctx.physical_read(1)?;
@@ -127,6 +142,7 @@ impl EmulatedKernel<Blf4> for EKernel {
                 }
             }
             TrapMode::Halt => return Err(TrapMode::Halt),
+            TrapMode::PowerOff => return Err(TrapMode::PowerOff),
             e if self.error_handler != 0 => {
                 cpu.write_wr(R1, e as u8 as u16)?;
                 cpu.program_counter = self.error_handler;

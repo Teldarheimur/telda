@@ -231,6 +231,7 @@ impl Blf4 {
 
 impl Cpu for Blf4 {
     type TrapMode = TrapMode;
+    const TRAP_MODE_OFF: TrapMode = TrapMode::PowerOff;
     fn execute_instruction<M: MainMemory>(&mut self, mem: &mut M) -> OpRes<(), Self::TrapMode> {
         let mut ctx = HandlerContext { cpu: self, mem };
 
@@ -264,6 +265,7 @@ pub enum TrapMode {
     SysCall = 0x5,
     ZeroDiv = 0x8,
     Halt = 0xa,
+    PowerOff = 0xd,
     Level1PageFault = 0xe,
     Level2PageFault = 0xf,
     IllegalOperation = 0x10,
