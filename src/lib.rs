@@ -5,6 +5,8 @@ pub mod machine;
 pub mod mem;
 pub mod source;
 pub mod u4;
+#[cfg(feature="monitor")]
+pub mod monitor;
 
 pub use self::u4::U4;
 

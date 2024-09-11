@@ -1,3 +1,5 @@
+use std::sync::{atomic::{AtomicBool, Ordering}, Arc};
+
 use crate::mem::MainMemory;
 
 mod ekernel;
@@ -5,6 +7,7 @@ pub use self::ekernel::*;
 
 pub trait Cpu {
     type TrapMode;
+    const TRAP_MODE_OFF: Self::TrapMode;
 
     fn execute_instruction<M: MainMemory>(
         &mut self,
@@ -17,6 +20,7 @@ pub struct Machine<M, C> {
     pub cpu: C,
 
     ekernel: Option<Box<dyn EmulatedKernel<C>>>,
+    off_button: Option<OffButton>,
 }
 
 impl<M, C> Machine<M, C> {
@@ -25,6 +29,15 @@ impl<M, C> Machine<M, C> {
             memory,
             cpu,
             ekernel: None,
+            off_button: None,
+        }
+    }
+    pub fn new_with_off_button(memory: M, cpu: C, off_button: OffButton) -> Self {
+        Machine {
+            memory,
+            cpu,
+            ekernel: None,
+            off_button: Some(off_button),
         }
     }
 }
@@ -39,6 +52,12 @@ impl<M: MainMemory, C: Cpu> Machine<M, C> {
         installed_alreday
     }
     pub fn execute_once(&mut self) -> Result<(), C::TrapMode> {
+        if let Some(off_button) = &self.off_button {
+            if off_button.is_pressed() {
+                off_button.unpress();
+                return Err(C::TRAP_MODE_OFF);
+            }
+        }
         match self.cpu.execute_instruction(&mut self.memory) {
             Ok(()) => Ok(()),
             Err(tm) => {
@@ -59,5 +78,30 @@ impl<M: MainMemory, C: Cpu> Machine<M, C> {
                 Err(tm) => break tm,
             }
         }
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct OffButton {
+    pressed: Arc<AtomicBool>,
+}
+
+impl OffButton {
+   pub fn new() -> Self {
+        Self {
+            pressed: Arc::new(AtomicBool::new(false))
+        }
+    }
+    #[inline]
+    pub fn press(&self) {
+        self.pressed.store(true, Ordering::Relaxed);
+    }
+    #[inline]
+    fn unpress(&self) {
+        self.pressed.store(false, Ordering::Relaxed);
+    }
+    #[inline]
+    pub fn is_pressed(&self) -> bool {
+        self.pressed.load(Ordering::Relaxed)
     }
 }
