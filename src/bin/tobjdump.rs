@@ -46,7 +46,7 @@ struct Cli {
     show_segments: bool,
 }
 
-fn read_objs(ret: &mut ExitCode, input_file: PathBuf) -> impl Iterator<Item=(String, Object)> {
+fn read_objs(ret: &mut ExitCode, input_file: PathBuf) -> impl Iterator<Item=(String, Object)> + use<> {
     let e = 'miav: {
         if let Ok(mut ar) = read_archive(&input_file) {
             let mut objs = Vec::new();

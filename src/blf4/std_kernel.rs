@@ -31,7 +31,7 @@ impl EKernel {
         &'a mut self,
         mem: &'a mut M,
         page_table1: u32,
-    ) -> MmapBuilder<M> {
+    ) -> MmapBuilder<'a, M> {
         MmapBuilder {
             page_table1,
             kernel: self,

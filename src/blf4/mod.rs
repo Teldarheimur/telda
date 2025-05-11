@@ -145,10 +145,10 @@ impl Blf4 {
             trap_handler: 0,
             flags: Blf4Flags::default(),
 
-            general_purposes: std::array::from_fn(|_| rng.gen()),
-            page: rng.gen(),
-            frame: rng.gen(),
-            stack: rng.gen(),
+            general_purposes: std::array::from_fn(|_| rng.r#gen()),
+            page: rng.r#gen(),
+            frame: rng.r#gen(),
+            stack: rng.r#gen(),
         }
     }
     #[inline]
