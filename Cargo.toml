@@ -9,4 +9,4 @@ default-run = "t"
 [dependencies]
 clap = { version = "4", features = ["derive"] }
 collect_result = "0.1"
-rand = "0.8"
+rand = "0.9"

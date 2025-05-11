@@ -1,6 +1,6 @@
 use std::fmt::{self, Display};
 
-use rand::{thread_rng, Rng};
+use rand::{rng, Rng};
 
 use crate::{
     machine::Cpu,
@@ -137,7 +137,7 @@ pub struct Blf4 {
 impl Blf4 {
     /// Starts the processor with most registers randomly initialised
     pub fn new() -> Self {
-        let mut rng = thread_rng();
+        let mut rng = rng();
         // Pseudo-randomise starting registers so that they cannot be relied on
         Blf4 {
             program_counter: PAGE_SIZE,
@@ -145,10 +145,10 @@ impl Blf4 {
             trap_handler: 0,
             flags: Blf4Flags::default(),
 
-            general_purposes: std::array::from_fn(|_| rng.r#gen()),
-            page: rng.r#gen(),
-            frame: rng.r#gen(),
-            stack: rng.r#gen(),
+            general_purposes: std::array::from_fn(|_| rng.random()),
+            page: rng.random(),
+            frame: rng.random(),
+            stack: rng.random(),
         }
     }
     #[inline]
