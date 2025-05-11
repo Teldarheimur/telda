@@ -60,7 +60,6 @@ impl EKernel {
             ret
         }
     }
-    #[allow(dead_code)]
     pub fn free_page<M: ?Sized + MainMemory>(&mut self, addr: u32, mem: &mut M) {
         assert_eq!(addr & (PAGE_SIZE_P - 1), 0, "page addr should be aligned");
         let old_free;

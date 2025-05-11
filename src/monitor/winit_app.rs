@@ -46,6 +46,7 @@ pub(crate) struct WinitApp {
     last_draw: Instant,
     framebuf: FrameBuf,
     size: PhysicalSize<u32>,
+    resized: bool,
 }
 
 impl WinitApp {
@@ -60,6 +61,7 @@ impl WinitApp {
             framebuf,
             input_cable,
             size: PhysicalSize::new(FACTOR * WIDTH, FACTOR * HEIGHT),
+            resized: true,
         }
     }
     fn init(elwt: &ActiveEventLoop) -> (Rc<Window>, Surface<Rc<Window>, Rc<Window>>) {
@@ -67,6 +69,7 @@ impl WinitApp {
             .with_title("telda")
             .with_inner_size(PhysicalSize::new(FACTOR * WIDTH, FACTOR * HEIGHT)) 
             .with_min_inner_size(PhysicalSize::new(WIDTH, HEIGHT))
+            // .with_resizable(false)
         );
 
         let context = Context::new(window.clone()).unwrap();
@@ -103,13 +106,14 @@ impl ApplicationHandler for WinitApp {
             WindowEvent::RedrawRequested => {
                 'draw: {
                     match self.framebuf.handle() {
-                        Ok(false) => break 'draw,
+                        Ok(false) => if !self.resized { break 'draw },
                         Ok(true) => (),
                         Err(_) => {
                             elwt.exit();
                             break 'draw;
                         }
                     }
+                    self.resized = false;
 
                     let mut buffer = surface.buffer_mut().unwrap();
 
@@ -163,6 +167,7 @@ impl ApplicationHandler for WinitApp {
                 yield_now();
             }
             WindowEvent::Resized(new_size) => {
+                self.resized = true;
                 self.size = new_size;
                 surface.resize(
                     NonZeroU32::new(new_size.width).unwrap(),
