@@ -72,7 +72,7 @@ fn t_main() -> Result<(), Error> {
 
         machine.memory = machine.memory.with_rom(&raw_binary_data);
     } else {
-        let mut obj = Object::from_file(binary).map_err(Error::IoError)?;
+        let (_, mut obj) = Object::from_file(binary).map_err(Error::IoError)?;
         // error if there is no entry
         obj.entry.is_some().then_some(()).ok_or(Error::NoEntry)?;
         symbols = replace(&mut obj.symbols, symbols);

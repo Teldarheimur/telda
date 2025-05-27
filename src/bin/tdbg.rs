@@ -68,7 +68,7 @@ fn main() -> ExitCode {
     let mut labels = HashMap::new();
     let mut pos_to_labels = HashMap::new();
     {
-        let obj = match Object::from_file(input_file) {
+        let (_, obj) = match Object::from_file(input_file) {
             Ok(o) => o,
             Err(e) => {
                 eprintln!("could not read object file: {e}");

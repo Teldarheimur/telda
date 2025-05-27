@@ -1,11 +1,11 @@
 use std::{
     collections::BTreeMap,
     fmt::{self, Display},
-    io::{self, BufRead, Seek},
+    io::{self, BufRead, Seek, Write},
     path::Path,
 };
 
-use super::{read_aalv_file, write_aalv_file_with_offset, AalvReader, Section};
+use super::{read_aalv_file, write_aalv_file, write_aalv_file_with_offset, AalvReader, AalvWriter, Section};
 
 mod sec_impl;
 
@@ -13,7 +13,6 @@ pub const AALV_OBJECT_EXT: &str = "to";
 
 #[derive(Debug, Default)]
 pub struct Object {
-    pub file_offset: u64,
     pub entry: Option<Entry>,
     pub flags: Option<Flags>,
     pub stack_size: Option<StackSize>,
@@ -24,7 +23,7 @@ pub struct Object {
 }
 
 impl Object {
-    pub fn from_aalv_reader<F: BufRead + Seek>(aalvur: &mut AalvReader<F>) -> io::Result<Self> {
+    pub fn from_aalv_reader<F: BufRead + Seek>(aalvur: &mut AalvReader<F>) -> io::Result<(u64, Self)> {
         let mut segs = BTreeMap::new();
 
         while let Some(seg) = aalvur.read_section() {
@@ -43,7 +42,6 @@ impl Object {
         }
 
         let obj = Object {
-            file_offset: aalvur.file_offset,
             entry: aalvur.read_section().transpose()?,
             flags: aalvur.read_section().transpose()?,
             stack_size: aalvur.read_section().transpose()?,
@@ -62,25 +60,26 @@ impl Object {
         if aalvur.remaing_sections().any(|s| s.starts_with('_')) {
             unimplemented!("error unexpected sections")
         } else {
-            Ok(obj)
+            Ok((aalvur.file_offset, obj))
         }
     }
 }
 
 impl Object {
     #[inline]
-    pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<Self> {
+    pub fn from_file<P: AsRef<Path>>(path: P) -> io::Result<(u64, Self)> {
         Self::from_aalv_reader(&mut read_aalv_file(path)?)
     }
-    pub fn zero_offset(self) -> Self {
-        Self {
-            file_offset: 0,
-            ..self
-        }
+    pub fn write_to_file_with_offset<P: AsRef<Path>>(&self, path: P, offset: u64) -> io::Result<()> {
+        let aalvur = write_aalv_file_with_offset(path, offset)?;
+        self.write_to(aalvur)
     }
     pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> io::Result<()> {
+        let aalvur = write_aalv_file(path)?;
+        self.write_to(aalvur)
+    }
+    pub fn write_to<W: Write + Seek>(&self, mut aalvur: AalvWriter<W>) -> io::Result<()> {
         let Object {
-            file_offset,
             entry,
             flags,
             stack_size,
@@ -89,8 +88,6 @@ impl Object {
             symbols,
             relocation_table,
         } = self;
-
-        let mut aalvur = write_aalv_file_with_offset(path, *file_offset)?;
 
         if let Some(entry) = entry {
             aalvur.write_section(entry)?;

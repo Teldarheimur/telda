@@ -55,7 +55,7 @@ fn read_objs(ret: &mut ExitCode, input_file: PathBuf) -> impl Iterator<Item=(Str
             while let Some(obj) = ar.next(Object::from_aalv_reader).transpose() {
                 i += 1;
                 match obj {
-                    Ok(o) => objs.push((format!("{}.{i}", input_file.display()), o)),
+                    Ok((_, o)) => objs.push((format!("{}.{i}", input_file.display()), o)),
                     Err(e) => {
                         break 'miav e;
                     }
@@ -66,7 +66,7 @@ fn read_objs(ret: &mut ExitCode, input_file: PathBuf) -> impl Iterator<Item=(Str
         }
     
         match Object::from_file(&input_file) {
-            Ok(o) => return vec![(format!("{}", input_file.display()), o)].into_iter(),
+            Ok((_, o)) => return vec![(format!("{}", input_file.display()), o)].into_iter(),
             Err(e) => break 'miav e,
         }
     };

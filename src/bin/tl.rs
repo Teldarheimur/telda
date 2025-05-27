@@ -113,7 +113,7 @@ fn tl_main() -> Result<(), Error> {
 
     let objects: Vec<_> = input_files
         .into_iter()
-        .map(|p| Object::from_file(&p).map(|o| (p.display().to_string(), o)))
+        .map(|p| Object::from_file(&p).map(|(_, o)| (p.display().to_string(), o)))
         .collect_result()
         .map_err(Error::Io)?;
 
@@ -325,15 +325,15 @@ fn tl_main() -> Result<(), Error> {
             return Err(Error::NoEntryPoint);
         }
 
-        let mut obj = obj;
+        let file_offset;
         {
             let mut file = File::create(&out).map_err(Error::Io)?;
             writeln!(file, "#!/bin/env t").map_err(Error::Io)?;
 
-            obj.file_offset = file.stream_position().map_err(Error::Io)?;
+            file_offset = file.stream_position().map_err(Error::Io)?;
         }
 
-        obj.write_to_file(&out).map_err(Error::Io)?;
+        obj.write_to_file_with_offset(&out, file_offset).map_err(Error::Io)?;
 
         let mut perms = fs::metadata(&out).map_err(Error::Io)?.permissions();
         perms.set_mode(perms.mode() | 0o111);
@@ -394,7 +394,7 @@ fn read_archives<'a, I: 'a + Iterator<Item=&'a Object>>(verbose: bool, archives:
     for arch_path in archives {
         let mut arch = read_archive(&arch_path)?;
         let mut i = 0;
-        while let Some(obj) = arch.next(Object::from_aalv_reader)? {
+        while let Some((_, obj)) = arch.next(Object::from_aalv_reader)? {
             i += 1;
             let o_glbls: DefinedMap = obj.symbols
                 .iter()

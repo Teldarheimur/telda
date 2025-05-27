@@ -45,7 +45,7 @@ fn main() -> ExitCode {
 }
 
 fn inner_main(all: bool, force: bool, input_file: &PathBuf) -> Result<(), String> {
-    let mut obj = match Object::from_file(input_file) {
+    let (file_offset, mut obj) = match Object::from_file(input_file) {
         Ok(o) => o,
         Err(e) => {
             return Err(format!("could not read object file: {e}"));
@@ -65,7 +65,7 @@ fn inner_main(all: bool, force: bool, input_file: &PathBuf) -> Result<(), String
             }
         });
     }
-    obj.write_to_file(input_file)
+    obj.write_to_file_with_offset(input_file, file_offset)
         .map_err(|e| {
             format!("could write new object: {e}")
         })
