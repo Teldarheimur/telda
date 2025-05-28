@@ -198,10 +198,10 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
         ASR_W => binop("asr", WideRegister, &mut c, f)?,
         LSR_B => binop("lsr", ByteRegister, &mut c, f)?,
         LSR_W => binop("lsr", WideRegister, &mut c, f)?,
-        DIV_B => binop("div", ByteRegister, &mut c, f)?,
-        DIV_W => binop("div", WideRegister, &mut c, f)?,
-        MUL_B => binop("mul", ByteRegister, &mut c, f)?,
-        MUL_W => binop("mul", WideRegister, &mut c, f)?,
+        DIV_B => binop2("div", ByteRegister, &mut c, f)?,
+        DIV_W => binop2("div", WideRegister, &mut c, f)?,
+        MUL_B => binop2("mul", ByteRegister, &mut c, f)?,
+        MUL_W => binop2("mul", WideRegister, &mut c, f)?,
         b => {
             write!(f, "0x{b:02x}").unwrap();
             ends_block = true;
@@ -249,6 +249,18 @@ fn cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(
     Ok(())
 }
 
+fn binop2<T: Display, RF: Fn(U4) -> T>(
+    name: &str,
+    rf: RF,
+    c: &mut HandlerContext,
+    f: &mut String,
+) -> Result<(), TrapMode> {
+    let (r1, r2) = arg_pair(c, &rf, &rf)?;
+    let (r3, r4) = arg_pair(c, &rf, &rf)?;
+    write!(f, "{name} {r1}, {r2}, {r3}, {r4}").unwrap();
+
+    Ok(())
+}
 fn binop<T: Display, RF: Fn(U4) -> T>(
     name: &str,
     rf: RF,
@@ -256,8 +268,11 @@ fn binop<T: Display, RF: Fn(U4) -> T>(
     f: &mut String,
 ) -> Result<(), TrapMode> {
     let (r1, r2) = arg_pair(c, &rf, &rf)?;
-    let (r3, _o) = arg_pair(c, &rf, identity)?;
+    let (r3, o) = arg_pair(c, &rf, identity)?;
     write!(f, "{name} {r1}, {r2}, {r3}").unwrap();
+    if o != U4::ZERO {
+        write!(f, ", {}", u8::from(o)).unwrap();
+    }
 
     Ok(())
 }
