@@ -733,14 +733,8 @@ fn parse_ins(
                 let DataOperand::ImmediateWide(w) = dat_op else { unreachable!() };
 
                 (LDI_W, DataOperand::TwoWideImm(R0, R1, w))
-            } else if let Some(dat_op) = O::parse_wreg(ops) {
-                let DataOperand::WideRegister(wr) = dat_op else { unreachable!() };
-                if wr == R0 {
-                    return Err("any other register; r0 is not a valid jmp destination");
-                }
-                (LDI_W, DataOperand::TwoWideImm(wr, R1, Wide::Number(0)))
             } else {
-                return Err("address or wide register");
+                return Err("address");
             }
         }
         "rjmp" | "rjump" => (
@@ -820,9 +814,9 @@ fn parse_ins(
         "setnz" | "setne" => parse_setif(ops, 7)?,
         "seto" => parse_setif(ops, 8)?,
         "setno" => parse_setif(ops, 9)?,
-        "setb" | "setc" => parse_setif(ops, 10)?,
+        "seta" => parse_setif(ops, 10)?,
         "setae" | "setnc" => parse_setif(ops, 11)?,
-        "seta" => parse_setif(ops, 12)?,
+        "setb" | "setc" => parse_setif(ops, 12)?,
         "setbe" => parse_setif(ops, 13)?,
 
         "add" => parse_binop(ADD_B, ADD_W, ops)?,
