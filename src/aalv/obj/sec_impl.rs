@@ -153,7 +153,7 @@ impl Section for SymbolTable {
     }
 }
 
-impl Section for RelocationTable {
+impl Section for OldRelocationTable {
     const NAME: &'static str = "_reloc";
 
     fn read<R: Read>(mut reader: R) -> io::Result<Self> {
@@ -178,22 +178,74 @@ impl Section for RelocationTable {
                 reference_segment,
                 reference_location,
                 symbol_index,
+                relative: false,
             };
             entries.push(entry)
         }
 
-        Ok(RelocationTable(entries))
+        Ok(Self(entries))
     }
     fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
         for &RelocationEntry {
             reference_segment,
             reference_location,
             symbol_index,
+            relative,
         } in &self.0
         {
             writer.write_all(&[reference_segment as u8])?;
             writer.write_all(&reference_location.to_le_bytes())?;
             writer.write_all(&symbol_index.to_le_bytes())?;
+            assert!(!relative);
+        }
+        Ok(())
+    }
+}
+impl Section for RelocationTable {
+    const NAME: &'static str = "_rela";
+
+    fn read<R: Read>(mut reader: R) -> io::Result<Self> {
+        let mut entries = Vec::new();
+
+        loop {
+            let mut buf = [0; 6];
+            match reader.read_exact(&mut buf) {
+                Ok(()) => (),
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => {
+                    break;
+                }
+                Err(e) => return Err(e),
+            }
+            let [stype, ol1, oh1, ol2, oh2, is_relative] = buf;
+
+            let reference_segment = segment_type_from_u8(stype)?;
+            let reference_location = u16::from_le_bytes([ol1, oh1]);
+            let symbol_index = u16::from_le_bytes([ol2, oh2]);
+            let relative = is_relative != 0;
+
+            let entry = RelocationEntry {
+                reference_segment,
+                reference_location,
+                symbol_index,
+                relative,
+            };
+            entries.push(entry)
+        }
+
+        Ok(Self(entries))
+    }
+    fn write<W: Write>(&self, mut writer: W) -> io::Result<()> {
+        for &RelocationEntry {
+            reference_segment,
+            reference_location,
+            symbol_index,
+            relative,
+        } in &self.0
+        {
+            writer.write_all(&[reference_segment as u8])?;
+            writer.write_all(&reference_location.to_le_bytes())?;
+            writer.write_all(&symbol_index.to_le_bytes())?;
+            writer.write_all(&[relative as u8])?;
         }
         Ok(())
     }

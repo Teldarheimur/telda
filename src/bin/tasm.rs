@@ -70,6 +70,7 @@ fn assemble<B: BufRead>(source_lines: Result<SourceLines<B>>) -> Result<Object> 
                     let lr = LabelRead {
                         segment: st,
                         position: mem.len() as u16 + segment_start,
+                        relative: false,
                     };
                     label_reads[id].push(lr);
                     let w = labels[id].3;
@@ -83,7 +84,7 @@ fn assemble<B: BufRead>(source_lines: Result<SourceLines<B>>) -> Result<Object> 
                         labels[id].3
                     };
 
-                    write_data_operand(st, mem, read_label, dat_op);
+                    write_data_operand(st, segment_start, mem, read_label, dat_op);
                 }
             }
         }
@@ -126,13 +127,21 @@ fn assemble<B: BufRead>(source_lines: Result<SourceLines<B>>) -> Result<Object> 
         let mut reloc_t = Vec::new();
 
         for (i, label_reads) in label_reads.into_iter().enumerate() {
+            let symbol_segment = labels[i].2;
             let symbol_index = i as u16;
 
-            for LabelRead { segment, position } in label_reads {
+            for LabelRead { segment, position, relative } in label_reads {
+                if relative && symbol_segment == segment {
+                    // we don't need to make relocation entries for relative references in the same segment
+                    // as the relative addresses inside the same segment will stay the same. the linker cannot move parts of data inside segments around, only concatenate like segments.
+                    continue;
+                }
+
                 let entry = RelocationEntry {
                     reference_location: aalvur.segs[&segment].0 + position,
                     reference_segment: segment,
                     symbol_index,
+                    relative,
                 };
 
                 reloc_t.push(entry);

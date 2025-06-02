@@ -6,7 +6,7 @@ use std::{
 use crate::{
     blf4::{
         isa::{arg_imm_wide, arg_pair},
-        Blf4, ByteRegister, HandlerContext, TrapMode, WideRegister, R0,
+        Blf4, ByteRegister, HandlerContext, OpRes, TrapMode, WideRegister, R0,
     },
     machine::Machine,
     mem::MainMemory,
@@ -91,9 +91,9 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
             let (r1, _r2) = arg_pair(&mut c, WideRegister, identity)?;
             write!(f, "pop {r1}").unwrap();
         }
-        CALL => {
+        ABS_CALL => {
             let w = Operand::Wide(arg_imm_wide(&mut c)?).looked_up(label_lookup);
-            write!(f, "call {w}").unwrap();
+            write!(f, "abscall {w}").unwrap();
             nesting_difference = 1;
         }
         RET => {
@@ -142,18 +142,18 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
             let (r3, _) = arg_pair(&mut c, WideRegister, identity)?;
             write!(f, "load {r1}, {r2}, {r3}").unwrap();
         }
-        JEZ => cjmp("jez", &mut c, label_lookup, f)?,
-        JLT => cjmp("jlt", &mut c, label_lookup, f)?,
-        JLE => cjmp("jle", &mut c, label_lookup, f)?,
-        JGT => cjmp("jgt", &mut c, label_lookup, f)?,
-        JGE => cjmp("jge", &mut c, label_lookup, f)?,
-        JNZ => cjmp("jnz", &mut c, label_lookup, f)?,
-        JO => cjmp("jo", &mut c, label_lookup, f)?,
-        JNO => cjmp("jno", &mut c, label_lookup, f)?,
-        JB => cjmp("jb", &mut c, label_lookup, f)?,
-        JAE => cjmp("jae", &mut c, label_lookup, f)?,
-        JA => cjmp("ja", &mut c, label_lookup, f)?,
-        JBE => cjmp("jbe", &mut c, label_lookup, f)?,
+        ABS_JEZ => abs_cjmp("absjez", &mut c, label_lookup, f)?,
+        ABS_JLT => abs_cjmp("absjlt", &mut c, label_lookup, f)?,
+        ABS_JLE => abs_cjmp("absjle", &mut c, label_lookup, f)?,
+        ABS_JGT => abs_cjmp("absjgt", &mut c, label_lookup, f)?,
+        ABS_JGE => abs_cjmp("absjge", &mut c, label_lookup, f)?,
+        ABS_JNZ => abs_cjmp("absjnz", &mut c, label_lookup, f)?,
+        ABS_JO => abs_cjmp("absjo", &mut c, label_lookup, f)?,
+        ABS_JNO => abs_cjmp("absjno", &mut c, label_lookup, f)?,
+        ABS_JB => abs_cjmp("absjb", &mut c, label_lookup, f)?,
+        ABS_JAE => abs_cjmp("absjae", &mut c, label_lookup, f)?,
+        ABS_JA => abs_cjmp("absja", &mut c, label_lookup, f)?,
+        ABS_JBE => abs_cjmp("absjbe", &mut c, label_lookup, f)?,
         LDI_B => {
             let (r1, _o) = arg_pair(&mut c, ByteRegister, identity)?;
             let b = arg_imm_byte(&mut c)?;
@@ -171,11 +171,11 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
                 1 => {
                     if r1 == R0 {
                         // jmp imm
-                        write!(f, "jmp {w}").unwrap();
+                        write!(f, "absjmp {w}").unwrap();
                         ends_block = true;
                     } else {
                         // jmp r
-                        write!(f, "jmp {r1}").unwrap();
+                        write!(f, "absjmp {r1}").unwrap();
                         ends_block = true;
                     }
                 }
@@ -202,6 +202,56 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
         DIV_W => binop2("div", WideRegister, &mut c, f)?,
         MUL_B => binop2("mul", ByteRegister, &mut c, f)?,
         MUL_W => binop2("mul", WideRegister, &mut c, f)?,
+        ADC_B => binop2("adc", ByteRegister, &mut c, f)?,
+        ADC_W => binop2("adc", WideRegister, &mut c, f)?,
+        SBB_B => binop2("sbb", ByteRegister, &mut c, f)?,
+        SBB_W => binop2("sbb", WideRegister, &mut c, f)?,
+        R_CALL => {
+            let w = Operand::RelWide(arg_imm_relative_wide(&mut c)?).looked_up(label_lookup);
+            // todo, do relative lookup correctly
+            write!(f, "rcall {w}").unwrap();
+            nesting_difference = 1;
+        }
+        R_JUMP => {
+            let w = Operand::RelWide(arg_imm_relative_wide(&mut c)?).looked_up(label_lookup);
+            // todo, do relative lookup correctly
+            write!(f, "rjmp {w}").unwrap();
+            ends_block = true;
+        }
+        R_JEZ => r_cjmp("rjez", &mut c, label_lookup, f)?,
+        R_JLT => r_cjmp("rjlt", &mut c, label_lookup, f)?,
+        R_JLE => r_cjmp("rjle", &mut c, label_lookup, f)?,
+        R_JGT => r_cjmp("rjgt", &mut c, label_lookup, f)?,
+        R_JGE => r_cjmp("rjge", &mut c, label_lookup, f)?,
+        R_JNZ => r_cjmp("rjnz", &mut c, label_lookup, f)?,
+        R_JO => r_cjmp("rjo", &mut c, label_lookup, f)?,
+        R_JNO => r_cjmp("rjno", &mut c, label_lookup, f)?,
+        R_JA => r_cjmp("rja", &mut c, label_lookup, f)?,
+        R_JAE => r_cjmp("rjae", &mut c, label_lookup, f)?,
+        R_JB => r_cjmp("rjb", &mut c, label_lookup, f)?,
+        R_JBE => r_cjmp("rjbe", &mut c, label_lookup, f)?,
+        SET_IF => {
+            let (r, o) = arg_pair(&mut c, WideRegister, u8::from)?;
+            write!(f, "set{} {r}", match o {
+                0 => "x0",
+                1 => "x1",
+                2 => "ez",
+                3 => "lt",
+                4 => "le",
+                5 => "gt",
+                6 => "ge",
+                7 => "nz",
+                8 => "o",
+                9 => "no",
+                0xa => "a",
+                0xb => "ae",
+                0xc => "b",
+                0xd => "be",
+                0xe => "xe",
+                0xf => "xf",
+                0x10..=0xff => unreachable!(),
+            }).unwrap();
+        }
         b => {
             write!(f, "0x{b:02x}").unwrap();
             ends_block = true;
@@ -233,7 +283,13 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
     })
 }
 
-fn cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(
+fn arg_imm_relative_wide(c: &mut HandlerContext) -> OpRes<(u16, i16)> {
+    let res = arg_imm_wide(c)? as i16;
+    let pc = c.cpu.program_counter;
+    Ok((pc, res))
+}
+
+fn abs_cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(
     name: &str,
     c: &mut HandlerContext,
     label_lookup: F,
@@ -243,6 +299,21 @@ fn cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(
         f,
         "{name} {}",
         Operand::Wide(arg_imm_wide(c)?).looked_up(label_lookup)
+    )
+    .unwrap();
+
+    Ok(())
+}
+fn r_cjmp<'a, F: FnOnce(u16) -> Option<&'a str>>(
+    name: &str,
+    c: &mut HandlerContext,
+    label_lookup: F,
+    f: &mut String,
+) -> Result<(), TrapMode> {
+    write!(
+        f,
+        "{name} {}",
+        Operand::RelWide(arg_imm_relative_wide(c)?).looked_up(label_lookup)
     )
     .unwrap();
 
@@ -281,28 +352,40 @@ enum Operand<'a> {
     Byte(u8),
     Wide(u16),
     Label(&'a str),
+    RelativeWide(u16, i16),
+    RelativeLabel(&'a str),
 }
 
 impl<'a> Operand<'a> {
+    #[allow(non_snake_case)]
+    pub fn RelWide((pc, off): (u16, i16)) -> Self {
+        Self::RelativeWide(pc, off)
+    }
     pub fn looked_up<F: FnOnce(u16) -> Option<&'a str>>(mut self, label_lookup: F) -> Self {
         self.convert_wide_to_label(label_lookup);
         self
     }
     pub fn convert_wide_to_label<F: FnOnce(u16) -> Option<&'a str>>(&mut self, label_lookup: F) {
-        if let Operand::Wide(w) = *self {
-            if let Some(lbl) = label_lookup(w) {
-                *self = Operand::Label(lbl);
-            }
+        let (label_fn, loc): (fn(&'a str) -> Operand<'a>, _) = match *self {
+            Operand::Wide(w) => (Operand::Label, w),
+            Operand::RelativeWide(pc, w) => (Operand::RelativeLabel, pc.wrapping_add_signed(w)),
+            _ => return,
+        };
+        if let Some(lbl) = label_lookup(loc) {
+            *self = label_fn(lbl);
         }
     }
 }
 
 impl Display for Operand<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
+        match *self {
             Self::Byte(b) => write!(f, "0x{b:02x}"),
             Self::Wide(w) => write!(f, "0x{w:03x}"),
+            Self::RelativeWide(_, w @ 0..=0x7fff) => write!(f, "+0x{w:03x}"),
+            Self::RelativeWide(_, w) => write!(f, "-0x{:03x}", (w.wrapping_neg()) as u16),
             Self::Label(l) => l.fmt(f),
+            Self::RelativeLabel(l) => write!(f, "±{l}"),
         }
     }
 }

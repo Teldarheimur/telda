@@ -19,6 +19,7 @@ impl Display for Address {
 pub struct LabelRead {
     pub segment: SegmentType,
     pub position: u16,
+    pub relative: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -50,6 +51,7 @@ impl SymbolType {
 
 pub(super) struct Symbols {
     labels: Vec<Box<str>>,
+    /// address of label if defined; if undefined, a list of every reference to the undefined symbol
     id_to_pos: Vec<Result<Address, Vec<SourceLocation>>>,
     symbol_types: Vec<SymbolType>,
 }

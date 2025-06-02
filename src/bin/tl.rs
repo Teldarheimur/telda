@@ -42,6 +42,7 @@ struct Cli {
     set_entry: Option<String>,
 
     /// Erase internal symbols
+    // TODO: perhaps remove symbols that are not referenced in any relocation entries
     #[arg(short = 'S', long)]
     strip_internal: bool,
 
@@ -225,6 +226,7 @@ fn tl_main() -> Result<(), Error> {
             reference_location,
             reference_segment,
             symbol_index,
+            relative,
         } in reloc
         {
             let symbol_index = file_symbol_to_out_symbol[symbol_index as usize];
@@ -239,15 +241,22 @@ fn tl_main() -> Result<(), Error> {
                 .1;
 
             let symdef = &symbols_out[symbol_index];
+            let new_location = if relative {
+                // we need to subtract with where it's referenced + 2 (the width of a wide) so that it becomes a relative offset
+                symdef.location.wrapping_sub(reference_location + 2)
+            } else {
+                symdef.location
+            };
             let undefined = matches!(symdef.segment_type, SegmentType::Unknown);
 
             bytes[location_in_file as usize..location_in_file as usize + 2]
-                .copy_from_slice(&symdef.location.to_le_bytes());
+                .copy_from_slice(&new_location.to_le_bytes());
 
             let entry = RelocationEntry {
                 reference_location,
                 reference_segment,
                 symbol_index: symbol_index as u16,
+                relative,
             };
 
             reloc_out.push(entry);
@@ -264,10 +273,12 @@ fn tl_main() -> Result<(), Error> {
     }
     drop(segs);
 
+    // Handle undefined references lastly
     for RelocationEntry {
         reference_segment,
         reference_location,
         symbol_index,
+        relative,
     } in undefined_references
     {
         let symdef = &symbols_out[symbol_index as usize];
@@ -285,9 +296,19 @@ fn tl_main() -> Result<(), Error> {
         let seg = segs_out
             .get_mut(&reference_segment)
             .expect("would have been caught earlier");
+        let new_location = if relative {
+            // we need to subtract with where it's referenced + 2 (the width of a wide) so that it becomes a relative offset
+            symdef.location.wrapping_sub(reference_location + 2)
+        } else {
+            symdef.location
+        };
         let index = (reference_location - seg.0) as usize;
-        seg.1[index..index + 2].copy_from_slice(&symdef.location.to_le_bytes());
+        seg.1[index..index + 2].copy_from_slice(&new_location.to_le_bytes());
     }
+    // Remove relocation entries that are relative and refer to the same segment (arisen from resolved unknown symbols)
+    reloc_out.retain(|reloc| {
+        !(reloc.relative && reloc.reference_segment == symbols_out[reloc.symbol_index as usize].segment_type)
+    });
 
     if let Some(entry) = set_entry {
         entry_point = Some({

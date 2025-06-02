@@ -53,6 +53,7 @@ impl Object {
                 .unwrap_or_else(|| SymbolTable(Vec::new())),
             relocation_table: aalvur
                 .read_section()
+                .or_else(|| aalvur.read_section().map(|r| r.map(OldRelocationTable::into)))
                 .transpose()?
                 .unwrap_or_else(|| RelocationTable(Vec::new())),
         };
@@ -262,10 +263,18 @@ pub struct RelocationEntry {
     pub reference_segment: SegmentType,
     pub reference_location: u16,
     pub symbol_index: u16,
+    pub relative: bool,
     // Future perhaps a format field again
 }
 #[derive(Debug, Clone, Default)]
 pub struct RelocationTable(pub Vec<RelocationEntry>);
+pub struct OldRelocationTable(Vec<RelocationEntry>);
+
+impl From<OldRelocationTable> for RelocationTable {
+    fn from(OldRelocationTable(relocation_entries): OldRelocationTable) -> Self {
+        Self(relocation_entries)
+    }
+}
 
 fn segment_type_from_u8(n: u8) -> io::Result<SegmentType> {
     SegmentType::try_from(n)

@@ -628,8 +628,9 @@ fn parse_ins(
                 return Err("one register");
             }
         }
-        "call" => (
-            CALL,
+        // TODO: warn about deprecated instruction
+        "abscall" => (
+            ABS_CALL,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
         "ret" => (
@@ -665,52 +666,53 @@ fn parse_ins(
                 return Err("a destination register (any size) and then a wide and a wide or immediate for source");
             }
         }
-        "jez" => (
-            JEZ,
+        // TODO: warn about deprecated instruction
+        "absjez" => (
+            ABS_JEZ,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jlt" => (
-            JLT,
+        "absjlt" => (
+            ABS_JLT,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jle" => (
-            JLE,
+        "absjle" => (
+            ABS_JLE,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jgt" => (
-            JGT,
+        "absjgt" => (
+            ABS_JGT,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jge" => (
-            JGE,
+        "absjge" => (
+            ABS_JGE,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jnz" | "jne" => (
-            JNZ,
+        "absjnz" | "absjne" => (
+            ABS_JNZ,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jo" => (
-            JO,
+        "absjo" => (
+            ABS_JO,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jno" => (
-            JNO,
+        "absjno" => (
+            ABS_JNO,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jb" | "jc" => (
-            JB,
+        "absjb" | "absjc" => (
+            ABS_JB,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jae" | "jnc" => (
-            JAE,
+        "absjae" | "absjnc" => (
+            ABS_JAE,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "ja" => (
-            JA,
+        "absja" => (
+            ABS_JA,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
-        "jbe" => (
-            JBE,
+        "absjbe" => (
+            ABS_JBE,
             O::parse_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
         ),
 
@@ -725,7 +727,8 @@ fn parse_ins(
                 return Err("one register and one immediate");
             }
         }
-        "jmp" | "jump" => {
+        // TODO: warn about deprecated instruction
+        "absjmp" | "absjump" => {
             if let Some(dat_op) = O::parse_imm_wide(ops.clone(), sym, sl) {
                 let DataOperand::ImmediateWide(w) = dat_op else { unreachable!() };
 
@@ -740,6 +743,87 @@ fn parse_ins(
                 return Err("address or wide register");
             }
         }
+        "rjmp" | "rjump" => (
+            R_JUMP,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jmp" | "jump" => {
+            if let Some(dat_op) = O::parse_rel_imm_wide(ops.clone(), sym, sl) {
+                (R_JUMP, dat_op)
+            } else if let Some(dat_op) = O::parse_wreg(ops) {
+                let DataOperand::WideRegister(wr) = dat_op else { unreachable!() };
+                if wr == R0 {
+                    return Err("any other register; r0 is not a valid jmp destination");
+                }
+                (LDI_W, DataOperand::TwoWideImm(wr, R1, Wide::Number(0)))
+            } else {
+                return Err("address or wide register");
+            }
+        }
+        "call" | "rcall" => (
+            R_CALL,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jez" | "rjez" => (
+            R_JEZ,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jlt" | "rjlt" => (
+            R_JLT,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jle" | "rjle" => (
+            R_JLE,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jgt" | "rjgt" => (
+            R_JGT,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jge" | "rjge" => (
+            R_JGE,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jnz" | "rjnz" | "jne" | "rjne" => (
+            R_JNZ,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jo" | "rjo" => (
+            R_JO,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jno" | "rjno" => (
+            R_JNO,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jb" | "rjb" | "jc" | "rjc" => (
+            R_JB,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jae" | "rjae" | "jnc" | "rjnc" => (
+            R_JAE,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "ja" | "rja" => (
+            R_JA,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "jbe" | "rjbe" => (
+            R_JBE,
+            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+        ),
+        "setez" => parse_setif(ops, 2)?,
+        "setlt" => parse_setif(ops, 3)?,
+        "setle" => parse_setif(ops, 4)?,
+        "setgt" => parse_setif(ops, 5)?,
+        "setge" => parse_setif(ops, 6)?,
+        "setnz" | "setne" => parse_setif(ops, 7)?,
+        "seto" => parse_setif(ops, 8)?,
+        "setno" => parse_setif(ops, 9)?,
+        "setb" | "setc" => parse_setif(ops, 10)?,
+        "setae" | "setnc" => parse_setif(ops, 11)?,
+        "seta" => parse_setif(ops, 12)?,
+        "setbe" => parse_setif(ops, 13)?,
 
         "add" => parse_binop(ADD_B, ADD_W, ops)?,
         "sub" => parse_binop(SUB_B, SUB_W, ops)?,
@@ -767,6 +851,8 @@ fn parse_ins(
                 return Err("four registers");
             }
         }
+        "adc" => parse_binop(ADC_B, ADC_W, ops)?,
+        "sbb" => parse_binop(SBB_B, SBB_W, ops)?,
         // TODO: BAD
         _ => {
             return Ok(None);
@@ -774,6 +860,13 @@ fn parse_ins(
     }))
 }
 
+fn parse_setif(ops: Iter<SourceOperand>, o: u8) -> StdResult<(u8, DataOperand), &'static str> {
+    let o = ByteRegister(U4::new(o));
+    let DataOperand::ByteRegister(br) = DataOperand::parse_breg(ops).ok_or("one destination byte register")? else {
+        unreachable!()
+    };
+    Ok((isa::SET_IF, DataOperand::TwoByte(br, o)))
+}
 fn parse_binop(
     bop: u8,
     wop: u8,
@@ -793,15 +886,17 @@ fn parse_wide<F: FnOnce(usize, LabelRead) -> u16>(
     read_label: F,
     segment: SegmentType,
     position: u16,
+    relative: bool,
 ) -> u16 {
     match w {
-        Wide::Label(l) => read_label(l, LabelRead { segment, position }),
+        Wide::Label(l) => read_label(l, LabelRead { segment, position, relative }),
         Wide::Number(n) => n,
     }
 }
 
 pub fn write_data_operand<F: FnOnce(usize, LabelRead) -> u16>(
     st: SegmentType,
+    segment_offset: u16,
     mem: &mut Vec<u8>,
     read_label: F,
     dat_op: DataOperand,
@@ -817,26 +912,35 @@ pub fn write_data_operand<F: FnOnce(usize, LabelRead) -> u16>(
         }
         ImmediateWide(w) => {
             let position = mem.len() as u16;
-            mem.extend_from_slice(&parse_wide(w, read_label, st, position).to_le_bytes());
+            mem.extend_from_slice(&parse_wide(w, read_label, st, position, false).to_le_bytes());
+        }
+        RelativeImmediateWide(w) => {
+            let position = mem.len() as u16;
+            let w = parse_wide(w, read_label, st, position, true);
+            let rel_w = w.wrapping_sub(segment_offset + position + 2);
+            mem.extend_from_slice(&rel_w.to_le_bytes());
         }
         ByteImm(r, b) => {
             mem.push(r.0.pair(U4::ZERO));
             mem.push(b);
         }
+        TwoByte(r1, r2) => {
+            mem.push(r1.0.pair(r2.0));
+        }
         WideImm(r, w) => {
             mem.push(r.0.pair(U4::ZERO));
             let position = mem.len() as u16;
-            mem.extend_from_slice(&parse_wide(w, read_label, st, position).to_le_bytes());
+            mem.extend_from_slice(&parse_wide(w, read_label, st, position, false).to_le_bytes());
         }
         WideImmByte(r1, w, r2) => {
             mem.push(r1.0.pair(r2.0));
             let position = mem.len() as u16;
-            mem.extend_from_slice(&parse_wide(w, read_label, st, position).to_le_bytes());
+            mem.extend_from_slice(&parse_wide(w, read_label, st, position, false).to_le_bytes());
         }
         WideImmWide(r1, w, r2) => {
             mem.push(r1.0.pair(r2.0));
             let position = mem.len() as u16;
-            mem.extend_from_slice(&parse_wide(w, read_label, st, position).to_le_bytes());
+            mem.extend_from_slice(&parse_wide(w, read_label, st, position, false).to_le_bytes());
         }
         TwoWideOneByte(r1, r2, r3) => {
             mem.push(r1.0.pair(r2.0));
@@ -845,12 +949,12 @@ pub fn write_data_operand<F: FnOnce(usize, LabelRead) -> u16>(
         ByteWideImm(r1, r2, w) => {
             mem.push(r1.0.pair(r2.0));
             let position = mem.len() as u16;
-            mem.extend_from_slice(&parse_wide(w, read_label, st, position).to_le_bytes());
+            mem.extend_from_slice(&parse_wide(w, read_label, st, position, false).to_le_bytes());
         }
         TwoWideImm(r1, r2, w) => {
             mem.push(r1.0.pair(r2.0));
             let position = mem.len() as u16;
-            mem.extend_from_slice(&parse_wide(w, read_label, st, position).to_le_bytes());
+            mem.extend_from_slice(&parse_wide(w, read_label, st, position, false).to_le_bytes());
         }
         ByteTwoWide(r1, r2, r3) => {
             mem.push(r1.0.pair(r2.0));
@@ -888,6 +992,8 @@ pub enum DataOperand {
     WideRegister(WReg),
     ImmediateByte(u8),
     ImmediateWide(Wide),
+    RelativeImmediateWide(Wide),
+    TwoByte(BReg, BReg),
     ByteImm(BReg, u8),
     WideImm(WReg, Wide),
     WideImmByte(WReg, Wide, BReg),
@@ -910,7 +1016,9 @@ impl DataOperand {
             ByteRegister(_) => 1,
             WideRegister(_) => 1,
             ImmediateByte(_) => 1,
+            TwoByte(_, _) => 1,
             ImmediateWide(_) => 2,
+            RelativeImmediateWide(_) => 2,
             ByteImm(_, _) => 2,
             WideImm(_, _) => 3,
             WideImmByte(_, _, _) => 3,
@@ -953,6 +1061,19 @@ impl DataOperand {
         sl: SourceLocation,
     ) -> Option<DataOperand> {
         let ret = Some(DataOperand::ImmediateWide(Self::imm_wide(
+            ops.next()?,
+            sym,
+            sl,
+        )?));
+        Self::parse_nothing(ops)?;
+        ret
+    }
+    fn parse_rel_imm_wide<'a>(
+        mut ops: impl Iterator<Item = &'a SourceOperand>,
+        sym: &mut Symbols,
+        sl: SourceLocation,
+    ) -> Option<DataOperand> {
+        let ret = Some(DataOperand::RelativeImmediateWide(Self::imm_wide(
             ops.next()?,
             sym,
             sl,

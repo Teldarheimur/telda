@@ -200,7 +200,7 @@ push br                | 21     | push byte value of register to stack (first de
 push wr                | 22     | push wide value of register to stack (first decrementing `rs` by two and then writin there)
 pop br                 | 23     | pop byte value from stack into register (first reading byte at `rs` and then incrementing `rs` by one)
 pop wr                 | 24     | pop wide value from stack into register (first reading wide at `rs` and then incrementing `rs` by two)
-call w                 | 25     | Write next instruction location to `rl` and set program counter to w
+abscall w              | 25     | Deprecated, absolute call: write next instruction location to `rl` and set program counter to w
 ret b                  | 26     | Add `b` to stack pointer (removing b bytes from stack) and jump to `rl` (returns from sub-routine) (this is shorter than `jmp rl`)
 store wr1, w, br2      | 27     | Write byte in br2 to memory at location [wr1 + w]
 store wr1, w, wr2      | 28     | Write wide in wr2 to memory at location [wr1 + w] (in little-endian format)
@@ -210,23 +210,23 @@ load br1, wr2, w       | 2b     | Load byte into br1 from location in memory [wr
 load wr1, wr2, w       | 2c     | Load wide into wr1 from location in memory [wr2 + w] (in little-endian format)
 load br1, wr2, wr3     | 2d     | Load byte into br1 from location in memory [wr2 + wr3]
 load wr1, wr2, wr3     | 2e     | Load wide into wr1 from location in memory [wr2 + wr3] (in little-endian format)
-jez w                  | 2f     | Conditional jump to w if zero flag is set
-jlt w                  | 30     | Conditional jump to w if sign flag is not equal to overflow flag
-jle w                  | 31     | Conditional jump to w if sign flag is not equal to overflow flag AND zero flag is set
-jgt w                  | 32     | Conditional jump to w if sign flag is equal to overflow flag and zero flag is not set
-jge w                  | 33     | Conditional jump to w if sign flag is equal to overflow flag
-jnz w                  | 34     | Conditional jump to w if zero flag is not set
-jo  w                  | 35     | Conditional jump to w if overflow flag is set
-jno w                  | 36     | Conditional jump to w if overflow flag is not set
-jb,jc w                | 37     | Conditional jump to w if carry flag is set
-jae,jnc w              | 38     | Conditional jump to w if carry flag is not set
-ja  w                  | 39     | Conditional jump to w if carry flag and zero flag are both not set
-jbe w                  | 3a     | Conditional jump to w if carry flag OR zero flag are set
+absjez w               | 2f     | Deprecated, absolute conditional jump to w if zero flag is set
+absjlt w               | 30     | Deprecated, absolute conditional jump to w if sign flag is not equal to overflow flag
+absjle w               | 31     | Deprecated, absolute conditional jump to w if sign flag is not equal to overflow flag AND zero flag is set
+absjgt w               | 32     | Deprecated, absolute conditional jump to w if sign flag is equal to overflow flag and zero flag is not set
+absjge w               | 33     | Deprecated, absolute conditional jump to w if sign flag is equal to overflow flag
+absjnz w               | 34     | Deprecated, absolute conditional jump to w if zero flag is not set
+absjo  w               | 35     | Deprecated, absolute conditional jump to w if overflow flag is set
+absjno w               | 36     | Deprecated, absolute conditional jump to w if overflow flag is not set
+absjb,jc w             | 37     | Deprecated, absolute conditional jump to w if carry flag is set
+absjae,jnc w           | 38     | Deprecated, absolute conditional jump to w if carry flag is not set
+absja  w               | 39     | Deprecated, absolute conditional jump to w if carry flag and zero flag are both not set
+absjbe w               | 3a     | Deprecated, absolute conditional jump to w if carry flag OR zero flag are set
 ...                    | 3b-3e  | reserved
 ldi br, b              | 3f     | load immediate value into register
 ldi wr, w              | 40     | load immediate value into register (encoded as `ldi wr, r0, w` per the rule about uneven number of registers)
-jmp w                  | 40     | jumps to w (sets program counter to immediate value), encoded as `ldi r0, r1, w`
-jmp wr                 | 40     | jumps to value in register, encoded as `ldi wr, r1 (wr!=0), 0`
+absjmp w               | 40     | Deprecated, absolute jump to w (sets program counter to immediate value), encoded as `ldi r0, r1, w`
+jmp wr                 | 40     | Absolute jump to value in register, encoded as `ldi wr, r1 (wr!=0), 0`
 add br1, br2, br3      | 41     | br1 = br2 + br3
 add wr1, wr2, wr3      | 42     | wr1 = wr2 + wr3
 sub br1, br2, br3      | 43     | br1 = br2 - br3
@@ -247,6 +247,27 @@ div br1, br2, br3, br4 | 51     | br1 = br3 / br4; br2 = br3 % br4
 div wr1, wr2, wr3, wr4 | 52     | wr1 = wr3 / wr4; wr2 = wr3 % wr4
 mul br1, br2, br3, br4 | 53     | br2, br1 = br3 * br4 (br2 has the upper bytes)
 mul wr1, wr2, wr3, wr4 | 54     | wr2, wr1 = wr3 * wr4 (wr2 has the upper bytes)
+adc wr1, wr2, wr3      | 55     | wr1 = wr2 + wr3 + carry flag
+adc wr1, wr2, wr3      | 56     | wr1 = wr2 + wr3 + carry flag
+sbb wr1, wr2, wr3      | 57     | wr1 = wr2 - (wr3 + carry flag)
+sbb wr1, wr2, wr3      | 58     | wr1 = wr2 - (wr3 + carry flag)
+...                    | 59-5f  | reserved
+call w                 | 60     | Relative call, writes next instruction location to `rl` and increments the program counter by w
+jmp w                  | 61     | Relative jump by w, increments the program counter by w
+jez w                  | 62     | Conditional relative jump by w if zero flag is set
+jlt w                  | 63     | Conditional relative jump by w if sign flag is not equal to overflow flag
+jle w                  | 64     | Conditional relative jump by w if sign flag is not equal to overflow flag AND zero flag is set
+jgt w                  | 65     | Conditional relative jump by w if sign flag is equal to overflow flag and zero flag is not set
+jge w                  | 66     | Conditional relative jump by w if sign flag is equal to overflow flag
+jnz w                  | 67     | Conditional relative jump by w if zero flag is not set
+jo  w                  | 68     | Conditional relative jump by w if overflow flag is set
+jno w                  | 69     | Conditional relative jump by w if overflow flag is not set
+ja  w                  | 6a     | Conditional relative jump by w if carry flag and zero flag are both not set
+jae,jnc w              | 6b     | Conditional relative jump by w if carry flag is not set
+jb,jc w                | 6c     | Conditional relative jump by w if carry flag is set
+jbe w                  | 6d     | Conditional relative jump by w if carry flag OR zero flag are set
+...                    | 6e     | reserved
+setCC br               | 6f     | Set br to 1 if the condition in CC, else 0, where CC is an suffix like the conditional jumps above, encoded as set br, o (where o = a latter nibble equivalent to an above conditional jump)
 ```
 
 ## Missing documentation

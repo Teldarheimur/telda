@@ -51,7 +51,7 @@ pub static OP_HANDLERS: [OpHandler; 256] = {
     handlers[PUSH_W as usize] = push_w;
     handlers[POP_B as usize] = pop_b;
     handlers[POP_W as usize] = pop_w;
-    handlers[CALL as usize] = call;
+    handlers[ABS_CALL as usize] = abs_call;
     handlers[RET as usize] = ret;
     handlers[STORE_BI as usize] = store_bi;
     handlers[STORE_WI as usize] = store_wi;
@@ -61,18 +61,18 @@ pub static OP_HANDLERS: [OpHandler; 256] = {
     handlers[LOAD_WI as usize] = load_wi;
     handlers[LOAD_BR as usize] = load_br;
     handlers[LOAD_WR as usize] = load_wr;
-    handlers[JEZ as usize] = jez;
-    handlers[JLT as usize] = jlt;
-    handlers[JLE as usize] = jle;
-    handlers[JGT as usize] = jgt;
-    handlers[JGE as usize] = jge;
-    handlers[JNZ as usize] = jnz;
-    handlers[JO as usize] = jo;
-    handlers[JNO as usize] = jno;
-    handlers[JB as usize] = jb;
-    handlers[JAE as usize] = jae;
-    handlers[JA as usize] = ja;
-    handlers[JBE as usize] = jbe;
+    handlers[ABS_JEZ as usize] = abs_jez;
+    handlers[ABS_JLT as usize] = abs_jlt;
+    handlers[ABS_JLE as usize] = abs_jle;
+    handlers[ABS_JGT as usize] = abs_jgt;
+    handlers[ABS_JGE as usize] = abs_jge;
+    handlers[ABS_JNZ as usize] = abs_jnz;
+    handlers[ABS_JO as usize] = abs_jo;
+    handlers[ABS_JNO as usize] = abs_jno;
+    handlers[ABS_JB as usize] = abs_jb;
+    handlers[ABS_JAE as usize] = abs_jae;
+    handlers[ABS_JA as usize] = abs_ja;
+    handlers[ABS_JBE as usize] = abs_jbe;
 
     handlers[LDI_B as usize] = ldi_b;
     handlers[LDI_W as usize] = ldi_w;
@@ -98,6 +98,28 @@ pub static OP_HANDLERS: [OpHandler; 256] = {
     handlers[DIV_W as usize] = div_w;
     handlers[MUL_B as usize] = mul_b;
     handlers[MUL_W as usize] = mul_w;
+    handlers[ADC_B as usize] = adc_b;
+    handlers[ADC_W as usize] = adc_w;
+    handlers[SBB_B as usize] = sbb_b;
+    handlers[SBB_W as usize] = sbb_w;
+
+    handlers[R_CALL as usize] = r_call;
+    handlers[R_JUMP as usize] = r_jmp;
+    handlers[R_JEZ as usize] = r_jez;
+    handlers[R_JLT as usize] = r_jlt;
+    handlers[R_JLE as usize] = r_jle;
+    handlers[R_JGT as usize] = r_jgt;
+    handlers[R_JGE as usize] = r_jge;
+    handlers[R_JNZ as usize] = r_jnz;
+    handlers[R_JO as usize] = r_jo;
+    handlers[R_JNO as usize] = r_jno;
+    handlers[R_JB as usize] = r_jb;
+    handlers[R_JAE as usize] = r_jae;
+    handlers[R_JA as usize] = r_ja;
+    handlers[R_JBE as usize] = r_jbe;
+    handlers[R_JEZ as usize] = r_jez;
+    handlers[SET_IF as usize] = set_if;
+
 
     handlers
 };
@@ -219,11 +241,11 @@ fn binop_w(
     ibinop: fn(i16, i16) -> (i16, bool),
 ) -> OpRes {
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
-    let (r3, r4) = arg_pair(c, Wr, u8::from)?;
+    let (r3, o) = arg_pair(c, Wr, u8::from)?;
 
     let r2 = c.cpu.read_wr(r2)?;
     let r3 = c.cpu.read_wr(r3)?;
-    if r4 != 0 {
+    if o != 0 {
         return Err(TrapMode::Invalid);
     }
 
@@ -373,6 +395,55 @@ fn div_w(c: &mut HandlerContext) -> OpRes {
 
     Ok(())
 }
+#[inline(always)]
+fn ofwc<T>(op: fn(T, T) -> (T, bool), add: fn(T, T) -> (T, bool), one: T, a: T, b: T) -> (T, bool) {
+    // add one to the second argument
+    let (b, c1) = add(b, one);
+    // add the operands together
+    let (r, c2) = op(a, b);
+    // only one or zero of the operations overflowed
+    (r, c1 | c2)
+}
+fn adc_b(c: &mut HandlerContext) -> OpRes {
+    let (binop, ibinop)
+        : (fn(u8, u8) -> (u8, bool), fn(i8, i8) -> (i8, bool)) =
+    if c.cpu.flags.carry {
+        (|a, b| ofwc(u8::overflowing_add, u8::overflowing_add, 1, a, b), |a, b| ofwc(i8::overflowing_add, i8::overflowing_add, 1, a, b))
+    } else {
+        (u8::overflowing_add, i8::overflowing_add)
+    };
+    binop_b(c, binop, ibinop)
+}
+fn adc_w(c: &mut HandlerContext) -> OpRes {
+    let (binop, ibinop)
+        : (fn(u16, u16) -> (u16, bool), fn(i16, i16) -> (i16, bool)) =
+    if c.cpu.flags.carry {
+        (|a, b| ofwc(u16::overflowing_add, u16::overflowing_add, 1, a, b), |a, b| ofwc(i16::overflowing_add, i16::overflowing_add, 1, a, b))
+    } else {
+        (u16::overflowing_add, i16::overflowing_add)
+    };
+    binop_w(c, binop, ibinop)
+}
+fn sbb_b(c: &mut HandlerContext) -> OpRes {
+    let (binop, ibinop)
+        : (fn(u8, u8) -> (u8, bool), fn(i8, i8) -> (i8, bool)) =
+    if c.cpu.flags.carry {
+        (|a, b| ofwc(u8::overflowing_sub, u8::overflowing_add, 1, a, b), |a, b| ofwc(i8::overflowing_sub, i8::overflowing_add, 1, a, b))
+    } else {
+        (u8::overflowing_sub, i8::overflowing_sub)
+    };
+    binop_b(c, binop, ibinop)
+}
+fn sbb_w(c: &mut HandlerContext) -> OpRes {
+    let (binop, ibinop)
+        : (fn(u16, u16) -> (u16, bool), fn(i16, i16) -> (i16, bool)) =
+    if c.cpu.flags.carry {
+        (|a, b| ofwc(u16::overflowing_sub, u16::overflowing_add, 1, a, b), |a, b| ofwc(i16::overflowing_sub, i16::overflowing_add, 1, a, b))
+    } else {
+        (u16::overflowing_sub, i16::overflowing_sub)
+    };
+    binop_w(c, binop, ibinop)
+}
 
 fn nop(_c: &mut HandlerContext) -> OpRes {
     Ok(())
@@ -419,7 +490,7 @@ fn pop_w(c: &mut HandlerContext) -> OpRes {
 
     Ok(())
 }
-fn call(c: &mut HandlerContext) -> OpRes {
+fn abs_call(c: &mut HandlerContext) -> OpRes {
     let w = arg_imm_wide(c)?;
     c.cpu.link = c.cpu.program_counter;
     c.cpu.program_counter = w;
@@ -526,46 +597,46 @@ fn load_wr(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 
-fn jez(c: &mut HandlerContext) -> OpRes {
+fn abs_jez(c: &mut HandlerContext) -> OpRes {
     jif(c.cpu.flags.zero, c)
 }
-fn jlt(c: &mut HandlerContext) -> OpRes {
+fn abs_jlt(c: &mut HandlerContext) -> OpRes {
     jif(c.cpu.flags.sign != c.cpu.flags.overflow, c)
 }
-fn jle(c: &mut HandlerContext) -> OpRes {
+fn abs_jle(c: &mut HandlerContext) -> OpRes {
     jif(
         c.cpu.flags.sign != c.cpu.flags.overflow && c.cpu.flags.zero,
         c,
     )
 }
-fn jgt(c: &mut HandlerContext) -> OpRes {
+fn abs_jgt(c: &mut HandlerContext) -> OpRes {
     jif(
         c.cpu.flags.sign == c.cpu.flags.overflow && !c.cpu.flags.zero,
         c,
     )
 }
-fn jge(c: &mut HandlerContext) -> OpRes {
+fn abs_jge(c: &mut HandlerContext) -> OpRes {
     jif(c.cpu.flags.sign == c.cpu.flags.overflow, c)
 }
-fn jnz(c: &mut HandlerContext) -> OpRes {
+fn abs_jnz(c: &mut HandlerContext) -> OpRes {
     jif(!c.cpu.flags.zero, c)
 }
-fn jo(c: &mut HandlerContext) -> OpRes {
+fn abs_jo(c: &mut HandlerContext) -> OpRes {
     jif(c.cpu.flags.overflow, c)
 }
-fn jno(c: &mut HandlerContext) -> OpRes {
+fn abs_jno(c: &mut HandlerContext) -> OpRes {
     jif(!c.cpu.flags.overflow, c)
 }
-fn ja(c: &mut HandlerContext) -> OpRes {
+fn abs_ja(c: &mut HandlerContext) -> OpRes {
     jif(!c.cpu.flags.carry && !c.cpu.flags.zero, c)
 }
-fn jae(c: &mut HandlerContext) -> OpRes {
+fn abs_jae(c: &mut HandlerContext) -> OpRes {
     jif(!c.cpu.flags.carry, c)
 }
-fn jb(c: &mut HandlerContext) -> OpRes {
+fn abs_jb(c: &mut HandlerContext) -> OpRes {
     jif(c.cpu.flags.carry, c)
 }
-fn jbe(c: &mut HandlerContext) -> OpRes {
+fn abs_jbe(c: &mut HandlerContext) -> OpRes {
     jif(c.cpu.flags.carry || c.cpu.flags.zero, c)
 }
 fn jif(cond: bool, c: &mut HandlerContext) -> OpRes {
@@ -573,6 +644,86 @@ fn jif(cond: bool, c: &mut HandlerContext) -> OpRes {
     if cond {
         c.cpu.program_counter = location;
     }
+    Ok(())
+}
+
+#[inline]
+fn rel_jmp(cond: bool, c: &mut HandlerContext) -> OpRes {
+    let w = arg_imm_wide(c)?;
+    if cond {
+        let pc = c.cpu.program_counter;
+        c.cpu.program_counter = pc.wrapping_add(w);
+    }
+
+    Ok(())
+}
+fn r_call(c: &mut HandlerContext) -> OpRes {
+    let w = arg_imm_wide(c)?;
+    let pc = c.cpu.program_counter;
+    c.cpu.link = pc;
+    c.cpu.program_counter = pc.wrapping_add(w);
+
+    Ok(())
+}
+fn r_jmp(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(true, c)
+}
+fn r_jez(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(c.cpu.flags.zero, c)
+}
+fn r_jlt(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(c.cpu.flags.sign != c.cpu.flags.overflow, c)
+}
+fn r_jle(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(c.cpu.flags.sign != c.cpu.flags.overflow && c.cpu.flags.zero, c)
+}
+fn r_jgt(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(c.cpu.flags.sign == c.cpu.flags.overflow && !c.cpu.flags.zero, c)
+}
+fn r_jge(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(c.cpu.flags.sign == c.cpu.flags.overflow, c)
+}
+fn r_jnz(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(!c.cpu.flags.zero, c)
+}
+fn r_jo(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(c.cpu.flags.overflow, c)
+}
+fn r_jno(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(!c.cpu.flags.overflow, c)
+}
+fn r_ja(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(!c.cpu.flags.carry && !c.cpu.flags.zero, c)
+}
+fn r_jae(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(!c.cpu.flags.carry, c)
+}
+fn r_jb(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(c.cpu.flags.carry, c)
+}
+fn r_jbe(c: &mut HandlerContext) -> OpRes {
+    rel_jmp(c.cpu.flags.carry || c.cpu.flags.zero, c)
+}
+fn set_if(c: &mut HandlerContext) -> OpRes {
+    let (r, o) = arg_pair(c, Br, u8::from)?;
+    let cond = match o {
+        1 => true,
+        2 => c.cpu.flags.zero,
+        3 => c.cpu.flags.sign != c.cpu.flags.overflow,
+        4 => c.cpu.flags.sign != c.cpu.flags.overflow && c.cpu.flags.zero,
+        5 => c.cpu.flags.sign == c.cpu.flags.overflow && !c.cpu.flags.zero,
+        6 => c.cpu.flags.sign == c.cpu.flags.overflow,
+        7 => !c.cpu.flags.zero,
+        8 => c.cpu.flags.overflow,
+        9 => !c.cpu.flags.overflow,
+        0xa => !c.cpu.flags.carry && !c.cpu.flags.zero,
+        0xb => !c.cpu.flags.carry,
+        0xc => c.cpu.flags.carry,
+        0xd => c.cpu.flags.carry || c.cpu.flags.zero,
+        _ => return Err(TrapMode::Invalid)
+    };
+    c.cpu.write_br(r, cond as u8);
+
     Ok(())
 }
 
