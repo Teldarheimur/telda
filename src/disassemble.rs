@@ -231,7 +231,7 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
         R_JB => r_cjmp("rjb", &mut c, label_lookup, f)?,
         R_JBE => r_cjmp("rjbe", &mut c, label_lookup, f)?,
         SET_IF => {
-            let (r, o) = arg_pair(&mut c, WideRegister, u8::from)?;
+            let (r, o) = arg_pair(&mut c, ByteRegister, u8::from)?;
             write!(f, "set{} {r}", match o {
                 0 => "x0",
                 1 => "x1",
