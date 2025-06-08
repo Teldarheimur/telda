@@ -52,15 +52,11 @@ fn assemble<B: BufRead>(source_lines: Result<SourceLines<B>>) -> Result<Object> 
     label_reads.resize_with(labels.len(), Vec::new);
 
     let mut segs = BTreeMap::new();
-    let mut lines = Vec::with_capacity(dls.len());
 
-    for (stype, dls) in dls {
-        segs.insert(stype, (dls.start, Vec::with_capacity(dls.size as usize)));
-        lines.push(dls.lines);
-    }
-
-    for ((&st, &mut (segment_start, ref mut mem)), lines) in segs.iter_mut().zip(lines) {
-        for data_line in lines {
+    for (st, dl_seg) in dls {
+        let segment_start = dl_seg.start;
+        let mut mem = Vec::with_capacity(dl_seg.size as usize);
+        for data_line in dl_seg.lines {
             match data_line {
                 DataLine::Raw(mut bytes) => {
                     mem.append(&mut bytes);
@@ -84,10 +80,11 @@ fn assemble<B: BufRead>(source_lines: Result<SourceLines<B>>) -> Result<Object> 
                         labels[id].3
                     };
 
-                    write_data_operand(st, segment_start, mem, read_label, dat_op);
+                    write_data_operand(st, segment_start, &mut mem, read_label, dat_op);
                 }
             }
         }
+        segs.insert(st, (segment_start, mem));
     }
 
     let mut aalvur = Object {
@@ -97,59 +94,53 @@ fn assemble<B: BufRead>(source_lines: Result<SourceLines<B>>) -> Result<Object> 
     };
 
     let mut symbol_table = Vec::new();
-    {
-        for &(ref lbl, st, segment_type, location) in labels.iter() {
-            let is_global = match st {
-                SymbolType::Global => true,
-                SymbolType::Internal => false,
-                SymbolType::Reference => {
-                    assert_eq!(
-                        segment_type,
-                        SegmentType::Unknown,
-                        "reference symbols should have unknown segment type"
-                    );
-                    true
-                }
-            };
+    for &(ref lbl, st, segment_type, location) in labels.iter() {
+        let is_global = match st {
+            SymbolType::Global => true,
+            SymbolType::Internal => false,
+            SymbolType::Reference => {
+                assert_eq!(
+                    segment_type,
+                    SegmentType::Unknown,
+                    "reference symbols should have unknown segment type"
+                );
+                true
+            }
+        };
 
-            symbol_table.push(SymbolDefinition {
-                name: lbl.clone(),
-                is_global,
-                segment_type,
-                location,
-            })
-        }
+        symbol_table.push(SymbolDefinition {
+            name: lbl.clone(),
+            is_global,
+            segment_type,
+            location,
+        })
     }
     aalvur.symbols = SymbolTable(symbol_table);
 
-    let reloc_table;
-    {
-        let mut reloc_t = Vec::new();
+    let mut reloc_table = Vec::new();
 
-        for (i, label_reads) in label_reads.into_iter().enumerate() {
-            let symbol_segment = labels[i].2;
-            let symbol_index = i as u16;
+    for (i, label_reads) in label_reads.into_iter().enumerate() {
+        let symbol_segment = labels[i].2;
+        let symbol_index = i as u16;
 
-            for LabelRead { segment, position, relative } in label_reads {
-                if relative && symbol_segment == segment {
-                    // we don't need to make relocation entries for relative references in the same segment
-                    // as the relative addresses inside the same segment will stay the same. the linker cannot move parts of data inside segments around, only concatenate like segments.
-                    continue;
-                }
-
-                let entry = RelocationEntry {
-                    reference_location: aalvur.segs[&segment].0 + position,
-                    reference_segment: segment,
-                    symbol_index,
-                    relative,
-                };
-
-                reloc_t.push(entry);
+        for LabelRead { segment, position, relative } in label_reads {
+            if relative && symbol_segment == segment {
+                // we don't need to make relocation entries for relative references in the same segment
+                // as the relative addresses inside the same segment will stay the same. the linker cannot move parts of data inside segments around, only concatenate like segments.
+                continue;
             }
+
+            let entry = RelocationEntry {
+                reference_location: aalvur.segs[&segment].0 + position,
+                reference_segment: segment,
+                symbol_index,
+                relative,
+            };
+
+            reloc_table.push(entry);
         }
-        reloc_table = RelocationTable(reloc_t);
     }
-    aalvur.relocation_table = reloc_table;
+    aalvur.relocation_table = RelocationTable(reloc_table);
 
     Ok(aalvur)
 }
