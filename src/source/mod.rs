@@ -29,21 +29,21 @@ pub enum SourceOperand {
     Number(i32),
     ByteReg(BReg),
     WideReg(WReg),
-    Label(String),
+    Label(Box<str>),
 }
 
 #[derive(Debug, Clone)]
 pub enum SourceLine {
-    Label(String),
-    Ins(String, Vec<SourceOperand>),
+    Label(Box<str>),
+    Ins(Box<str>, Box<[SourceOperand]>),
     Comment,
-    DirInclude(String),
-    DirString(Vec<u8>),
+    DirInclude(Box<str>),
+    DirString(Box<[u8]>),
     DirByte(u8),
-    DirWide(StdResult<u16, String>),
-    DirGlobal(String),
-    DirReference(String),
-    DirSeg(String),
+    DirWide(StdResult<u16, Box<str>>),
+    DirGlobal(Box<str>),
+    DirReference(Box<str>),
+    DirSeg(Box<str>),
     DirEntry,
 }
 
@@ -125,7 +125,7 @@ fn parse_number(arg: &str) -> StdResult<SourceOperand, ErrorType> {
     Ok(if let Some(so) = so {
         so
     } else {
-        SourceOperand::Label(arg.to_owned())
+        SourceOperand::Label(arg.into())
     })
 }
 
@@ -177,7 +177,7 @@ impl<B: BufRead> SourceLines<B> {
                             arg = rest;
                             string.push(c);
                         }
-                        string
+                        string.into_boxed_slice()
                     }),
                     "byte" => {
                         let b;
@@ -234,10 +234,10 @@ impl<B: BufRead> SourceLines<B> {
                         }
                         SourceLine::DirWide(w)
                     }
-                    "include" => SourceLine::DirInclude(arg.to_string()),
-                    "global" | "globl" => SourceLine::DirGlobal(arg.to_string()),
-                    "ref" | "reference" => SourceLine::DirReference(arg.to_string()),
-                    "seg" => SourceLine::DirSeg(arg.to_string()),
+                    "include" => SourceLine::DirInclude(arg.into()),
+                    "global" | "globl" => SourceLine::DirGlobal(arg.into()),
+                    "ref" | "reference" => SourceLine::DirReference(arg.into()),
+                    "seg" => SourceLine::DirSeg(arg.into()),
                     "entry" => SourceLine::DirEntry,
                     s => {
                         return Err(Error::new(
@@ -248,7 +248,7 @@ impl<B: BufRead> SourceLines<B> {
                     }
                 }
             } else if let Some(line) = line.strip_suffix(':') {
-                SourceLine::Label(line.to_owned())
+                SourceLine::Label(line.into())
             } else if let Some(i) = line.find(' ') {
                 let (ins, args) = line.split_at(i);
                 let mut sos = Vec::new();
@@ -294,9 +294,9 @@ impl<B: BufRead> SourceLines<B> {
                     });
                 }
 
-                SourceLine::Ins(ins.to_owned(), sos)
+                SourceLine::Ins(ins.into(), sos.into_boxed_slice())
             } else {
-                SourceLine::Ins(line.to_owned(), Vec::new())
+                SourceLine::Ins(line.into(), Vec::new().into_boxed_slice())
             }
         })
     }
@@ -344,7 +344,7 @@ impl SourceLocation {
 pub enum DataLine {
     Ins(Opcode, DataOperand),
     Wide(Wide),
-    Raw(Vec<u8>),
+    Raw(Box<[u8]>),
 }
 
 #[derive(Debug, Clone)]
@@ -515,7 +515,7 @@ fn inner_process<B: BufRead>(
                     return Err(Error::new(
                         src,
                         ln,
-                        ErrorType::UnknownInstruction(s.into_boxed_str()),
+                        ErrorType::UnknownInstruction(s),
                     ));
                 };
                 state.add_line(
@@ -525,7 +525,7 @@ fn inner_process<B: BufRead>(
                 );
             }
             SourceLine::DirByte(b) => {
-                state.add_line(*current_segment, DataLine::Raw(vec![b]), 1);
+                state.add_line(*current_segment, DataLine::Raw(Box::new([b])), 1);
             }
             SourceLine::DirWide(w) => {
                 let wide = match w {
@@ -544,7 +544,7 @@ fn inner_process<B: BufRead>(
                 let path = if let Some(path) = path.strip_prefix('/') {
                     Path::new(path)
                 } else {
-                    pth_buf = Path::new(&src).with_file_name("").join(&path);
+                    pth_buf = Path::new(&src).with_file_name("").join(&*path);
                     &pth_buf
                 };
 
@@ -596,7 +596,7 @@ fn inner_process<B: BufRead>(
 
 fn parse_ins(
     s: &str,
-    ops: Vec<SourceOperand>,
+    ops: Box<[SourceOperand]>,
     sym: &mut Symbols,
     sl: SourceLocation,
 ) -> StdResult<Option<(u8, DataOperand)>, &'static str> {

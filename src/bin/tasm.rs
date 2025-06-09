@@ -58,8 +58,8 @@ fn assemble<B: BufRead>(source_lines: Result<SourceLines<B>>) -> Result<Object> 
         let mut mem = Vec::with_capacity(dl_seg.size as usize);
         for data_line in dl_seg.lines {
             match data_line {
-                DataLine::Raw(mut bytes) => {
-                    mem.append(&mut bytes);
+                DataLine::Raw(bytes) => {
+                    mem.extend(bytes);
                 }
                 DataLine::Wide(Wide::Number(w)) => mem.extend_from_slice(&w.to_le_bytes()),
                 DataLine::Wide(Wide::Label(id)) => {
