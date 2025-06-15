@@ -124,21 +124,26 @@ pub static OP_HANDLERS: [OpHandler; 256] = {
     handlers
 };
 
-fn n(_c: &mut HandlerContext) -> OpRes {
+fn n(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     Err(TrapMode::Invalid)
 }
-fn halt(_c: &mut HandlerContext) -> OpRes {
+fn halt(c: &mut HandlerContext) -> OpRes {
+    c.clocker.cycle(1);
     Err(TrapMode::Halt)
 }
-fn syscall(_c: &mut HandlerContext) -> OpRes {
+fn syscall(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     Err(TrapMode::SysCall)
 }
 
 fn ctf(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     c.cpu.flags.trap = false;
     Ok(())
 }
 fn reth(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     if !c.cpu.flags.trap {
         return Err(TrapMode::IllegalHandlerReturn);
     }
@@ -147,6 +152,7 @@ fn reth(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn usr(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     if c.cpu.flags.user_mode {
         return Err(TrapMode::IllegalOperation);
     }
@@ -155,6 +161,7 @@ fn usr(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn vmon(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     if c.cpu.flags.user_mode {
         return Err(TrapMode::IllegalOperation);
     }
@@ -163,6 +170,7 @@ fn vmon(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn vmoff(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     if c.cpu.flags.user_mode {
         return Err(TrapMode::IllegalOperation);
     }
@@ -171,6 +179,7 @@ fn vmoff(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn pstore(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     if c.cpu.flags.user_mode {
         return Err(TrapMode::IllegalOperation);
     }
@@ -188,6 +197,7 @@ fn pstore(c: &mut HandlerContext) -> OpRes {
     c.physical_write(addr, c.cpu.read_br(br2))
 }
 fn pload(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     if c.cpu.flags.user_mode {
         return Err(TrapMode::IllegalOperation);
     }
@@ -213,7 +223,9 @@ fn binop_b(
     c: &mut HandlerContext,
     binop: fn(u8, u8) -> (u8, bool),
     ibinop: fn(i8, i8) -> (i8, bool),
+    cycles: u8,
 ) -> OpRes {
+    c.cycle(cycles);
     let (r1, r2) = arg_pair(c, Br, Br)?;
     let (r3, r4) = arg_pair(c, Br, u8::from)?;
 
@@ -239,7 +251,9 @@ fn binop_w(
     c: &mut HandlerContext,
     binop: fn(u16, u16) -> (u16, bool),
     ibinop: fn(i16, i16) -> (i16, bool),
+    cycles: u8,
 ) -> OpRes {
+    c.cycle(cycles);
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
     let (r3, o) = arg_pair(c, Wr, u8::from)?;
 
@@ -262,46 +276,47 @@ fn binop_w(
 }
 
 fn add_b(c: &mut HandlerContext) -> OpRes {
-    binop_b(c, u8::overflowing_add, i8::overflowing_add)
+    binop_b(c, u8::overflowing_add, i8::overflowing_add, 1)
 }
 fn add_w(c: &mut HandlerContext) -> OpRes {
-    binop_w(c, u16::overflowing_add, i16::overflowing_add)
+    binop_w(c, u16::overflowing_add, i16::overflowing_add, 1)
 }
 fn sub_b(c: &mut HandlerContext) -> OpRes {
-    binop_b(c, u8::overflowing_sub, i8::overflowing_sub)
+    binop_b(c, u8::overflowing_sub, i8::overflowing_sub, 1)
 }
 fn sub_w(c: &mut HandlerContext) -> OpRes {
-    binop_w(c, u16::overflowing_sub, i16::overflowing_sub)
+    binop_w(c, u16::overflowing_sub, i16::overflowing_sub, 1)
 }
 fn and_b(c: &mut HandlerContext) -> OpRes {
-    binop_b(c, |x, y| (x & y, false), |x, y| (x & y, false))
+    binop_b(c, |x, y| (x & y, false), |x, y| (x & y, false), 1)
 }
 fn and_w(c: &mut HandlerContext) -> OpRes {
-    binop_w(c, |x, y| (x & y, false), |x, y| (x & y, false))
+    binop_w(c, |x, y| (x & y, false), |x, y| (x & y, false), 1)
 }
 fn or_b(c: &mut HandlerContext) -> OpRes {
-    binop_b(c, |x, y| (x | y, false), |x, y| (x | y, false))
+    binop_b(c, |x, y| (x | y, false), |x, y| (x | y, false), 1)
 }
 fn or_w(c: &mut HandlerContext) -> OpRes {
-    binop_w(c, |x, y| (x | y, false), |x, y| (x | y, false))
+    binop_w(c, |x, y| (x | y, false), |x, y| (x | y, false), 1)
 }
 fn xor_b(c: &mut HandlerContext) -> OpRes {
-    binop_b(c, |x, y| (x ^ y, false), |x, y| (x ^ y, false))
+    binop_b(c, |x, y| (x ^ y, false), |x, y| (x ^ y, false), 1)
 }
 fn xor_w(c: &mut HandlerContext) -> OpRes {
-    binop_w(c, |x, y| (x ^ y, false), |x, y| (x ^ y, false))
+    binop_w(c, |x, y| (x ^ y, false), |x, y| (x ^ y, false), 1)
 }
 fn shl_b(c: &mut HandlerContext) -> OpRes {
-    binop_b(c, |x, y| (x << y, false), |x, y| (x << y, false))
+    binop_b(c, |x, y| (x << y, false), |x, y| (x << y, false), 1)
 }
 fn shl_w(c: &mut HandlerContext) -> OpRes {
-    binop_w(c, |x, y| (x << y, false), |x, y| (x << y, false))
+    binop_w(c, |x, y| (x << y, false), |x, y| (x << y, false), 1)
 }
 fn asr_b(c: &mut HandlerContext) -> OpRes {
     binop_b(
         c,
         |x, y| (((x as i8) >> y) as u8, false),
         |x, y| (x >> y, false),
+        1
     )
 }
 fn asr_w(c: &mut HandlerContext) -> OpRes {
@@ -309,6 +324,7 @@ fn asr_w(c: &mut HandlerContext) -> OpRes {
         c,
         |x, y| (((x as i16) >> y) as u16, false),
         |x, y| (x >> y, false),
+        1
     )
 }
 fn lsr_b(c: &mut HandlerContext) -> OpRes {
@@ -316,6 +332,7 @@ fn lsr_b(c: &mut HandlerContext) -> OpRes {
         c,
         |x, y| (x >> y, false),
         |x, y| (((x as u8) >> y) as i8, false),
+        1
     )
 }
 fn lsr_w(c: &mut HandlerContext) -> OpRes {
@@ -323,9 +340,11 @@ fn lsr_w(c: &mut HandlerContext) -> OpRes {
         c,
         |x, y| (x >> y, false),
         |x, y| (((x as u16) >> y) as i16, false),
+        1
     )
 }
 fn mul_b(c: &mut HandlerContext) -> OpRes {
+    c.cycle(2);
     let (r1, r2) = arg_pair(c, Br, Br)?;
     let (r3, r4) = arg_pair(c, Br, Br)?;
 
@@ -343,6 +362,7 @@ fn mul_b(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn mul_w(c: &mut HandlerContext) -> OpRes {
+    c.cycle(4);
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
     let (r3, r4) = arg_pair(c, Wr, Wr)?;
 
@@ -362,6 +382,7 @@ fn mul_w(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn div_b(c: &mut HandlerContext) -> OpRes {
+    c.cycle(40);
     let (r1, r2) = arg_pair(c, Br, Br)?;
     let (r3, r4) = arg_pair(c, Br, Br)?;
 
@@ -379,6 +400,7 @@ fn div_b(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn div_w(c: &mut HandlerContext) -> OpRes {
+    c.cycle(80);
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
     let (r3, r4) = arg_pair(c, Wr, Wr)?;
 
@@ -412,7 +434,7 @@ fn adc_b(c: &mut HandlerContext) -> OpRes {
     } else {
         (u8::overflowing_add, i8::overflowing_add)
     };
-    binop_b(c, binop, ibinop)
+    binop_b(c, binop, ibinop, 1)
 }
 fn adc_w(c: &mut HandlerContext) -> OpRes {
     let (binop, ibinop)
@@ -422,7 +444,7 @@ fn adc_w(c: &mut HandlerContext) -> OpRes {
     } else {
         (u16::overflowing_add, i16::overflowing_add)
     };
-    binop_w(c, binop, ibinop)
+    binop_w(c, binop, ibinop, 1)
 }
 fn sbb_b(c: &mut HandlerContext) -> OpRes {
     let (binop, ibinop)
@@ -432,7 +454,7 @@ fn sbb_b(c: &mut HandlerContext) -> OpRes {
     } else {
         (u8::overflowing_sub, i8::overflowing_sub)
     };
-    binop_b(c, binop, ibinop)
+    binop_b(c, binop, ibinop, 1)
 }
 fn sbb_w(c: &mut HandlerContext) -> OpRes {
     let (binop, ibinop)
@@ -442,13 +464,15 @@ fn sbb_w(c: &mut HandlerContext) -> OpRes {
     } else {
         (u16::overflowing_sub, i16::overflowing_sub)
     };
-    binop_w(c, binop, ibinop)
+    binop_w(c, binop, ibinop, 1)
 }
 
-fn nop(_c: &mut HandlerContext) -> OpRes {
+fn nop(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     Ok(())
 }
 fn push_b(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (b, z) = arg_pair(c, Br, u8::from)?;
     let b = c.cpu.read_br(b);
     if z != 0 {
@@ -459,6 +483,7 @@ fn push_b(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn push_w(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (w, z) = arg_pair(c, Wr, u8::from)?;
     let w = c.cpu.read_wr(w)?;
     if z != 0 {
@@ -469,6 +494,7 @@ fn push_w(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn pop_b(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, z) = arg_pair(c, Br, u8::from)?;
     if z != 0 {
         return Err(TrapMode::Invalid);
@@ -480,6 +506,7 @@ fn pop_b(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn pop_w(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, z) = arg_pair(c, Wr, u8::from)?;
     if z != 0 {
         return Err(TrapMode::Invalid);
@@ -491,6 +518,7 @@ fn pop_w(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn abs_call(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let w = arg_imm_wide(c)?;
     c.cpu.link = c.cpu.program_counter;
     c.cpu.program_counter = w;
@@ -498,6 +526,7 @@ fn abs_call(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn ret(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let b = arg_imm_byte(c)?;
     c.cpu.stack += b as u16;
     c.cpu.program_counter = c.cpu.link;
@@ -505,6 +534,7 @@ fn ret(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn store_bi(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, r2) = arg_pair(c, Wr, Br)?;
     let offset = arg_imm_wide(c)?;
 
@@ -514,6 +544,7 @@ fn store_bi(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn store_br(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
     let (r3, z) = arg_pair(c, Br, u8::from)?;
     if z != 0 {
@@ -527,6 +558,7 @@ fn store_br(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn store_wi(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
     let offset = arg_imm_wide(c)?;
 
@@ -536,6 +568,7 @@ fn store_wi(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn store_wr(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
     let (r3, z) = arg_pair(c, Wr, u8::from)?;
     if z != 0 {
@@ -549,6 +582,7 @@ fn store_wr(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn load_bi(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, r2) = arg_pair(c, Br, Wr)?;
     let offset = arg_imm_wide(c)?;
 
@@ -559,6 +593,7 @@ fn load_bi(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn load_br(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, r2) = arg_pair(c, Br, Wr)?;
     let (r3, z) = arg_pair(c, Wr, u8::from)?;
     if z != 0 {
@@ -573,6 +608,7 @@ fn load_br(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn load_wi(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
     let offset = arg_imm_wide(c)?;
 
@@ -583,6 +619,7 @@ fn load_wi(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn load_wr(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, r2) = arg_pair(c, Wr, Wr)?;
     let (r3, z) = arg_pair(c, Wr, u8::from)?;
     if z != 0 {
@@ -640,6 +677,7 @@ fn abs_jbe(c: &mut HandlerContext) -> OpRes {
     jif(c.cpu.flags.carry || c.cpu.flags.zero, c)
 }
 fn jif(cond: bool, c: &mut HandlerContext) -> OpRes {
+    c.cycle(2);
     let location = arg_imm_wide(c)?;
     if cond {
         c.cpu.program_counter = location;
@@ -649,6 +687,7 @@ fn jif(cond: bool, c: &mut HandlerContext) -> OpRes {
 
 #[inline]
 fn rel_jmp(cond: bool, c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let w = arg_imm_wide(c)?;
     if cond {
         let pc = c.cpu.program_counter;
@@ -658,6 +697,7 @@ fn rel_jmp(cond: bool, c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn r_call(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let w = arg_imm_wide(c)?;
     let pc = c.cpu.program_counter;
     c.cpu.link = pc;
@@ -705,6 +745,7 @@ fn r_jbe(c: &mut HandlerContext) -> OpRes {
     rel_jmp(c.cpu.flags.carry || c.cpu.flags.zero, c)
 }
 fn set_if(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r, o) = arg_pair(c, Br, u8::from)?;
     let cond = match o {
         1 => true,
@@ -728,6 +769,7 @@ fn set_if(c: &mut HandlerContext) -> OpRes {
 }
 
 fn ldi_b(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, z) = arg_pair(c, Br, u8::from)?;
     if z != 0 {
         return Err(TrapMode::Invalid);
@@ -740,6 +782,7 @@ fn ldi_b(c: &mut HandlerContext) -> OpRes {
     Ok(())
 }
 fn ldi_w(c: &mut HandlerContext) -> OpRes {
+    c.cycle(1);
     let (r1, o) = arg_pair(c, Wr, u8::from)?;
 
     let w = arg_imm_wide(c)?;

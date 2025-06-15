@@ -1,8 +1,5 @@
 use crate::{
-    align_start,
-    machine::EmulatedKernel,
-    mem::{read_n, write_n, MainMemory, HALF_CELL},
-    PAGE_SIZE, PAGE_SIZE_P,
+    align_start, blf4::clock_counter::{Clocker, SYSCALL_COST}, machine::EmulatedKernel, mem::{read_n, write_n, MainMemory, HALF_CELL}, PAGE_SIZE, PAGE_SIZE_P
 };
 
 use super::{Blf4, TrapMode, R1, R1L, R2, R2L, R3L};
@@ -82,10 +79,12 @@ impl EmulatedKernel<Blf4> for EKernel {
         tm: TrapMode,
         cpu: &mut Blf4,
         mem: &mut dyn MainMemory,
+        clocker: &mut dyn Clocker,
     ) -> Result<(), TrapMode> {
         match tm {
             TrapMode::SysCall => {
-                let mut ctx = cpu.context(mem);
+                clocker.cycle(SYSCALL_COST);
+                let mut ctx = cpu.context(mem, clocker);
                 let sys_n = ctx.cpu.read_wr(R1)?;
 
                 match sys_n {

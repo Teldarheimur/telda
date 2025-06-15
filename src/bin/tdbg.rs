@@ -7,7 +7,7 @@ use std::{
 
 use telda2::{
     aalv::obj::{Object, SymbolDefinition},
-    blf4::*,
+    blf4::{clock_counter::NothingClocker, *},
     disassemble::disassemble_instruction,
     machine::Machine,
     mem::{Io, LazyMain},
@@ -77,7 +77,8 @@ fn main() -> ExitCode {
             }
         };
 
-        machine = Machine::new(
+        // TODO: maybe don't unlimit the debugger
+        machine = Machine::new_unlimited(
             LazyMain::new(DbgIo {
                 in_buf: VecDeque::new(),
                 out_buf: Vec::new(),
@@ -206,7 +207,8 @@ fn tdbg_loop(mut machine: Machine<LazyMain<DbgIo>, Blf4>, pos_to_labels: HashMap
                             continue;
                         }
                     };
-                    let mut c = machine.cpu.context(&mut machine.memory);
+                    let mut cl = NothingClocker;
+                    let mut c = machine.cpu.context(&mut machine.memory, &mut cl);
                     println!(
                         " = 0x{:02x} 0x{:02x} ...",
                         c.read(addr).unwrap(),

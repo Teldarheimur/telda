@@ -178,7 +178,7 @@ fn disassembly(obj: &Object, start_symbol: &Option<String>, show_relocations: bo
     let mut machine;
     let mut pos_to_labels = HashMap::new();
     {
-        machine = Machine::new(LazyMain::new(PanickingIO), Blf4::new());
+        machine = Machine::new_unlimited(LazyMain::new(PanickingIO), Blf4::new());
         machine.load_user_binary(obj);
 
         for (id, s) in obj.symbols.0.iter().enumerate() {

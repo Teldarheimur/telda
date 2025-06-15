@@ -3,12 +3,11 @@ use std::fmt::{self, Display};
 use rand::{rng, Rng};
 
 use crate::{
-    machine::Cpu,
-    mem::{self, MainMemory},
-    PAGE_SIZE, U4,
+    blf4::clock_counter::{Clocker, MEM_READ, MEM_WRITE}, machine::Cpu, mem::{self, MainMemory}, PAGE_SIZE, U4
 };
 
 pub mod isa;
+pub mod clock_counter;
 
 mod register_type;
 mod std_kernel;
@@ -152,8 +151,8 @@ impl Blf4 {
         }
     }
     #[inline]
-    pub fn context<'a>(&'a mut self, mem: &'a mut dyn MainMemory) -> HandlerContext<'a> {
-        HandlerContext { cpu: self, mem }
+    pub fn context<'a>(&'a mut self, mem: &'a mut dyn MainMemory, clocker: &'a mut dyn Clocker) -> HandlerContext<'a> {
+        HandlerContext { cpu: self, mem, clocker }
     }
 
     pub fn read_br(&self, r: ByteRegister) -> u8 {
@@ -231,8 +230,8 @@ impl Blf4 {
 
 impl Cpu for Blf4 {
     type TrapMode = TrapMode;
-    fn execute_instruction<M: MainMemory>(&mut self, mem: &mut M) -> OpRes<(), Self::TrapMode> {
-        let mut ctx = HandlerContext { cpu: self, mem };
+    fn execute_instruction<M: MainMemory, C: Clocker>(&mut self, mem: &mut M, clocker: &mut C) -> OpRes<(), Self::TrapMode> {
+        let mut ctx = HandlerContext { cpu: self, mem, clocker };
 
         let opcode = ctx.fetch()?;
 
@@ -283,6 +282,7 @@ enum AccessMode {
 pub struct HandlerContext<'a> {
     pub cpu: &'a mut Blf4,
     mem: &'a mut dyn MainMemory,
+    clocker: &'a mut dyn Clocker,
 }
 
 struct Entry {
@@ -472,6 +472,7 @@ impl HandlerContext<'_> {
 
     #[must_use = "error must be handled"]
     pub fn fetch(&mut self) -> OpRes<u8> {
+        self.clocker.cycle(MEM_READ);
         let addr = self.cpu.program_counter;
         self.cpu.program_counter += 1;
         let addr = self.addr_resolve(addr, AccessMode::Execute)?;
@@ -479,11 +480,13 @@ impl HandlerContext<'_> {
     }
     #[must_use = "error must be handled"]
     pub fn read(&mut self, addr: u16) -> OpRes<u8> {
+        self.clocker.cycle(MEM_READ);
         let addr = self.addr_resolve(addr, AccessMode::Read)?;
         Ok(self.mem.read(addr))
     }
     #[must_use = "error must be handled"]
     pub fn write(&mut self, addr: u16, val: u8) -> OpRes<()> {
+        self.clocker.cycle(MEM_WRITE);
         let addr = self.addr_resolve(addr, AccessMode::Write)?;
         self.mem.write(addr, val);
         Ok(())
@@ -506,11 +509,16 @@ impl HandlerContext<'_> {
     }
 
     pub fn physical_read(&mut self, physical_addr: u32) -> OpRes<u8> {
+        self.clocker.cycle(MEM_READ);
         Ok(self.mem.read(physical_addr))
     }
     pub fn physical_write(&mut self, physical_addr: u32, val: u8) -> OpRes<()> {
+        self.clocker.cycle(MEM_WRITE);
         self.mem.write(physical_addr, val);
         Ok(())
+    }
+    pub fn cycle(&mut self, cycles: u8) {
+        self.clocker.cycle(cycles as u32);
     }
 
     #[must_use = "error must be handled"]

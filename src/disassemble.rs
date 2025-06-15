@@ -5,8 +5,7 @@ use std::{
 
 use crate::{
     blf4::{
-        isa::{arg_imm_wide, arg_pair},
-        Blf4, ByteRegister, HandlerContext, OpRes, TrapMode, WideRegister, R0,
+        clock_counter::NothingClocker, isa::{arg_imm_wide, arg_pair}, Blf4, ByteRegister, HandlerContext, OpRes, TrapMode, WideRegister, R0
     },
     machine::Machine,
     mem::MainMemory,
@@ -27,6 +26,7 @@ impl<M: MainMemory> MainMemory for StrictMemory<'_, M> {
     fn write(&mut self, _addr: u32, _val: u8) {
         unimplemented!("no writing to strict memory")
     }
+    fn should_catchup(&self) -> bool {false}
 }
 
 #[derive(Debug)]
@@ -45,7 +45,8 @@ pub fn disassemble_instruction<'a, M: MainMemory, F: FnOnce(u16) -> Option<&'a s
     let m = &mut StrictMemory {
         inner: &mut machine.memory,
     };
-    let mut c = machine.cpu.context(m);
+    let mut cl = NothingClocker;
+    let mut c = machine.cpu.context(m, &mut cl);
 
     let addr = c.cpu.program_counter;
     let opcode = c.fetch()?;

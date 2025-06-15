@@ -1,4 +1,4 @@
-use crate::mem::MainMemory;
+use crate::{blf4::clock_counter::Clocker, mem::MainMemory};
 
 use super::Cpu;
 
@@ -8,5 +8,6 @@ pub trait EmulatedKernel<C: Cpu> {
         tm: C::TrapMode,
         cpu: &mut C,
         mem: &mut dyn MainMemory,
+        clocker: &mut dyn Clocker,
     ) -> Result<(), C::TrapMode>;
 }

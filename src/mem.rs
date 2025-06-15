@@ -1,10 +1,13 @@
-use std::io::{stdin, stdout, Read, Write};
+use std::{cell::Cell, io::{stdin, stdout, Read, Write}};
 
 use crate::PAGE_SIZE_P;
 
 pub trait MainMemory {
     fn read(&mut self, addr: u32) -> u8;
     fn write(&mut self, addr: u32, byte: u8);
+    /// Polled by `Machine` to see if the memory has done anything interesting to the outside
+    /// so that the clock counter can sleep for the appropriate amount of cycles
+    fn should_catchup(&self) -> bool;
 }
 
 pub fn read_n<M: MainMemory + ?Sized, const N: usize>(m: &mut M, addr: u32) -> [u8; N] {
@@ -25,6 +28,7 @@ pub struct LazyMain<P> {
     ram0: [u8; HALF_CELL],
     cells: [Option<Box<[u8; 256 * 256]>>; 255],
     ports: P,
+    port_write_happened: Cell<bool>,
 }
 
 impl<P: Io> MainMemory for LazyMain<P> {
@@ -49,6 +53,7 @@ impl<P: Io> MainMemory for LazyMain<P> {
     }
     fn write(&mut self, addr: u32, byte: u8) {
         if addr < PAGE_SIZE_P {
+            self.port_write_happened.set(true);
             self.ports.write(addr as u8, byte);
             return;
         } else if addr < HALF_CELL as u32 {
@@ -70,6 +75,9 @@ impl<P: Io> MainMemory for LazyMain<P> {
             }
         }
     }
+    fn should_catchup(&self) -> bool {
+        self.port_write_happened.replace(false)
+    }
 }
 
 impl<P> LazyMain<P> {
@@ -79,6 +87,7 @@ impl<P> LazyMain<P> {
             ram0: [0; HALF_CELL],
             ports,
             cells: ([(); 255]).map(|()| None),
+            port_write_happened: Cell::new(false),
         }
     }
     pub fn with_rom(mut self, bytes: &[u8]) -> Self {

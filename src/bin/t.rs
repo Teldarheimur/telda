@@ -26,8 +26,15 @@ struct Cli {
     ///
     /// No emulated kernel will be present and the cpu will go through normal startup,
     // the CPU will start execution at 0x0080 in direct where the binary is loaded
-    #[arg(short, long)]
+    #[arg(short='R', long)]
     raw_binary: bool,
+
+    /// The clock speed of the CPU in MHz, should be greater than 0
+    #[arg(short='s', long, default_value="7")]
+    clock_speed: f32,
+    /// If set, prints the number of clock cycles after execution
+    #[arg(long)]
+    print_cycle_count: bool,
 
     /// Whether the termination point should be displayed
     #[arg(short, long)]
@@ -59,9 +66,11 @@ fn t_main() -> Result<(), Error> {
         binary,
         raw_binary,
         termination_point,
+        clock_speed,
+        print_cycle_count,
     } = Cli::parse();
 
-    let mut machine = Machine::new(LazyMain::new(StdIo), Blf4::new());
+    let mut machine = Machine::new_with_clockspeed(LazyMain::new(StdIo), Blf4::new(), clock_speed);
 
     let mut symbols = SymbolTable::default();
     if raw_binary {
@@ -101,6 +110,10 @@ fn t_main() -> Result<(), Error> {
         println!("Ended with {tm:?} at <{closest}+{diff:02X}>");
     } else if tm != TrapMode::Halt {
         return Err(Error::Trap(tm));
+    }
+    if print_cycle_count {
+        let cycles = machine.cycle_count();
+        println!("Clock cycles: {cycles} = {:.5}s @ {clock_speed}MHz", cycles as f32 / 1_000_000. / clock_speed);
     }
 
     Ok(())
