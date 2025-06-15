@@ -14,6 +14,7 @@ pub trait Cpu {
 }
 
 pub struct Machine<M, C> {
+    // TODO: increase memory latency and add caches
     pub memory: M,
     pub cpu: C,
 

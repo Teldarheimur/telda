@@ -1,5 +1,5 @@
 use crate::{
-    align_start, blf4::clock_counter::{Clocker, SYSCALL_COST}, machine::EmulatedKernel, mem::{read_n, write_n, MainMemory, HALF_CELL}, PAGE_SIZE, PAGE_SIZE_P
+    align_start, blf4::clock_counter::Clocker, machine::EmulatedKernel, mem::{read_n, write_n, MainMemory, HALF_CELL}, PAGE_SIZE, PAGE_SIZE_P
 };
 
 use super::{Blf4, TrapMode, R1, R1L, R2, R2L, R3L};
@@ -83,28 +83,34 @@ impl EmulatedKernel<Blf4> for EKernel {
     ) -> Result<(), TrapMode> {
         match tm {
             TrapMode::SysCall => {
-                clocker.cycle(SYSCALL_COST);
                 let mut ctx = cpu.context(mem, clocker);
                 let sys_n = ctx.cpu.read_wr(R1)?;
 
                 match sys_n {
                     // show mmap (various debug syscalls)
                     0 => {
+                        // TODO: remove this syscall
+                        ctx.cycle(255);
+                        ctx.cycle(255);
+                        ctx.cycle(255);
                         ctx.print_mmap();
                     }
                     // cin
                     3 => {
+                        ctx.cycle(12);
                         let b = ctx.physical_read(1)?;
                         ctx.cpu.write_br(R1L, b);
                     }
                     // cout
                     4 => {
+                        ctx.cycle(13);
                         let b = ctx.cpu.read_br(R2L);
                         ctx.physical_write(1, b)?;
                     }
                     // TODO: use a better mechanism for these
                     // reserve page
                     5 => {
+                        ctx.cycle(128);
                         let addr = ctx.cpu.read_wr(R2).unwrap();
                         let flags = ctx.cpu.read_br(R3L);
                         let mut mmapper = self.mmapper(&mut *ctx.mem, ctx.cpu.page as u32);
@@ -114,15 +120,20 @@ impl EmulatedKernel<Blf4> for EKernel {
                     }
                     // free page
                     6 => {
+                        ctx.cycle(32);
                         let addr = ctx.cpu.read_wr(R2).unwrap();
                         let mut mmapper = self.mmapper(&mut *ctx.mem, ctx.cpu.page as u32);
                         mmapper.unmap(addr);
                     }
                     // error handler vector
                     15 => {
+                        ctx.cycle(15);
                         self.error_handler = ctx.cpu.read_wr(R2)?;
                     }
-                    _ => return Err(TrapMode::SysCall),
+                    _ => {
+                        ctx.cycle(20);
+                        return Err(TrapMode::SysCall)
+                    }
                 }
             }
             TrapMode::Halt => return Err(TrapMode::Halt),

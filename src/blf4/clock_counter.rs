@@ -2,8 +2,7 @@ use std::time::{Duration, Instant};
 
 pub type Cycles = u32;
 pub const MEM_READ: Cycles = 10;
-pub const MEM_WRITE: Cycles = 2;
-pub const SYSCALL_COST: Cycles = 20;
+pub const MEM_WRITE: Cycles = 10;
 
 pub trait Clocker {
     fn cycle(&mut self, times: Cycles);
