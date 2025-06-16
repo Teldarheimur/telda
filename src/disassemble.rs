@@ -5,7 +5,7 @@ use std::{
 
 use crate::{
     blf4::{
-        clock_counter::NothingClocker, isa::{arg_imm_wide, arg_pair}, Blf4, ByteRegister, HandlerContext, OpRes, TrapMode, WideRegister, R0
+        clock_counter::{IdleMarker, NothingClocker}, isa::{arg_imm_wide, arg_pair}, Blf4, ByteRegister, HandlerContext, OpRes, TrapMode, WideRegister, R0
     },
     machine::Machine,
     mem::MainMemory,
@@ -17,11 +17,11 @@ struct StrictMemory<'a, M: MainMemory> {
 }
 
 impl<M: MainMemory> MainMemory for StrictMemory<'_, M> {
-    fn read(&mut self, addr: u32) -> u8 {
+    fn read(&mut self, addr: u32, im: &mut IdleMarker) -> u8 {
         if addr < PAGE_SIZE_P {
             unimplemented!("no I/O for strict memory");
         }
-        self.inner.read(addr)
+        self.inner.read(addr, im)
     }
     fn write(&mut self, _addr: u32, _val: u8) {
         unimplemented!("no writing to strict memory")

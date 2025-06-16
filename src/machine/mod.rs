@@ -19,7 +19,7 @@ pub struct Machine<M, C> {
     pub cpu: C,
 
     clock_speed: Option<f32>,
-    clocker: ClockCounter,
+    pub(crate) clocker: ClockCounter,
     ekernel: Option<Box<dyn EmulatedKernel<C>>>,
 }
 

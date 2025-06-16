@@ -1,9 +1,5 @@
 use crate::{
-    aalv::obj::{Flags, Object, SegmentType},
-    align_end, align_start,
-    machine::Machine,
-    mem::MainMemory,
-    PAGE_SIZE,
+    aalv::obj::{Flags, Object, SegmentType}, align_end, align_start, blf4::clock_counter::IdleMarker, machine::Machine, mem::MainMemory, PAGE_SIZE
 };
 
 use super::{
@@ -15,7 +11,7 @@ impl<M: MainMemory> Machine<M, Blf4> {
     pub fn load_user_binary(&mut self, obj: &Object) {
         let mut ekernel = EKernel::new();
 
-        let page_table1 = ekernel.allocate_page(&mut self.memory);
+        let page_table1 = ekernel.allocate_page(&mut self.memory, &mut IdleMarker::make(&mut self.clocker));
         assert_eq!(page_table1 as u16 as u32, page_table1, "page_table1 needs to be within block 0");
 
         let mut mmbuilder = ekernel.mmapper(&mut self.memory, page_table1);
@@ -45,17 +41,17 @@ impl<M: MainMemory> Machine<M, Blf4> {
                 Zero | Unknown => PERM_X | PERM_W | PERM_R,
             };
 
-            mmbuilder.add_segment(permissions, offset, bytes);
+            mmbuilder.add_segment(permissions, offset, bytes, &mut IdleMarker::make(&mut self.clocker));
             if heap {
                 let heap = align_end(offset, PAGE_SIZE);
                 let size = heap_size - bytes.len() as u16;
-                mmbuilder.map_wr_pages(heap, size);
+                mmbuilder.map_wr_pages(heap, size, &mut IdleMarker::make(&mut self.clocker));
             }
         }
 
         // map space for stack
         let stack_start = align_start(0xffff - stack_size.saturating_sub(1), PAGE_SIZE);
-        mmbuilder.map_wr_pages(stack_start, stack_size);
+        mmbuilder.map_wr_pages(stack_start, stack_size, &mut IdleMarker::make(&mut self.clocker));
 
         self.cpu.flags.virtual_mode = true;
         self.cpu.flags.user_mode = true;

@@ -4,16 +4,46 @@ pub type Cycles = u32;
 pub const MEM_READ: Cycles = 10;
 pub const MEM_WRITE: Cycles = 10;
 
+pub struct IdleMarker<'a> {
+    clocker: &'a mut dyn Clocker,
+}
+impl<'a> IdleMarker<'a> {
+    pub(crate) fn make(clocker: &'a mut dyn Clocker) -> Self {
+        Self {
+            clocker,
+        }
+    }
+    pub(crate) fn start_idle(&mut self) -> Idle {
+        self.clocker.start_idle()
+    }
+    pub(crate) fn stop_idle(&mut self, idle: Idle) {
+        self.clocker.stop_idle(idle);
+    }
+}
+
+#[must_use]
+pub struct Idle {
+    time: Instant,
+}
+
 pub trait Clocker {
     fn cycle(&mut self, times: Cycles);
+    /// Indicate that the CPU is idling waiting for a signal to continue,
+    /// eg. when waiting for input on a port. Must call `stop_idle` with the handler afterwards
+    fn start_idle(&mut self) -> Idle;
+    /// Called with an idle from `start_idle` to indicate that the CPU is no longer idling
+    fn stop_idle(&mut self, idle: Idle);
 }
 
 #[derive(Debug, Clone, Copy)]
 pub struct NothingClocker;
 
 impl Clocker for NothingClocker {
-    #[inline]
     fn cycle(&mut self, _: Cycles) {}
+    fn start_idle(&mut self) -> Idle {
+        Idle { time: Instant::now() }
+    }
+    fn stop_idle(&mut self, _: Idle) {}
 }
 
 #[derive(Debug, Clone)]
@@ -59,6 +89,15 @@ impl ClockCounter {
 impl Clocker for ClockCounter {
     fn cycle(&mut self, times: Cycles) {
         self.cycles += times;
+    }
+    fn start_idle(&mut self) -> Idle {
+        Idle { time: Instant::now() }
+    }
+    fn stop_idle(&mut self, Idle{time}: Idle) {
+        let jump = Instant::now() - time;
+        #[cfg(feature = "debug_sleeps")]
+        eprintln!("Jumping {jump:#?} from idle");
+        self.last_catchup.0 += jump;
     }
 }
 

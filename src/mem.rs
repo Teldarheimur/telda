@@ -1,17 +1,17 @@
 use std::{cell::Cell, io::{stdin, stdout, Read, Write}};
 
-use crate::PAGE_SIZE_P;
+use crate::{blf4::clock_counter::IdleMarker, PAGE_SIZE_P};
 
 pub trait MainMemory {
-    fn read(&mut self, addr: u32) -> u8;
+    fn read(&mut self, addr: u32, im: &mut IdleMarker) -> u8;
     fn write(&mut self, addr: u32, byte: u8);
     /// Polled by `Machine` to see if the memory has done anything interesting to the outside
     /// so that the clock counter can sleep for the appropriate amount of cycles
     fn should_catchup(&self) -> bool;
 }
 
-pub fn read_n<M: MainMemory + ?Sized, const N: usize>(m: &mut M, addr: u32) -> [u8; N] {
-    std::array::from_fn(|i| m.read(addr + i as u32))
+pub fn read_n<M: MainMemory + ?Sized, const N: usize>(m: &mut M, addr: u32, im: &mut IdleMarker) -> [u8; N] {
+    std::array::from_fn(|i| m.read(addr + i as u32, im))
 }
 pub fn write_n<M: MainMemory + ?Sized>(m: &mut M, addr: u32, data: &[u8]) {
     data.iter()
@@ -32,7 +32,7 @@ pub struct LazyMain<P> {
 }
 
 impl<P: Io> MainMemory for LazyMain<P> {
-    fn read(&mut self, addr: u32) -> u8 {
+    fn read(&mut self, addr: u32, im: &mut IdleMarker) -> u8 {
         let cell_index = (addr >> 16) as usize;
         if cell_index != 0 {
             let Some(cell) = &self.cells[cell_index - 1] else {
@@ -42,7 +42,10 @@ impl<P: Io> MainMemory for LazyMain<P> {
             let index = (addr & 0xffff) as usize;
             cell[index]
         } else if addr < PAGE_SIZE_P {
-            self.ports.read(addr as u8)
+            let idle = im.start_idle();
+            let b = self.ports.read(addr as u8);
+            im.stop_idle(idle);
+            b
         } else if addr < HALF_CELL as u32 {
             self.rom
                 .map(|a| a[(addr - PAGE_SIZE_P) as usize])

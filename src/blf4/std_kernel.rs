@@ -1,5 +1,5 @@
 use crate::{
-    align_start, blf4::clock_counter::Clocker, machine::EmulatedKernel, mem::{read_n, write_n, MainMemory, HALF_CELL}, PAGE_SIZE, PAGE_SIZE_P
+    align_start, blf4::clock_counter::{Clocker, IdleMarker}, machine::EmulatedKernel, mem::{read_n, write_n, MainMemory, HALF_CELL}, PAGE_SIZE, PAGE_SIZE_P
 };
 
 use super::{Blf4, TrapMode, R1, R1L, R2, R2L, R3L};
@@ -35,11 +35,11 @@ impl EKernel {
             mem,
         }
     }
-    pub fn allocate_page<M: ?Sized + MainMemory>(&mut self, mem: &mut M) -> u32 {
+    pub fn allocate_page<M: ?Sized + MainMemory>(&mut self, mem: &mut M, im: &mut IdleMarker) -> u32 {
         // Use page_bumper if free list is empty
         if let Some(next_free) = self.next_free.take() {
             let ret = next_free;
-            let next_free = u32::from_le_bytes(read_n(mem, ret));
+            let next_free = u32::from_le_bytes(read_n(mem, ret, im));
             // The special value `1` means the free list is empty
             if next_free != 1 {
                 self.next_free = Some(next_free);
@@ -114,7 +114,7 @@ impl EmulatedKernel<Blf4> for EKernel {
                         let addr = ctx.cpu.read_wr(R2).unwrap();
                         let flags = ctx.cpu.read_br(R3L);
                         let mut mmapper = self.mmapper(&mut *ctx.mem, ctx.cpu.page as u32);
-                        let phys_addr = mmapper.map(addr, flags);
+                        let phys_addr = mmapper.map(addr, flags, &mut IdleMarker::make(ctx.clocker));
                         ctx.cpu.write_wr(R1, phys_addr as u16).unwrap();
                         ctx.cpu.write_wr(R2, (phys_addr >> 16) as u16).unwrap();
                     }
@@ -123,7 +123,7 @@ impl EmulatedKernel<Blf4> for EKernel {
                         ctx.cycle(32);
                         let addr = ctx.cpu.read_wr(R2).unwrap();
                         let mut mmapper = self.mmapper(&mut *ctx.mem, ctx.cpu.page as u32);
-                        mmapper.unmap(addr);
+                        mmapper.unmap(addr, &mut IdleMarker::make(ctx.clocker));
                     }
                     // error handler vector
                     15 => {
@@ -157,7 +157,7 @@ pub struct MmapBuilder<'a, M: ?Sized + MainMemory> {
 }
 
 impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
-    pub fn add_segment(&mut self, permissions: u8, offset: u16, bytes: &[u8]) {
+    pub fn add_segment(&mut self, permissions: u8, offset: u16, bytes: &[u8], im: &mut IdleMarker) {
         // 0bUD_XWRP
         assert_eq!(permissions & 0b1100_0000, 0, "reserved bits should not be set");
         // set user and present bit (they might've been set by the caller too)
@@ -168,7 +168,7 @@ impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
         let start_vpage = align_start(offset, PAGE_SIZE);
         let range = start_vpage..offset + bytes.len() as u16;
         for vaddr in range.step_by(PAGE_SIZE as usize) {
-            let paddr = self.map(vaddr, perm_bits);
+            let paddr = self.map(vaddr, perm_bits, im);
 
             // write page to memory
             if vaddr < offset {
@@ -182,14 +182,14 @@ impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
             }
         }
     }
-    fn unmap(&mut self, virt: u16) {
+    fn unmap(&mut self, virt: u16, im: &mut IdleMarker) {
         // TODO: check permissions and fail if page already doesn't exist
         assert_eq!(virt & (PAGE_SIZE - 1), 0, "address should be page aligned");
         let vpn1 = virt >> 12;
         let vpn2 = (virt >> 7) & 0b1_1111;
 
         let pte1_addr = self.page_table1 + (vpn1 << 2) as u32;
-        let pte1 = u32::from_le_bytes(read_n(self.mem, pte1_addr));
+        let pte1 = u32::from_le_bytes(read_n(self.mem, pte1_addr, im));
         if pte1 & 1 == 0 {
             // entry not present, bad unmap
             panic!("Tried to unmap non-existant virtual page");
@@ -199,7 +199,7 @@ impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
         }
         // clear reserved bits, although they should be zero already
         let pte2_addr = ((pte1 >> 8) & 0xff_ff80) + (vpn2 << 2) as u32;
-        let pte2 = u32::from_le_bytes(read_n(self.mem, pte2_addr));
+        let pte2 = u32::from_le_bytes(read_n(self.mem, pte2_addr, im));
         if pte2 & 1 == 0 {
             // entry not present, bad unmap
             panic!("Tried to unmap non-existant virtual page");
@@ -212,12 +212,12 @@ impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
                 self.mem.write(pte2_addr, 0);
                 let paddr = (pte2 >> 8) & 0xff_ff80;
 
-                self.release_page(paddr);
+                self.release_page(paddr, im);
             }
         }
     }
     #[must_use]
-    fn map(&mut self, virt: u16, flags_byte: u8) -> u32 {
+    fn map(&mut self, virt: u16, flags_byte: u8, im: &mut IdleMarker) -> u32 {
         assert_eq!(virt & (PAGE_SIZE - 1), 0, "virtual address should be page aligned");
         assert_eq!(flags_byte & 1, 1, "page should be present");
         assert_eq!(flags_byte & 0xc0, 0, "reserved flag bits should be 0");
@@ -225,10 +225,10 @@ impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
         let vpn2 = (virt >> 7) & 0b1_1111;
 
         let pte1_addr = self.page_table1 + (vpn1 << 2) as u32;
-        let mut pte1 = u32::from_le_bytes(read_n(self.mem, pte1_addr));
+        let mut pte1 = u32::from_le_bytes(read_n(self.mem, pte1_addr, im));
         if pte1 & 1 == 0 {
             // entry not present, allocate a page for table
-            let page = self.new_page();
+            let page = self.new_page(im);
             pte1 = (page << 8) | (flags_byte as u32);
 
             write_n(self.mem, pte1_addr, &pte1.to_le_bytes());
@@ -240,9 +240,9 @@ impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
         }
         // clear reserved bits, although they should be zero already
         let pte2_addr = ((pte1 >> 8) & 0xff_ff80) + (vpn2 << 2) as u32;
-        let mut pte2 = u32::from_le_bytes(read_n(self.mem, pte2_addr));
+        let mut pte2 = u32::from_le_bytes(read_n(self.mem, pte2_addr, im));
         if pte2 & 1 == 0 {
-            let paddr = self.new_page();
+            let paddr = self.new_page(im);
             // entry not present, write it
             pte2 = (paddr << 8) | (flags_byte as u32);
 
@@ -259,18 +259,18 @@ impl<M: ?Sized + MainMemory> MmapBuilder<'_, M> {
         }
     }
     #[inline]
-    pub fn map_wr_pages(&mut self, virt: u16, size: u16) {
+    pub fn map_wr_pages(&mut self, virt: u16, size: u16, im: &mut IdleMarker) {
         assert_eq!(virt & (PAGE_SIZE - 1), 0, "virtual address should be page aligned");
         for p in (virt.. virt.saturating_add(size)).step_by(PAGE_SIZE as usize) {
-            let _ = self.map(p, 0b11_0111);
+            let _ = self.map(p, 0b11_0111, im);
         }
     }
     #[inline]
-    fn new_page(&mut self) -> u32 {
-        self.kernel.allocate_page(self.mem)
+    fn new_page(&mut self, im: &mut IdleMarker) -> u32 {
+        self.kernel.allocate_page(self.mem, im)
     }
     #[inline]
-    fn release_page(&mut self, addr: u32) {
+    fn release_page(&mut self, addr: u32, _im: &mut IdleMarker) {
         self.kernel.free_page(addr, self.mem)
     }
 }

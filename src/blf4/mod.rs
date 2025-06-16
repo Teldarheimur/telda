@@ -3,7 +3,7 @@ use std::fmt::{self, Display};
 use rand::{rng, Rng};
 
 use crate::{
-    blf4::clock_counter::{Clocker, MEM_READ, MEM_WRITE}, machine::Cpu, mem::{self, MainMemory}, PAGE_SIZE, U4
+    blf4::clock_counter::{Clocker, IdleMarker, MEM_READ, MEM_WRITE}, machine::Cpu, mem::{self, MainMemory}, PAGE_SIZE, U4
 };
 
 pub mod isa;
@@ -298,7 +298,7 @@ const fn entry_addr(table_start: u32, number: u32) -> u32 {
 
 impl HandlerContext<'_> {
     fn read_entry(&mut self, addr: u32, in_user_mode: bool, mode: AccessMode) -> OpRes<Entry> {
-        let raw_entry = u32::from_le_bytes(mem::read_n(self.mem, addr));
+        let raw_entry = u32::from_le_bytes(mem::read_n(self.mem, addr, &mut IdleMarker::make(self.clocker)));
 
         let present = raw_entry & 1 == 1;
         if !present {
@@ -404,7 +404,7 @@ impl HandlerContext<'_> {
             let table1_start = self.cpu.page as u32;
 
             let lvl1_entry_addr = entry_addr(table1_start, vpn1);
-            let lvl1_entry = u32::from_le_bytes(mem::read_n(self.mem, lvl1_entry_addr));
+            let lvl1_entry = u32::from_le_bytes(mem::read_n(self.mem, lvl1_entry_addr, &mut IdleMarker::make(self.clocker)));
             if lvl1_entry & 1 == 0 {
                 continue;
             }
@@ -418,7 +418,7 @@ impl HandlerContext<'_> {
                 let table2_start = (lvl1_entry >> 15) << 7;
 
                 let lvl2_entry_addr = entry_addr(table2_start, vpn2);
-                let lvl2_entry = u32::from_le_bytes(mem::read_n(self.mem, lvl2_entry_addr));
+                let lvl2_entry = u32::from_le_bytes(mem::read_n(self.mem, lvl2_entry_addr, &mut IdleMarker::make(self.clocker)));
                 if lvl2_entry & 1 == 0 {
                     continue;
                 }
@@ -476,13 +476,13 @@ impl HandlerContext<'_> {
         let addr = self.cpu.program_counter;
         self.cpu.program_counter += 1;
         let addr = self.addr_resolve(addr, AccessMode::Execute)?;
-        Ok(self.mem.read(addr))
+        Ok(self.mem.read(addr, &mut IdleMarker::make(self.clocker)))
     }
     #[must_use = "error must be handled"]
     pub fn read(&mut self, addr: u16) -> OpRes<u8> {
         self.clocker.cycle(MEM_READ);
         let addr = self.addr_resolve(addr, AccessMode::Read)?;
-        Ok(self.mem.read(addr))
+        Ok(self.mem.read(addr, &mut IdleMarker::make(self.clocker)))
     }
     #[must_use = "error must be handled"]
     pub fn write(&mut self, addr: u16, val: u8) -> OpRes<()> {
@@ -510,7 +510,7 @@ impl HandlerContext<'_> {
 
     pub fn physical_read(&mut self, physical_addr: u32) -> OpRes<u8> {
         self.clocker.cycle(MEM_READ);
-        Ok(self.mem.read(physical_addr))
+        Ok(self.mem.read(physical_addr, &mut IdleMarker::make(self.clocker)))
     }
     pub fn physical_write(&mut self, physical_addr: u32, val: u8) -> OpRes<()> {
         self.clocker.cycle(MEM_WRITE);
