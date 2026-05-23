@@ -2,44 +2,44 @@ use std::fmt::{self, Display};
 
 use crate::U4;
 
-pub const R0B: ByteRegister = ByteRegister(U4::new_unchecked(0));
-pub const R1L: ByteRegister = ByteRegister(U4::new_unchecked(1));
-pub const R1H: ByteRegister = ByteRegister(U4::new_unchecked(2));
-pub const R2L: ByteRegister = ByteRegister(U4::new_unchecked(3));
-pub const R2H: ByteRegister = ByteRegister(U4::new_unchecked(4));
-pub const R3L: ByteRegister = ByteRegister(U4::new_unchecked(5));
-pub const R3H: ByteRegister = ByteRegister(U4::new_unchecked(6));
-pub const R4L: ByteRegister = ByteRegister(U4::new_unchecked(7));
-pub const R4H: ByteRegister = ByteRegister(U4::new_unchecked(8));
-pub const R5L: ByteRegister = ByteRegister(U4::new_unchecked(9));
-pub const R5H: ByteRegister = ByteRegister(U4::new_unchecked(10));
-pub const R6B: ByteRegister = ByteRegister(U4::new_unchecked(11));
-pub const R7B: ByteRegister = ByteRegister(U4::new_unchecked(12));
-pub const R8B: ByteRegister = ByteRegister(U4::new_unchecked(13));
-pub const R9B: ByteRegister = ByteRegister(U4::new_unchecked(14));
-pub const R10B: ByteRegister = ByteRegister(U4::new_unchecked(15));
+pub const R0B: ByteRegister = ByteRegister(U4::new(0));
+pub const R1L: ByteRegister = ByteRegister(U4::new(1));
+pub const R1H: ByteRegister = ByteRegister(U4::new(2));
+pub const R2L: ByteRegister = ByteRegister(U4::new(3));
+pub const R2H: ByteRegister = ByteRegister(U4::new(4));
+pub const R3L: ByteRegister = ByteRegister(U4::new(5));
+pub const R3H: ByteRegister = ByteRegister(U4::new(6));
+pub const R4L: ByteRegister = ByteRegister(U4::new(7));
+pub const R4H: ByteRegister = ByteRegister(U4::new(8));
+pub const R5L: ByteRegister = ByteRegister(U4::new(9));
+pub const R5H: ByteRegister = ByteRegister(U4::new(10));
+pub const R6B: ByteRegister = ByteRegister(U4::new(11));
+pub const R7B: ByteRegister = ByteRegister(U4::new(12));
+pub const R8B: ByteRegister = ByteRegister(U4::new(13));
+pub const R9B: ByteRegister = ByteRegister(U4::new(14));
+pub const R10B: ByteRegister = ByteRegister(U4::new(15));
 
-pub const R0: WideRegister = WideRegister(U4::new_unchecked(0));
-pub const R1: WideRegister = WideRegister(U4::new_unchecked(1));
-pub const R2: WideRegister = WideRegister(U4::new_unchecked(2));
-pub const R3: WideRegister = WideRegister(U4::new_unchecked(3));
-pub const R4: WideRegister = WideRegister(U4::new_unchecked(4));
-pub const R5: WideRegister = WideRegister(U4::new_unchecked(5));
-pub const R6: WideRegister = WideRegister(U4::new_unchecked(6));
-pub const R7: WideRegister = WideRegister(U4::new_unchecked(7));
-pub const R8: WideRegister = WideRegister(U4::new_unchecked(8));
-pub const R9: WideRegister = WideRegister(U4::new_unchecked(9));
-pub const R10: WideRegister = WideRegister(U4::new_unchecked(10));
+pub const R0: WideRegister = WideRegister(U4::new(0));
+pub const R1: WideRegister = WideRegister(U4::new(1));
+pub const R2: WideRegister = WideRegister(U4::new(2));
+pub const R3: WideRegister = WideRegister(U4::new(3));
+pub const R4: WideRegister = WideRegister(U4::new(4));
+pub const R5: WideRegister = WideRegister(U4::new(5));
+pub const R6: WideRegister = WideRegister(U4::new(6));
+pub const R7: WideRegister = WideRegister(U4::new(7));
+pub const R8: WideRegister = WideRegister(U4::new(8));
+pub const R9: WideRegister = WideRegister(U4::new(9));
+pub const R10: WideRegister = WideRegister(U4::new(10));
 /// Stack pointer register
-pub const RS: WideRegister = WideRegister(U4::new_unchecked(11));
+pub const RS: WideRegister = WideRegister(U4::new(11));
 /// Link pointer register
-pub const RL: WideRegister = WideRegister(U4::new_unchecked(12));
+pub const RL: WideRegister = WideRegister(U4::new(12));
 /// Frame pointer register
-pub const RF: WideRegister = WideRegister(U4::new_unchecked(13));
+pub const RF: WideRegister = WideRegister(U4::new(13));
 /// Page table pointer register
-pub const RP: WideRegister = WideRegister(U4::new_unchecked(14));
+pub const RP: WideRegister = WideRegister(U4::new(14));
 /// Trap handler pointer register
-pub const RH: WideRegister = WideRegister(U4::new_unchecked(15));
+pub const RH: WideRegister = WideRegister(U4::new(15));
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 #[repr(transparent)]

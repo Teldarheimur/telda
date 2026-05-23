@@ -7,30 +7,22 @@ use std::{
 };
 
 use crate::{
-    aalv::obj::Entry,
-    aalv::obj::SegmentType,
-    align_end,
-    blf4::{ByteRegister as BReg, WideRegister as WReg, *},
     PAGE_SIZE, U4,
+    aalv::obj::{Entry, SegmentType},
+    align_end,
+    blf4::{ByteRegister as BReg, WideRegister as WReg},
 };
+use crate::blf4::*;
 
 mod err;
 pub use self::err::*;
 mod symbols;
 use self::symbols::*;
 pub use self::symbols::{LabelRead, SymbolType};
+mod src_op;
+pub use self::src_op::*;
 
 type Opcode = u8;
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SourceOperand {
-    Byte(u8),
-    Wide(u16),
-    Number(i32),
-    ByteReg(BReg),
-    WideReg(WReg),
-    Label(Box<str>),
-}
 
 #[derive(Debug, Clone)]
 pub enum SourceLine {
@@ -84,51 +76,6 @@ impl SourceLines<BufReader<File>> {
     }
 }
 
-fn parse_number(arg: &str) -> StdResult<SourceOperand, ErrorType> {
-    let so;
-    let mut radix = 10;
-    let mut num = arg;
-    if let Some(new_num) = arg.strip_prefix("0x") {
-        radix = 16;
-        num = new_num;
-    } else if let Some(new_num) = arg.strip_prefix("0b") {
-        radix = 2;
-        num = new_num;
-    } else if let Some(new_num) = arg.strip_prefix("0o") {
-        radix = 8;
-        num = new_num;
-    }
-
-    if let Some(num) = num.strip_suffix('b') {
-        so = u8::from_str_radix(num, radix)
-            .ok()
-            .or_else(|| i8::from_str_radix(num, radix).ok().map(|b| b as u8))
-            .map(SourceOperand::Byte);
-    } else if let Some(num) = num.strip_suffix('w') {
-        so = u16::from_str_radix(num, radix)
-            .ok()
-            .or_else(|| i16::from_str_radix(num, radix).ok().map(|w| w as u16))
-            .map(SourceOperand::Wide);
-    } else if let Some(arg) = arg.strip_prefix('\'').and_then(|a| a.strip_suffix('\'')) {
-        let (byte, rest) = parse_bytechar(arg.as_bytes())?;
-        if !rest.is_empty() {
-            return Err(ErrorType::CharacterLiteralTooLong);
-        }
-
-        so = Some(SourceOperand::Byte(byte));
-    } else {
-        so = i32::from_str_radix(num, radix)
-            .ok()
-            .map(SourceOperand::Number);
-    }
-
-    Ok(if let Some(so) = so {
-        so
-    } else {
-        SourceOperand::Label(arg.into())
-    })
-}
-
 impl<B: BufRead> SourceLines<B> {
     pub fn from_reader(r: B) -> Self {
         SourceLines {
@@ -157,7 +104,6 @@ impl<B: BufRead> SourceLines<B> {
 
             if line.is_empty()
                 || line.starts_with(';')
-                || line.starts_with("//")
                 || line.starts_with('#')
             {
                 SourceLine::Comment
@@ -181,7 +127,7 @@ impl<B: BufRead> SourceLines<B> {
                     }),
                     "byte" => {
                         let b;
-                        match parse_number(arg)
+                        match parse_one_arg(arg)
                             .map_err(|et| Error::new(self.source.clone(), self.ln, et))?
                         {
                             SourceOperand::Byte(n) => b = n,
@@ -201,14 +147,14 @@ impl<B: BufRead> SourceLines<B> {
                                     ErrorType::Other(
                                         format!("invalid byte literal \'{arg}\'").into_boxed_str(),
                                     ),
-                                ))
+                                ));
                             }
-                        }
+                        }   
                         SourceLine::DirByte(b)
                     }
                     "wide" | "word" => {
                         let w;
-                        match parse_number(arg)
+                        match parse_one_arg(arg)
                             .map_err(|et| Error::new(self.source.clone(), self.ln, et))?
                         {
                             SourceOperand::Wide(n) => w = Ok(n),
@@ -229,7 +175,7 @@ impl<B: BufRead> SourceLines<B> {
                                     ErrorType::Other(
                                         format!("invalid wide literal \'{arg}\'").into_boxed_str(),
                                     ),
-                                ))
+                                ));
                             }
                         }
                         SourceLine::DirWide(w)
@@ -244,86 +190,21 @@ impl<B: BufRead> SourceLines<B> {
                             self.source.clone(),
                             self.ln,
                             ErrorType::UnknownDirective(s.into()),
-                        ))
+                        ));
                     }
                 }
             } else if let Some(line) = line.strip_suffix(':') {
                 SourceLine::Label(line.into())
-            } else if let Some(i) = line.find(' ') {
-                let (ins, args) = line.split_at(i);
-                let mut sos = Vec::new();
-
-                for arg in args.split(',') {
-                    let arg = arg.trim();
-
-                    sos.push(match arg {
-                        "r0b" => SourceOperand::ByteReg(R0B),
-                        "r1l" => SourceOperand::ByteReg(R1L),
-                        "r1h" => SourceOperand::ByteReg(R1H),
-                        "r2l" => SourceOperand::ByteReg(R2L),
-                        "r2h" => SourceOperand::ByteReg(R2H),
-                        "r3l" => SourceOperand::ByteReg(R3L),
-                        "r3h" => SourceOperand::ByteReg(R3H),
-                        "r4l" => SourceOperand::ByteReg(R4L),
-                        "r4h" => SourceOperand::ByteReg(R4H),
-                        "r5l" => SourceOperand::ByteReg(R5L),
-                        "r5h" => SourceOperand::ByteReg(R5H),
-                        "r6b" => SourceOperand::ByteReg(R6B),
-                        "r7b" => SourceOperand::ByteReg(R7B),
-                        "r8b" => SourceOperand::ByteReg(R8B),
-                        "r9b" => SourceOperand::ByteReg(R9B),
-                        "r10b" => SourceOperand::ByteReg(R10B),
-                        "r0" => SourceOperand::WideReg(R0),
-                        "r1" => SourceOperand::WideReg(R1),
-                        "r2" => SourceOperand::WideReg(R2),
-                        "r3" => SourceOperand::WideReg(R3),
-                        "r4" => SourceOperand::WideReg(R4),
-                        "r5" => SourceOperand::WideReg(R5),
-                        "r6" => SourceOperand::WideReg(R6),
-                        "r7" => SourceOperand::WideReg(R7),
-                        "r8" => SourceOperand::WideReg(R8),
-                        "r9" => SourceOperand::WideReg(R9),
-                        "r10" => SourceOperand::WideReg(R10),
-                        "rs" => SourceOperand::WideReg(RS),
-                        "rl" => SourceOperand::WideReg(RL),
-                        "rf" => SourceOperand::WideReg(RF),
-                        "rp" => SourceOperand::WideReg(RP),
-                        "rh" => SourceOperand::WideReg(RH),
-                        arg => parse_number(arg)
-                            .map_err(|et| Error::new(self.source.clone(), self.ln, et))?,
-                    });
-                }
-
-                SourceLine::Ins(ins.into(), sos.into_boxed_slice())
             } else {
-                SourceLine::Ins(line.into(), Vec::new().into_boxed_slice())
+                let i = line.find(char::is_whitespace).unwrap_or(line.len());
+                let (ins, args) = line.split_at(i);
+                let args = parse_args(args)
+                    .map_err(|et| Error::new(self.source.clone(), self.ln, et))?;
+
+                SourceLine::Ins(ins.into(), args.into_boxed_slice())
             }
         })
     }
-}
-
-fn parse_bytechar(s: &[u8]) -> StdResult<(u8, &[u8]), ErrorType> {
-    use self::ErrorType::*;
-
-    let mut bs = s.iter();
-    Ok(match bs.next().ok_or(UnexpectedEndOfString)? {
-        b'\\' => match bs.next().ok_or(EscapeCharacterAtEnd)? {
-            b'r' => (b'\r', &s[2..]),
-            b't' => (b'\t', &s[2..]),
-            b'n' => (b'\n', &s[2..]),
-            b'0' => (b'\0', &s[2..]),
-            b'\\' => (b'\\', &s[2..]),
-            b'\'' => (b'\'', &s[2..]),
-            b'\"' => (b'\"', &s[2..]),
-            b'x' => (
-                u8::from_str_radix(String::from_utf8_lossy(&s[2..4]).as_ref(), 16)
-                    .map_err(|_| InvalidEscapeSequence)?,
-                &s[4..],
-            ),
-            c => return Err(InvalidEscapeCharacter(*c)),
-        },
-        &c => (c, &s[1..]),
-    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -512,11 +393,7 @@ fn inner_process<B: BufRead>(
                     parse_ins(&s, ops, symbols, SourceLocation::new(src, ln))
                         .map_err(|e| Error::new(src, ln, ErrorType::IncorrectOperands(e)))?
                 else {
-                    return Err(Error::new(
-                        src,
-                        ln,
-                        ErrorType::UnknownInstruction(s),
-                    ));
+                    return Err(Error::new(src, ln, ErrorType::UnknownInstruction(s)));
                 };
                 state.add_line(
                     *current_segment,
@@ -600,8 +477,8 @@ fn parse_ins(
     sym: &mut Symbols,
     sl: SourceLocation,
 ) -> StdResult<Option<(u8, DataOperand)>, &'static str> {
-    use self::isa::*;
     use self::DataOperand as O;
+    use self::isa::*;
     let ops = ops.iter();
     Ok(Some(match s {
         "null" => (NULL, O::parse_nothing(ops).ok_or("no operands")?),
@@ -720,17 +597,22 @@ fn parse_ins(
             if let Some(dat_op) = O::parse_byte_imm(ops.clone()) {
                 (LDI_B, dat_op)
             } else if let Some(dat_op) = O::parse_wide_imm(ops.clone(), sym, sl) {
-                let DataOperand::WideImm(r, w) = dat_op else { unreachable!() };
+                let DataOperand::WideImm(r, w) = dat_op else {
+                    unreachable!()
+                };
 
                 (LDI_W, DataOperand::TwoWideImm(r, R0, w))
             } else {
+                eprintln!("dbg: {ops:?}");
                 return Err("one register and one immediate");
             }
         }
         // TODO: warn about deprecated instruction
         "absjmp" | "absjump" => {
             if let Some(dat_op) = O::parse_imm_wide(ops.clone(), sym, sl) {
-                let DataOperand::ImmediateWide(w) = dat_op else { unreachable!() };
+                let DataOperand::ImmediateWide(w) = dat_op else {
+                    unreachable!()
+                };
 
                 (LDI_W, DataOperand::TwoWideImm(R0, R1, w))
             } else {
@@ -739,13 +621,16 @@ fn parse_ins(
         }
         "rjmp" | "rjump" => (
             R_JUMP,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jmp" | "jump" => {
             if let Some(dat_op) = O::parse_rel_imm_wide(ops.clone(), sym, sl) {
                 (R_JUMP, dat_op)
             } else if let Some(dat_op) = O::parse_wreg(ops) {
-                let DataOperand::WideRegister(wr) = dat_op else { unreachable!() };
+                let DataOperand::WideRegister(wr) = dat_op else {
+                    unreachable!()
+                };
                 if wr == R0 {
                     return Err("any other register; r0 is not a valid jmp destination");
                 }
@@ -756,55 +641,68 @@ fn parse_ins(
         }
         "call" | "rcall" => (
             R_CALL,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jez" | "rjez" => (
             R_JEZ,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jlt" | "rjlt" => (
             R_JLT,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jle" | "rjle" => (
             R_JLE,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jgt" | "rjgt" => (
             R_JGT,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jge" | "rjge" => (
             R_JGE,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jnz" | "rjnz" | "jne" | "rjne" => (
             R_JNZ,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jo" | "rjo" => (
             R_JO,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jno" | "rjno" => (
             R_JNO,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jb" | "rjb" | "jc" | "rjc" => (
             R_JB,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jae" | "rjae" | "jnc" | "rjnc" => (
             R_JAE,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "ja" | "rja" => (
             R_JA,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "jbe" | "rjbe" => (
             R_JBE,
-            O::parse_rel_imm_wide(ops, sym, sl).ok_or("a wide (addr like a label or just a number)")?,
+            O::parse_rel_imm_wide(ops, sym, sl)
+                .ok_or("a wide (addr like a label or just a number)")?,
         ),
         "setez" => parse_setif(ops, 2)?,
         "setlt" => parse_setif(ops, 3)?,
@@ -856,7 +754,9 @@ fn parse_ins(
 
 fn parse_setif(ops: Iter<SourceOperand>, o: u8) -> StdResult<(u8, DataOperand), &'static str> {
     let o = ByteRegister(U4::new(o));
-    let DataOperand::ByteRegister(br) = DataOperand::parse_breg(ops).ok_or("one destination byte register")? else {
+    let DataOperand::ByteRegister(br) =
+        DataOperand::parse_breg(ops).ok_or("one destination byte register")?
+    else {
         unreachable!()
     };
     Ok((isa::SET_IF, DataOperand::TwoByte(br, o)))
@@ -883,7 +783,14 @@ fn parse_wide<F: FnOnce(usize, LabelRead) -> u16>(
     relative: bool,
 ) -> u16 {
     match w {
-        Wide::Label(l) => read_label(l, LabelRead { segment, position, relative }),
+        Wide::Label(l) => read_label(
+            l,
+            LabelRead {
+                segment,
+                position,
+                relative,
+            },
+        ),
         Wide::Number(n) => n,
     }
 }
